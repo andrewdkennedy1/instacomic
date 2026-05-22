@@ -1,0 +1,1403 @@
+import { AnimatePresence, motion, useDragControls } from 'framer-motion'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import type { PointerEvent, TouchEvent } from 'react'
+import { createRoot } from 'react-dom/client'
+import './style.css'
+
+type PanelFit = 'cover' | 'contain'
+type StickerKind = 'speech' | 'thought' | 'burst' | 'caption' | 'arrow' | 'star'
+type DrawerTab = 'layout' | 'create' | 'stickers' | 'style'
+
+type Panel = {
+  id: string
+  x: number
+  y: number
+  w: number
+  h: number
+  points?: Array<[number, number]>
+}
+
+type Layout = {
+  id: string
+  name: string
+  panels: Panel[]
+  custom?: boolean
+}
+
+type Shot = {
+  dataUrl: string
+}
+
+type Sticker = {
+  id: string
+  kind: StickerKind
+  x: number
+  y: number
+  w: number
+  h: number
+  rotation: number
+  text: string
+  fill: string
+  ink: string
+  fontSize: number
+}
+
+type Settings = {
+  gutters: number
+  radius: number
+  border: number
+  background: string
+  borderColor: string
+  caption: string
+  captionColor: string
+  fit: PanelFit
+}
+
+type DragState = {
+  id: string
+  mode: 'move' | 'resize'
+  startX: number
+  startY: number
+  stickerX: number
+  stickerY: number
+  stickerW: number
+  stickerH: number
+  rect: DOMRect
+}
+
+const layouts: Layout[] = [
+  {
+    id: 'shard',
+    name: 'Shard',
+    panels: [
+      { id: '1', x: 0, y: 0, w: 1, h: 1, points: [[0, 0], [100, 0], [43, 32], [0, 16]] },
+      { id: '2', x: 0, y: 0, w: 1, h: 1, points: [[100, 0], [100, 50], [55, 39], [45, 33]] },
+      { id: '3', x: 0, y: 0, w: 1, h: 1, points: [[0, 20], [40, 36], [24, 52], [0, 71]] },
+      { id: '4', x: 0, y: 0, w: 1, h: 1, points: [[44, 37], [100, 55], [100, 100], [34, 58]] },
+      { id: '5', x: 0, y: 0, w: 1, h: 1, points: [[0, 75], [27, 56], [92, 100], [0, 100]] },
+    ],
+  },
+  {
+    id: 'slash',
+    name: 'Slash',
+    panels: [
+      { id: '1', x: 0, y: 0, w: 1, h: 1, points: [[0, 0], [31, 0], [65, 48], [0, 100]] },
+      { id: '2', x: 0, y: 0, w: 1, h: 1, points: [[36, 0], [100, 0], [100, 23], [69, 45]] },
+      { id: '3', x: 0, y: 0, w: 1, h: 1, points: [[70, 49], [100, 28], [100, 100], [43, 100]] },
+    ],
+  },
+  {
+    id: 'crystal',
+    name: 'Crystal',
+    panels: [
+      { id: '1', x: 0, y: 0, w: 1, h: 1, points: [[0, 0], [100, 0], [60, 35], [0, 75]] },
+      { id: '2', x: 0, y: 0, w: 1, h: 1, points: [[62, 37], [100, 2], [100, 52], [78, 70]] },
+      { id: '3', x: 0, y: 0, w: 1, h: 1, points: [[0, 79], [60, 39], [76, 72], [44, 100], [0, 100]] },
+      { id: '4', x: 0, y: 0, w: 1, h: 1, points: [[79, 74], [100, 56], [100, 100], [48, 100]] },
+    ],
+  },
+  {
+    id: 'story',
+    name: 'Story',
+    panels: [
+      { id: '1', x: 0, y: 0, w: 1, h: 0.56 },
+      { id: '2', x: 0, y: 0.56, w: 0.5, h: 0.44 },
+      { id: '3', x: 0.5, y: 0.56, w: 0.5, h: 0.44 },
+    ],
+  },
+  {
+    id: 'three',
+    name: '3 Strip',
+    panels: [
+      { id: '1', x: 0, y: 0, w: 1, h: 1 / 3 },
+      { id: '2', x: 0, y: 1 / 3, w: 1, h: 1 / 3 },
+      { id: '3', x: 0, y: 2 / 3, w: 1, h: 1 / 3 },
+    ],
+  },
+  {
+    id: 'four',
+    name: 'Grid',
+    panels: [
+      { id: '1', x: 0, y: 0, w: 0.5, h: 0.5 },
+      { id: '2', x: 0.5, y: 0, w: 0.5, h: 0.5 },
+      { id: '3', x: 0, y: 0.5, w: 0.5, h: 0.5 },
+      { id: '4', x: 0.5, y: 0.5, w: 0.5, h: 0.5 },
+    ],
+  },
+  {
+    id: 'punch',
+    name: 'Punch',
+    panels: [
+      { id: '1', x: 0, y: 0, w: 0.5, h: 0.43 },
+      { id: '2', x: 0.5, y: 0, w: 0.5, h: 0.43 },
+      { id: '3', x: 0, y: 0.43, w: 1, h: 0.57 },
+    ],
+  },
+  {
+    id: 'manga',
+    name: 'Manga',
+    panels: [
+      { id: '1', x: 0, y: 0, w: 0.58, h: 1 },
+      { id: '2', x: 0.58, y: 0, w: 0.42, h: 1 / 3 },
+      { id: '3', x: 0.58, y: 1 / 3, w: 0.42, h: 1 / 3 },
+      { id: '4', x: 0.58, y: 2 / 3, w: 0.42, h: 1 / 3 },
+    ],
+  },
+]
+
+const stickerDefaults: Record<StickerKind, Omit<Sticker, 'id' | 'kind' | 'x' | 'y'>> = {
+  speech: { w: 0.36, h: 0.12, rotation: -2, text: 'say it', fill: '#ffffff', ink: '#111111', fontSize: 22 },
+  thought: { w: 0.32, h: 0.12, rotation: 2, text: 'hmm', fill: '#ffffff', ink: '#111111', fontSize: 22 },
+  burst: { w: 0.32, h: 0.14, rotation: -5, text: 'WOW', fill: '#ffd84d', ink: '#111111', fontSize: 25 },
+  caption: { w: 0.44, h: 0.1, rotation: 0, text: 'meanwhile', fill: '#fff0a8', ink: '#111111', fontSize: 19 },
+  arrow: { w: 0.28, h: 0.1, rotation: -9, text: 'look', fill: '#ff6b55', ink: '#111111', fontSize: 18 },
+  star: { w: 0.25, h: 0.12, rotation: 8, text: 'snap', fill: '#48d3c5', ink: '#111111', fontSize: 19 },
+}
+
+const defaultSettings: Settings = {
+  gutters: 4,
+  radius: 0,
+  border: 0,
+  background: '#ffffff',
+  borderColor: '#ffffff',
+  caption: '',
+  captionColor: '#111111',
+  fit: 'cover',
+}
+
+const CUSTOM_LAYOUT_KEY = 'instacomic.customLayouts.v1'
+
+function App() {
+  const [layout, setLayout] = useState(layouts[0])
+  const [activePanelId, setActivePanelId] = useState(layouts[0].panels[0].id)
+  const [shots, setShots] = useState<Record<string, Shot>>({})
+  const [stickers, setStickers] = useState<Sticker[]>([])
+  const [activeStickerId, setActiveStickerId] = useState<string | null>(null)
+  const [settings, setSettings] = useState(defaultSettings)
+  const [stream, setStream] = useState<MediaStream | null>(null)
+  const [facing, setFacing] = useState<'environment' | 'user'>('environment')
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>('layout')
+  const [status, setStatus] = useState('Tap a panel. Shoot. Repeat.')
+  const [exportUrl, setExportUrl] = useState<string | null>(null)
+  const [dragState, setDragState] = useState<DragState | null>(null)
+  const [customLayouts, setCustomLayouts] = useState<Layout[]>([])
+  const [draftPoints, setDraftPoints] = useState<Array<[number, number]>>([])
+  const [draftPanels, setDraftPanels] = useState<Panel[]>([])
+  const [draftName, setDraftName] = useState('')
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const stageRef = useRef<HTMLDivElement>(null)
+  const stripRef = useRef<HTMLDivElement>(null)
+  const dragControls = useDragControls()
+
+  const activeSticker = useMemo(
+    () => stickers.find((sticker) => sticker.id === activeStickerId) ?? null,
+    [activeStickerId, stickers],
+  )
+  const allLayouts = useMemo(() => [...layouts, ...customLayouts], [customLayouts])
+  const activePanelIndex = layout.panels.findIndex((panel) => panel.id === activePanelId)
+  const capturedCount = layout.panels.filter((panel) => shots[panel.id]).length
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        void navigator.serviceWorker.register('/sw.js')
+      })
+    }
+
+    try {
+      const stored = localStorage.getItem(CUSTOM_LAYOUT_KEY)
+      if (stored) {
+        const parsed = JSON.parse(stored) as Layout[]
+        setCustomLayouts(parsed.filter((item) => Array.isArray(item.panels) && item.panels.length > 0))
+      }
+    } catch {
+      localStorage.removeItem(CUSTOM_LAYOUT_KEY)
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem(CUSTOM_LAYOUT_KEY, JSON.stringify(customLayouts))
+  }, [customLayouts])
+
+  useEffect(() => {
+    const video = videoRef.current
+    if (video && stream) {
+      video.srcObject = stream
+      void video.play()
+    }
+  }, [stream])
+
+  useEffect(() => {
+    return () => {
+      stream?.getTracks().forEach((track) => track.stop())
+    }
+  }, [stream])
+
+  useEffect(() => {
+    return () => {
+      if (exportUrl) {
+        URL.revokeObjectURL(exportUrl)
+      }
+    }
+  }, [exportUrl])
+
+  function clearExport() {
+    if (exportUrl) {
+      URL.revokeObjectURL(exportUrl)
+      setExportUrl(null)
+    }
+  }
+
+  async function startCamera(nextFacing = facing) {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setStatus('Camera is not available in this browser.')
+      return
+    }
+
+    stream?.getTracks().forEach((track) => track.stop())
+
+    try {
+      const nextStream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: nextFacing },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+      })
+      setStream(nextStream)
+      setStatus(`Live in panel ${activePanelIndex + 1}.`)
+    } catch (error) {
+      setStream(null)
+      setStatus(error instanceof Error ? `Camera blocked: ${error.message}` : 'Camera blocked.')
+    }
+  }
+
+  async function flipCamera() {
+    const nextFacing = facing === 'environment' ? 'user' : 'environment'
+    setFacing(nextFacing)
+    await startCamera(nextFacing)
+  }
+
+  function selectPanel(panelId: string) {
+    setActivePanelId(panelId)
+    setActiveStickerId(null)
+    setStatus(`Panel ${layout.panels.findIndex((panel) => panel.id === panelId) + 1} is live.`)
+    if (!stream) {
+      void startCamera()
+    }
+  }
+
+  function selectPanelFromPoint(clientX: number, clientY: number) {
+    const rect = stripRef.current?.getBoundingClientRect()
+
+    if (!rect) {
+      return
+    }
+
+    const x = clamp((clientX - rect.left) / rect.width, 0, 1)
+    const y = clamp((clientY - rect.top) / rect.height, 0, 1)
+    const panel = [...layout.panels].reverse().find((item) => pointInPanel(item, x, y))
+
+    if (panel) {
+      selectPanel(panel.id)
+    }
+  }
+
+  function capturePanel() {
+    const video = videoRef.current
+    if (!stream || !video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      void startCamera()
+      setStatus('Starting camera...')
+      return
+    }
+
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth || 1280
+    canvas.height = video.videoHeight || 720
+    const context = canvas.getContext('2d')
+    if (!context) {
+      setStatus('Canvas is unavailable.')
+      return
+    }
+
+    context.drawImage(video, 0, 0, canvas.width, canvas.height)
+    setShots((current) => ({
+      ...current,
+      [activePanelId]: { dataUrl: canvas.toDataURL('image/jpeg', 0.92) },
+    }))
+
+    const currentIndex = layout.panels.findIndex((panel) => panel.id === activePanelId)
+    const nextEmpty = layout.panels.find((panel) => panel.id !== activePanelId && !shots[panel.id])
+    const nextPanel = nextEmpty ?? layout.panels[(currentIndex + 1) % layout.panels.length]
+    setActivePanelId(nextPanel.id)
+    setStatus(`Saved panel ${currentIndex + 1}. Panel ${layout.panels.findIndex((panel) => panel.id === nextPanel.id) + 1} is live.`)
+    clearExport()
+  }
+
+  function changeLayout(nextLayout: Layout) {
+    const allowed = new Set(nextLayout.panels.map((panel) => panel.id))
+    setLayout(nextLayout)
+    setActivePanelId(nextLayout.panels[0].id)
+    setShots((current) => Object.fromEntries(Object.entries(current).filter(([panelId]) => allowed.has(panelId))))
+    setStatus(`${nextLayout.name} layout. Panel 1 is live.`)
+    clearExport()
+  }
+
+  function addSticker(kind: StickerKind) {
+    const panel = layout.panels.find((item) => item.id === activePanelId) ?? layout.panels[0]
+    const bounds = panelBounds(panel)
+    const defaults = stickerDefaults[kind]
+    const sticker: Sticker = {
+      id: crypto.randomUUID(),
+      kind,
+      x: clamp(bounds.x + bounds.w / 2 - defaults.w / 2, 0.02, 0.98 - defaults.w),
+      y: clamp(bounds.y + bounds.h / 2 - defaults.h / 2, 0.02, 0.98 - defaults.h),
+      ...defaults,
+    }
+    setStickers((current) => [...current, sticker])
+    setActiveStickerId(sticker.id)
+    setDrawerTab('stickers')
+    setDrawerOpen(false)
+    setStatus('Sticker added. Drag it, or open Controls to edit text.')
+    clearExport()
+  }
+
+  function updateSticker(update: Partial<Sticker>) {
+    if (!activeStickerId) {
+      return
+    }
+
+    setStickers((current) =>
+      current.map((sticker) => (sticker.id === activeStickerId ? { ...sticker, ...update } : sticker)),
+    )
+    clearExport()
+  }
+
+  function deleteSticker() {
+    if (!activeStickerId) {
+      return
+    }
+    setStickers((current) => current.filter((sticker) => sticker.id !== activeStickerId))
+    setActiveStickerId(null)
+    clearExport()
+  }
+
+  function addDraftPoint(clientX: number, clientY: number) {
+    const canvas = document.querySelector<HTMLElement>('.creator-canvas')
+    const rect = canvas?.getBoundingClientRect()
+
+    if (!rect) {
+      return
+    }
+
+    const x = clamp(((clientX - rect.left) / rect.width) * 100, 0, 100)
+    const y = clamp(((clientY - rect.top) / rect.height) * 100, 0, 100)
+    setDraftPoints((current) => [...current, [Math.round(x), Math.round(y)]])
+  }
+
+  function finishDraftPanel() {
+    if (draftPoints.length < 3) {
+      setStatus('Tap at least 3 points to close a panel.')
+      return
+    }
+
+    setDraftPanels((current) => [
+      ...current,
+      {
+        id: String(current.length + 1),
+        x: 0,
+        y: 0,
+        w: 1,
+        h: 1,
+        points: draftPoints,
+      },
+    ])
+    setDraftPoints([])
+    setStatus('Panel saved in the creator.')
+  }
+
+  function clearDraftLayout() {
+    setDraftPoints([])
+    setDraftPanels([])
+    setStatus('Creator cleared.')
+  }
+
+  function saveDraftLayout() {
+    const panels = draftPoints.length >= 3
+      ? [
+          ...draftPanels,
+          {
+            id: String(draftPanels.length + 1),
+            x: 0,
+            y: 0,
+            w: 1,
+            h: 1,
+            points: draftPoints,
+          },
+        ]
+      : draftPanels
+
+    if (panels.length === 0) {
+      setStatus('Draw at least one panel before saving.')
+      return
+    }
+
+    const customLayout: Layout = {
+      id: `custom-${Date.now()}`,
+      name: draftName.trim() || `Custom ${customLayouts.length + 1}`,
+      custom: true,
+      panels,
+    }
+    setCustomLayouts((current) => [...current, customLayout])
+    changeLayout(customLayout)
+    setDraftName('')
+    setDraftPanels([])
+    setDraftPoints([])
+    setDrawerTab('layout')
+    setStatus('Custom layout saved on this phone.')
+  }
+
+  function beginStickerDrag(event: PointerEvent<HTMLElement> | TouchEvent<HTMLElement>, sticker: Sticker, mode: 'move' | 'resize') {
+    const rect = stripRef.current?.getBoundingClientRect()
+    const point = 'touches' in event ? event.touches[0] : event
+    if (!rect || !point) {
+      return
+    }
+
+    event.preventDefault()
+    setActiveStickerId(sticker.id)
+    setDragState({
+      id: sticker.id,
+      mode,
+      startX: point.clientX,
+      startY: point.clientY,
+      stickerX: sticker.x,
+      stickerY: sticker.y,
+      stickerW: sticker.w,
+      stickerH: sticker.h,
+      rect,
+    })
+  }
+
+  function moveSticker(clientX: number, clientY: number) {
+    if (!dragState) {
+      return
+    }
+
+    const dx = (clientX - dragState.startX) / dragState.rect.width
+    const dy = (clientY - dragState.startY) / dragState.rect.height
+    setStickers((current) =>
+      current.map((sticker) => {
+        if (sticker.id !== dragState.id) {
+          return sticker
+        }
+        if (dragState.mode === 'resize') {
+          const w = clamp(dragState.stickerW + dx, 0.14, 0.85)
+          const h = clamp(dragState.stickerH + dy, 0.07, 0.5)
+          return {
+            ...sticker,
+            w,
+            h,
+            x: clamp(sticker.x, 0, 1 - w),
+            y: clamp(sticker.y, 0, 1 - h),
+          }
+        }
+        return {
+          ...sticker,
+          x: clamp(dragState.stickerX + dx, 0, 1 - sticker.w),
+          y: clamp(dragState.stickerY + dy, 0, 1 - sticker.h),
+        }
+      }),
+    )
+    clearExport()
+  }
+
+  async function renderComic() {
+    try {
+      setStatus('Rendering...')
+      const blob = await renderToPng(layout, shots, stickers, settings)
+      clearExport()
+      setExportUrl(URL.createObjectURL(blob))
+      setStatus('Ready to save.')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Render failed.')
+    }
+  }
+
+  async function shareComic() {
+    if (!exportUrl) {
+      await renderComic()
+      return
+    }
+
+    const blob = await fetch(exportUrl).then((response) => response.blob())
+    const file = new File([blob], 'instacomic.png', { type: 'image/png' })
+    if ('canShare' in navigator && navigator.canShare?.({ files: [file] })) {
+      await navigator.share({ files: [file], title: 'Instacomic' })
+    } else {
+      setStatus('Use Save Image, then add to Photos.')
+    }
+  }
+
+  return (
+    <main
+      className="native-shell"
+      onPointerMove={(event) => moveSticker(event.clientX, event.clientY)}
+      onPointerUp={() => setDragState(null)}
+      onPointerCancel={() => setDragState(null)}
+      onTouchMove={(event) => {
+        if (event.touches[0]) {
+          moveSticker(event.touches[0].clientX, event.touches[0].clientY)
+        }
+      }}
+      onTouchEnd={() => setDragState(null)}
+      onTouchCancel={() => setDragState(null)}
+    >
+      <video ref={videoRef} className="live-camera" autoPlay muted playsInline />
+
+      <section ref={stageRef} className="comic-stage" aria-label="Instacomic capture surface">
+        <div className="top-hint">
+          <span>{status}</span>
+          <button type="button" onClick={() => setDrawerOpen(true)} aria-label="Open controls">
+            Edit
+          </button>
+        </div>
+
+        <div
+          ref={stripRef}
+          className={`live-strip layout-${layout.id} ${layout.panels.some((panel) => panel.points) ? 'is-manga' : ''}`}
+          onPointerDown={(event) => {
+            if ((event.target as HTMLElement).closest('[data-sticker-id]')) {
+              return
+            }
+            selectPanelFromPoint(event.clientX, event.clientY)
+          }}
+          style={
+            {
+              '--paper': settings.background,
+              '--ink': settings.borderColor,
+              '--gutter': `${settings.gutters}px`,
+              '--radius': `${settings.radius}px`,
+              '--border': `${settings.border}px`,
+            } as React.CSSProperties
+          }
+        >
+          {layout.panels.map((panel, index) => (
+            <button
+              key={panel.id}
+              className={`live-panel ${panel.id === activePanelId ? 'is-live' : ''} ${shots[panel.id] ? 'is-shot' : ''}`}
+              style={panelStyle(panel)}
+              type="button"
+              data-panel-id={panel.id}
+              onClick={() => selectPanel(panel.id)}
+              aria-label={`Make panel ${index + 1} live`}
+            >
+              {shots[panel.id] && <img src={shots[panel.id].dataUrl} alt={`Panel ${index + 1}`} />}
+              {panel.id === activePanelId && stream && <LiveVideo stream={stream} />}
+              <span className="panel-chip">{panel.id === activePanelId ? 'LIVE' : index + 1}</span>
+            </button>
+          ))}
+
+          {stickers.map((sticker) => (
+            <StickerView
+              key={sticker.id}
+              sticker={sticker}
+              active={sticker.id === activeStickerId}
+              onSelect={() => setActiveStickerId(sticker.id)}
+              onDragStart={(event, mode) => beginStickerDrag(event, sticker, mode)}
+            />
+          ))}
+
+          {settings.caption.trim() && <div className="strip-caption">{settings.caption}</div>}
+        </div>
+      </section>
+
+      <nav className="capture-bar" aria-label="Capture controls">
+        <button className="round-action" type="button" onClick={() => void flipCamera()} aria-label="Flip camera">
+          ↺
+        </button>
+        <button className="shutter" type="button" onClick={capturePanel} aria-label="Capture active panel">
+          <span />
+        </button>
+        <button className="round-action" type="button" onClick={() => setDrawerOpen(true)} aria-label="Open drawer">
+          ⋯
+        </button>
+      </nav>
+
+      <div className="progress-pills" aria-label={`${capturedCount} of ${layout.panels.length} panels captured`}>
+        {layout.panels.map((panel) => (
+          <span key={panel.id} className={shots[panel.id] ? 'done' : panel.id === activePanelId ? 'live' : ''} />
+        ))}
+      </div>
+
+      <Drawer
+        open={drawerOpen}
+        tab={drawerTab}
+        dragControls={dragControls}
+        onOpen={() => setDrawerOpen(true)}
+        onClose={() => setDrawerOpen(false)}
+        onTab={setDrawerTab}
+      >
+        {drawerTab === 'layout' && (
+          <LayoutPanel layout={layout} layouts={allLayouts} onLayout={changeLayout} onCreate={() => setDrawerTab('create')} />
+        )}
+        {drawerTab === 'create' && (
+          <CreatorPanel
+            draftName={draftName}
+            draftPoints={draftPoints}
+            draftPanels={draftPanels}
+            onName={setDraftName}
+            onPoint={addDraftPoint}
+            onUndo={() => setDraftPoints((current) => current.slice(0, -1))}
+            onFinish={finishDraftPanel}
+            onClear={clearDraftLayout}
+            onSave={saveDraftLayout}
+          />
+        )}
+        {drawerTab === 'stickers' && (
+          <StickerPanel
+            activeSticker={activeSticker}
+            onAdd={addSticker}
+            onUpdate={updateSticker}
+            onDelete={deleteSticker}
+          />
+        )}
+        {drawerTab === 'style' && (
+          <StylePanel
+            settings={settings}
+            exportUrl={exportUrl}
+            onSettings={(next) => {
+              setSettings((current) => ({ ...current, ...next }))
+              clearExport()
+            }}
+            onRender={() => void renderComic()}
+            onShare={() => void shareComic()}
+          />
+        )}
+      </Drawer>
+    </main>
+  )
+}
+
+function LiveVideo({ stream }: { stream: MediaStream }) {
+  const ref = useRef<HTMLVideoElement>(null)
+
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.srcObject = stream
+      void ref.current.play()
+    }
+  }, [stream])
+
+  return <video ref={ref} className="live-frame" autoPlay muted playsInline aria-hidden="true" />
+}
+
+function Drawer({
+  open,
+  tab,
+  dragControls,
+  children,
+  onOpen,
+  onClose,
+  onTab,
+}: {
+  open: boolean
+  tab: DrawerTab
+  dragControls: ReturnType<typeof useDragControls>
+  children: React.ReactNode
+  onOpen: () => void
+  onClose: () => void
+  onTab: (tab: DrawerTab) => void
+}) {
+  return (
+    <motion.aside
+      className={`motion-drawer ${open ? 'is-open' : ''}`}
+      drag="y"
+      dragControls={dragControls}
+      dragListener={false}
+      dragConstraints={{ top: 0, bottom: 0 }}
+      dragElastic={0.08}
+      animate={{ y: open ? 0 : 'calc(100% - 92px)' }}
+      transition={{ type: 'spring', stiffness: 430, damping: 38 }}
+      onDragEnd={(_, info) => {
+        if (info.offset.y > 50 || info.velocity.y > 400) {
+          onClose()
+        } else {
+          onOpen()
+        }
+      }}
+    >
+      <button
+        className="drawer-grabber"
+        type="button"
+        onPointerDown={(event) => dragControls.start(event)}
+        onClick={() => (open ? onClose() : onOpen())}
+        aria-label={open ? 'Close controls' : 'Open controls'}
+      >
+        <span />
+        <strong>Controls</strong>
+      </button>
+      <div className="drawer-tabs" role="tablist">
+        <button className={tab === 'layout' ? 'active' : ''} type="button" onClick={() => onTab('layout')}>
+          Layout
+        </button>
+        <button className={tab === 'create' ? 'active' : ''} type="button" onClick={() => onTab('create')}>
+          Create
+        </button>
+        <button className={tab === 'stickers' ? 'active' : ''} type="button" onClick={() => onTab('stickers')}>
+          Stickers
+        </button>
+        <button className={tab === 'style' ? 'active' : ''} type="button" onClick={() => onTab('style')}>
+          Save
+        </button>
+      </div>
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={tab}
+          className="drawer-content"
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.16 }}
+        >
+          {children}
+        </motion.div>
+      </AnimatePresence>
+    </motion.aside>
+  )
+}
+
+function LayoutPanel({
+  layout,
+  layouts,
+  onLayout,
+  onCreate,
+}: {
+  layout: Layout
+  layouts: Layout[]
+  onLayout: (layout: Layout) => void
+  onCreate: () => void
+}) {
+  return (
+    <div className="drawer-grid">
+      {layouts.map((option) => (
+        <button
+          key={option.id}
+          className={`layout-card ${layout.id === option.id ? 'active' : ''}`}
+          type="button"
+          onClick={() => onLayout(option)}
+        >
+          <span className="layout-mini">
+            {option.panels.map((panel) => (
+              <i key={panel.id} style={panelStyle(panel)} />
+            ))}
+          </span>
+          <strong>{option.name}</strong>
+          {option.custom && <em>saved</em>}
+        </button>
+      ))}
+      <button className="layout-card create-card" type="button" onClick={onCreate}>
+        <span className="layout-mini creator-mini">
+          <i />
+          <i />
+          <i />
+        </span>
+        <strong>Draw your own</strong>
+        <em>saved on this phone</em>
+      </button>
+    </div>
+  )
+}
+
+function CreatorPanel({
+  draftName,
+  draftPoints,
+  draftPanels,
+  onName,
+  onPoint,
+  onUndo,
+  onFinish,
+  onClear,
+  onSave,
+}: {
+  draftName: string
+  draftPoints: Array<[number, number]>
+  draftPanels: Panel[]
+  onName: (name: string) => void
+  onPoint: (clientX: number, clientY: number) => void
+  onUndo: () => void
+  onFinish: () => void
+  onClear: () => void
+  onSave: () => void
+}) {
+  return (
+    <div className="creator-stack">
+      <div
+        className="creator-canvas"
+        role="button"
+        tabIndex={0}
+        aria-label="Tap points to draw a custom manga panel"
+        onPointerDown={(event) => onPoint(event.clientX, event.clientY)}
+      >
+        {draftPanels.map((panel) => (
+          <div key={panel.id} className="creator-panel" style={panelStyle(panel)}>
+            {panel.id}
+          </div>
+        ))}
+        {draftPoints.length > 0 && (
+          <svg className="creator-lines" viewBox="0 0 100 145" preserveAspectRatio="none" aria-hidden="true">
+            <polyline points={draftPoints.map(([x, y]) => `${x},${y * 1.45}`).join(' ')} />
+            {draftPoints.length >= 3 && <polygon points={draftPoints.map(([x, y]) => `${x},${y * 1.45}`).join(' ')} />}
+          </svg>
+        )}
+        {draftPoints.map(([x, y], index) => (
+          <span key={`${x}-${y}-${index}`} className="creator-point" style={{ left: `${x}%`, top: `${y}%` }}>
+            {index + 1}
+          </span>
+        ))}
+        {draftPanels.length === 0 && draftPoints.length === 0 && <p>Tap corners around each panel</p>}
+      </div>
+      <label className="field">
+        <span>Name</span>
+        <input value={draftName} placeholder="My manga layout" onChange={(event) => onName(event.target.value)} />
+      </label>
+      <div className="creator-actions">
+        <button type="button" onClick={onUndo} disabled={draftPoints.length === 0}>
+          Undo point
+        </button>
+        <button type="button" onClick={onFinish} disabled={draftPoints.length < 3}>
+          Finish panel
+        </button>
+        <button type="button" onClick={onClear} disabled={draftPoints.length === 0 && draftPanels.length === 0}>
+          Clear
+        </button>
+        <button type="button" className="primary" onClick={onSave} disabled={draftPoints.length < 3 && draftPanels.length === 0}>
+          Save layout
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function StickerPanel({
+  activeSticker,
+  onAdd,
+  onUpdate,
+  onDelete,
+}: {
+  activeSticker: Sticker | null
+  onAdd: (kind: StickerKind) => void
+  onUpdate: (update: Partial<Sticker>) => void
+  onDelete: () => void
+}) {
+  return (
+    <div className="drawer-stack">
+      <div className="sticker-actions">
+        {(['speech', 'thought', 'burst', 'caption', 'arrow', 'star'] as StickerKind[]).map((kind) => (
+          <button key={kind} type="button" onClick={() => onAdd(kind)}>
+            {kind}
+          </button>
+        ))}
+      </div>
+      <label className="field">
+        <span>Text</span>
+        <input
+          value={activeSticker?.text ?? ''}
+          disabled={!activeSticker}
+          placeholder="Add or tap a sticker"
+          onChange={(event) => onUpdate({ text: event.target.value })}
+        />
+      </label>
+      <div className="triple-fields">
+        <label className="field">
+          <span>Bubble</span>
+          <input
+            type="color"
+            value={activeSticker?.fill ?? '#ffffff'}
+            disabled={!activeSticker}
+            onChange={(event) => onUpdate({ fill: event.target.value })}
+          />
+        </label>
+        <label className="field">
+          <span>Ink</span>
+          <input
+            type="color"
+            value={activeSticker?.ink ?? '#111111'}
+            disabled={!activeSticker}
+            onChange={(event) => onUpdate({ ink: event.target.value })}
+          />
+        </label>
+        <label className="field">
+          <span>Size</span>
+          <input
+            type="range"
+            min="14"
+            max="42"
+            value={activeSticker?.fontSize ?? 22}
+            disabled={!activeSticker}
+            onChange={(event) => onUpdate({ fontSize: Number(event.target.value) })}
+          />
+        </label>
+      </div>
+      <button className="subtle-danger" type="button" disabled={!activeSticker} onClick={onDelete}>
+        Delete selected sticker
+      </button>
+    </div>
+  )
+}
+
+function StylePanel({
+  settings,
+  exportUrl,
+  onSettings,
+  onRender,
+  onShare,
+}: {
+  settings: Settings
+  exportUrl: string | null
+  onSettings: (settings: Partial<Settings>) => void
+  onRender: () => void
+  onShare: () => void
+}) {
+  return (
+    <div className="drawer-stack">
+      <label className="field">
+        <span>Caption</span>
+        <input value={settings.caption} placeholder="Optional title" onChange={(event) => onSettings({ caption: event.target.value })} />
+      </label>
+      <div className="triple-fields">
+        <label className="field">
+          <span>Paper</span>
+          <input type="color" value={settings.background} onChange={(event) => onSettings({ background: event.target.value })} />
+        </label>
+        <label className="field">
+          <span>Ink</span>
+          <input type="color" value={settings.borderColor} onChange={(event) => onSettings({ borderColor: event.target.value })} />
+        </label>
+        <label className="field">
+          <span>Fit</span>
+          <select value={settings.fit} onChange={(event) => onSettings({ fit: event.target.value as PanelFit })}>
+            <option value="cover">Fill</option>
+            <option value="contain">Fit</option>
+          </select>
+        </label>
+      </div>
+      <div className="triple-fields">
+        <label className="field">
+          <span>Gap</span>
+          <input type="range" min="0" max="24" value={settings.gutters} onChange={(event) => onSettings({ gutters: Number(event.target.value) })} />
+        </label>
+        <label className="field">
+          <span>Corner</span>
+          <input type="range" min="0" max="24" value={settings.radius} onChange={(event) => onSettings({ radius: Number(event.target.value) })} />
+        </label>
+        <label className="field">
+          <span>Border</span>
+          <input type="range" min="0" max="10" value={settings.border} onChange={(event) => onSettings({ border: Number(event.target.value) })} />
+        </label>
+      </div>
+      <div className="save-row">
+        <button className="primary" type="button" onClick={onRender}>
+          Render
+        </button>
+        <a className={`primary ${exportUrl ? '' : 'disabled'}`} href={exportUrl ?? undefined} download="instacomic.png" aria-disabled={!exportUrl}>
+          Save Image
+        </a>
+        <button className="primary secondary" type="button" onClick={onShare}>
+          Share
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function StickerView({
+  sticker,
+  active,
+  onSelect,
+  onDragStart,
+}: {
+  sticker: Sticker
+  active: boolean
+  onSelect: () => void
+  onDragStart: (event: PointerEvent<HTMLElement> | TouchEvent<HTMLElement>, mode: 'move' | 'resize') => void
+}) {
+  const style = {
+    left: `${sticker.x * 100}%`,
+    top: `${sticker.y * 100}%`,
+    width: `${sticker.w * 100}%`,
+    height: `${sticker.h * 100}%`,
+    '--sticker-fill': sticker.fill,
+    '--sticker-ink': sticker.ink,
+    '--sticker-size': `${sticker.fontSize}px`,
+    transform: `rotate(${sticker.rotation}deg)`,
+  } as React.CSSProperties
+
+  return (
+    <div
+      className={`sticker sticker-${sticker.kind} ${active ? 'active' : ''}`}
+      style={style}
+      data-sticker-id={sticker.id}
+      role="button"
+      tabIndex={0}
+      onClick={(event) => {
+        event.stopPropagation()
+        onSelect()
+      }}
+      onPointerDown={(event) => onDragStart(event, 'move')}
+      onTouchStart={(event) => onDragStart(event, 'move')}
+    >
+      <span>{sticker.text}</span>
+      <i
+        aria-hidden="true"
+        onPointerDown={(event) => {
+          event.stopPropagation()
+          onDragStart(event, 'resize')
+        }}
+        onTouchStart={(event) => {
+          event.stopPropagation()
+          onDragStart(event, 'resize')
+        }}
+      />
+    </div>
+  )
+}
+
+async function renderToPng(layout: Layout, shots: Record<string, Shot>, stickers: Sticker[], settings: Settings) {
+  const canvas = document.createElement('canvas')
+  const width = 1440
+  const captionHeight = settings.caption.trim() ? 130 : 0
+  const panelHeight = Math.round(width * 1.45)
+  canvas.width = width
+  canvas.height = panelHeight + captionHeight
+  const context = canvas.getContext('2d')
+  if (!context) {
+    throw new Error('Canvas is unavailable.')
+  }
+
+  context.fillStyle = settings.background
+  context.fillRect(0, 0, canvas.width, canvas.height)
+  const gutter = settings.gutters * 3
+  const outer = settings.border * 3
+
+  const images = await Promise.all(
+    layout.panels.map(async (panel) => ({
+      panel,
+      image: shots[panel.id] ? await loadImage(shots[panel.id].dataUrl) : null,
+    })),
+  )
+
+  for (const { panel, image } of images) {
+    drawPanel(context, panel, image, width, panelHeight, outer, gutter, settings)
+  }
+
+  for (const sticker of stickers) {
+    drawSticker(context, sticker, width, panelHeight)
+  }
+
+  if (settings.caption.trim()) {
+    context.fillStyle = '#ffffff'
+    context.fillRect(outer + gutter / 2, panelHeight + gutter / 2, width - outer * 2 - gutter, captionHeight - gutter)
+    context.strokeStyle = settings.borderColor
+    context.lineWidth = Math.max(3, settings.border * 2)
+    context.strokeRect(outer + gutter / 2, panelHeight + gutter / 2, width - outer * 2 - gutter, captionHeight - gutter)
+    context.fillStyle = settings.captionColor
+    context.font = '900 74px ui-rounded, "Avenir Next", "Segoe UI", sans-serif'
+    context.textAlign = 'center'
+    context.textBaseline = 'middle'
+    context.fillText(settings.caption, width / 2, panelHeight + captionHeight / 2, width - 130)
+  }
+
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+  if (!blob) {
+    throw new Error('PNG render failed.')
+  }
+  return blob
+}
+
+function drawPanel(
+  context: CanvasRenderingContext2D,
+  panel: Panel,
+  image: HTMLImageElement | null,
+  width: number,
+  panelHeight: number,
+  outer: number,
+  gutter: number,
+  settings: Settings,
+) {
+  const bounds = panelBounds(panel)
+  const x = outer + bounds.x * (width - outer * 2) + gutter / 2
+  const y = outer + bounds.y * (panelHeight - outer * 2) + gutter / 2
+  const w = bounds.w * (width - outer * 2) - gutter
+  const h = bounds.h * (panelHeight - outer * 2) - gutter
+
+  context.save()
+  if (panel.points) {
+    drawPanelPolygon(context, panel, width, panelHeight, outer, gutter)
+  } else {
+    drawRoundedRect(context, x, y, w, h, settings.radius * 3)
+  }
+  context.fillStyle = '#ffffff'
+  context.fill()
+  context.clip()
+  if (image) {
+    drawImageFit(context, image, x, y, w, h, settings.fit)
+  } else {
+    drawEmptyPanel(context, x, y, w, h)
+  }
+  context.restore()
+
+  if (settings.border > 0) {
+    context.lineWidth = Math.max(2, settings.border * 2)
+    context.strokeStyle = settings.borderColor
+    if (panel.points) {
+      drawPanelPolygon(context, panel, width, panelHeight, outer, gutter)
+    } else {
+      drawRoundedRect(context, x, y, w, h, settings.radius * 3)
+    }
+    context.stroke()
+  }
+}
+
+function drawPanelPolygon(
+  context: CanvasRenderingContext2D,
+  panel: Panel,
+  width: number,
+  panelHeight: number,
+  outer: number,
+  gutter: number,
+) {
+  const points = panel.points ?? []
+  const center = panelCentroid(panel)
+  context.beginPath()
+  points.forEach(([px, py], index) => {
+    const nx = px / 100
+    const ny = py / 100
+    const insetX = (center.x - nx) * gutter
+    const insetY = (center.y - ny) * gutter
+    const x = outer + nx * (width - outer * 2) + insetX
+    const y = outer + ny * (panelHeight - outer * 2) + insetY
+    index === 0 ? context.moveTo(x, y) : context.lineTo(x, y)
+  })
+  context.closePath()
+}
+
+function drawSticker(context: CanvasRenderingContext2D, sticker: Sticker, width: number, panelHeight: number) {
+  const x = sticker.x * width
+  const y = sticker.y * panelHeight
+  const w = sticker.w * width
+  const h = sticker.h * panelHeight
+  context.save()
+  context.translate(x + w / 2, y + h / 2)
+  context.rotate((sticker.rotation * Math.PI) / 180)
+  context.translate(-w / 2, -h / 2)
+  context.fillStyle = sticker.fill
+  context.strokeStyle = sticker.ink
+  context.lineWidth = Math.max(6, Math.min(w, h) * 0.06)
+  if (sticker.kind === 'burst') {
+    drawBurst(context, w, h)
+  } else if (sticker.kind === 'thought') {
+    drawOval(context, 0, 0, w, h)
+  } else if (sticker.kind === 'star') {
+    drawStar(context, w / 2, h / 2, Math.min(w, h) * 0.48, Math.min(w, h) * 0.23)
+  } else if (sticker.kind === 'arrow') {
+    drawArrow(context, w, h)
+  } else {
+    drawRoundedRect(context, 0, 0, w, h * 0.86, sticker.kind === 'caption' ? 12 : h * 0.25)
+  }
+  if (sticker.kind !== 'arrow') {
+    context.fill()
+    context.stroke()
+  }
+  context.fillStyle = sticker.ink
+  context.font = `900 ${sticker.fontSize * 3}px ui-rounded, "Avenir Next", "Segoe UI", sans-serif`
+  context.textAlign = 'center'
+  context.textBaseline = 'middle'
+  context.fillText(sticker.text.toUpperCase(), w / 2, h * 0.43, w * 0.84)
+  context.restore()
+}
+
+function panelStyle(panel: Panel) {
+  const center = panelCentroid(panel)
+  return {
+    left: `${panel.x * 100}%`,
+    top: `${panel.y * 100}%`,
+    width: `${panel.w * 100}%`,
+    height: `${panel.h * 100}%`,
+    clipPath: panel.points ? pointsToClipPath(panel.points) : undefined,
+    '--chip-x': `${center.x * 100}%`,
+    '--chip-y': `${center.y * 100}%`,
+  }
+}
+
+function pointsToClipPath(points: Array<[number, number]>) {
+  return `polygon(${points.map(([x, y]) => `${x}% ${y}%`).join(', ')})`
+}
+
+function panelBounds(panel: Panel) {
+  if (!panel.points) {
+    return { x: panel.x, y: panel.y, w: panel.w, h: panel.h }
+  }
+
+  const xs = panel.points.map(([x]) => x / 100)
+  const ys = panel.points.map(([, y]) => y / 100)
+  const minX = Math.min(...xs)
+  const minY = Math.min(...ys)
+  const maxX = Math.max(...xs)
+  const maxY = Math.max(...ys)
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+}
+
+function panelCentroid(panel: Panel) {
+  if (!panel.points) {
+    return { x: panel.x + panel.w / 2, y: panel.y + panel.h / 2 }
+  }
+
+  const total = panel.points.reduce(
+    (acc, [x, y]) => ({
+      x: acc.x + x / 100,
+      y: acc.y + y / 100,
+    }),
+    { x: 0, y: 0 },
+  )
+  return {
+    x: total.x / panel.points.length,
+    y: total.y / panel.points.length,
+  }
+}
+
+function drawImageFit(
+  context: CanvasRenderingContext2D,
+  image: CanvasImageSource & { width?: number; height?: number; videoWidth?: number; videoHeight?: number },
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  fit: PanelFit,
+) {
+  const imageWidth = image.videoWidth || image.width || w
+  const imageHeight = image.videoHeight || image.height || h
+  const imageRatio = imageWidth / imageHeight
+  const rectRatio = w / h
+  const cover = fit === 'cover'
+  const useWidth = cover ? imageRatio < rectRatio : imageRatio > rectRatio
+  const drawW = useWidth ? w : h * imageRatio
+  const drawH = useWidth ? w / imageRatio : h
+  context.drawImage(image, x + (w - drawW) / 2, y + (h - drawH) / 2, drawW, drawH)
+}
+
+function drawRoundedRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
+  const r = Math.min(radius, width / 2, height / 2)
+  context.beginPath()
+  context.moveTo(x + r, y)
+  context.lineTo(x + width - r, y)
+  context.quadraticCurveTo(x + width, y, x + width, y + r)
+  context.lineTo(x + width, y + height - r)
+  context.quadraticCurveTo(x + width, y + height, x + width - r, y + height)
+  context.lineTo(x + r, y + height)
+  context.quadraticCurveTo(x, y + height, x, y + height - r)
+  context.lineTo(x, y + r)
+  context.quadraticCurveTo(x, y, x + r, y)
+  context.closePath()
+}
+
+function drawEmptyPanel(context: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
+  context.fillStyle = '#f4f0e6'
+  context.fillRect(x, y, w, h)
+  context.strokeStyle = '#ded5c4'
+  context.lineWidth = 6
+  for (let offset = -h; offset < w; offset += 46) {
+    context.beginPath()
+    context.moveTo(x + offset, y + h)
+    context.lineTo(x + offset + h, y)
+    context.stroke()
+  }
+}
+
+function drawOval(context: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
+  context.beginPath()
+  context.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2)
+  context.closePath()
+}
+
+function drawBurst(context: CanvasRenderingContext2D, w: number, h: number) {
+  context.beginPath()
+  for (let index = 0; index < 18; index += 1) {
+    const angle = (Math.PI * 2 * index) / 18 - Math.PI / 2
+    const radius = index % 2 === 0 ? 0.52 : 0.36
+    const x = w / 2 + Math.cos(angle) * w * radius
+    const y = h / 2 + Math.sin(angle) * h * radius
+    index === 0 ? context.moveTo(x, y) : context.lineTo(x, y)
+  }
+  context.closePath()
+}
+
+function drawStar(context: CanvasRenderingContext2D, cx: number, cy: number, outer: number, inner: number) {
+  context.beginPath()
+  for (let index = 0; index < 10; index += 1) {
+    const radius = index % 2 === 0 ? outer : inner
+    const angle = (Math.PI * index) / 5 - Math.PI / 2
+    const x = cx + Math.cos(angle) * radius
+    const y = cy + Math.sin(angle) * radius
+    index === 0 ? context.moveTo(x, y) : context.lineTo(x, y)
+  }
+  context.closePath()
+}
+
+function drawArrow(context: CanvasRenderingContext2D, w: number, h: number) {
+  context.lineCap = 'round'
+  context.lineJoin = 'round'
+  context.lineWidth = Math.max(14, h * 0.24)
+  context.beginPath()
+  context.moveTo(w * 0.08, h * 0.55)
+  context.lineTo(w * 0.72, h * 0.55)
+  context.stroke()
+  context.beginPath()
+  context.moveTo(w * 0.64, h * 0.22)
+  context.lineTo(w * 0.93, h * 0.55)
+  context.lineTo(w * 0.64, h * 0.88)
+  context.stroke()
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('A photo could not be loaded.'))
+    image.src = src
+  })
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max)
+}
+
+function pointInPanel(panel: Panel, x: number, y: number) {
+  if (!panel.points) {
+    return x >= panel.x && x <= panel.x + panel.w && y >= panel.y && y <= panel.y + panel.h
+  }
+
+  let inside = false
+  const points = panel.points.map(([px, py]) => [px / 100, py / 100])
+
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index, index += 1) {
+    const [xi, yi] = points[index]
+    const [xj, yj] = points[previous]
+    const crosses = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi
+    if (crosses) {
+      inside = !inside
+    }
+  }
+
+  return inside
+}
+
+const root = document.querySelector<HTMLDivElement>('#app')
+
+if (!root) {
+  throw new Error('Missing app root')
+}
+
+createRoot(root).render(<App />)
