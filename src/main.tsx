@@ -253,6 +253,64 @@ type FullscreenDocument = Document & {
   msFullscreenElement?: Element | null
 }
 
+type StandaloneNavigator = Navigator & {
+  standalone?: boolean
+}
+
+type AppContext = {
+  browserName: string
+  isInstalled: boolean
+  isIos: boolean
+}
+
+type LockableScreenOrientation = ScreenOrientation & {
+  lock?: (orientation: 'portrait' | 'portrait-primary') => Promise<void> | void
+}
+
+type LockableScreen = Screen & {
+  orientation?: LockableScreenOrientation
+}
+
+function isDisplayModeApp() {
+  const nav = navigator as StandaloneNavigator
+  return (
+    nav.standalone === true ||
+    window.matchMedia('(display-mode: fullscreen)').matches ||
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.matchMedia('(display-mode: minimal-ui)').matches
+  )
+}
+
+function isIosDevice() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+}
+
+function getBrowserName() {
+  const userAgent = navigator.userAgent
+
+  if (/EdgiOS/i.test(userAgent)) {
+    return 'Edge'
+  }
+
+  if (/CriOS/i.test(userAgent)) {
+    return 'Chrome'
+  }
+
+  if (/FxiOS/i.test(userAgent)) {
+    return 'Firefox'
+  }
+
+  return 'Safari'
+}
+
+function getAppContext(): AppContext {
+  return {
+    browserName: getBrowserName(),
+    isInstalled: isDisplayModeApp(),
+    isIos: isIosDevice(),
+  }
+}
+
 function App() {
   const [started, setStarted] = useState(false)
   const [layout, setLayout] = useState(layouts[0])
@@ -273,6 +331,7 @@ function App() {
   const [customLayouts, setCustomLayouts] = useState<Layout[]>([])
   const [draftLines, setDraftLines] = useState<CustomLine[]>(() => createDefaultDraftLines())
   const [draftName, setDraftName] = useState('')
+  const [appContext, setAppContext] = useState<AppContext>(() => getAppContext())
   const shellRef = useRef<HTMLElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -292,6 +351,7 @@ function App() {
   const allLayouts = useMemo(() => [...layouts, ...customLayouts], [customLayouts])
   const activePanelIndex = activePanelId ? layout.panels.findIndex((panel) => panel.id === activePanelId) : -1
   const capturedCount = layout.panels.filter((panel) => shots[panel.id]).length
+  const installRequired = appContext.isIos && !appContext.isInstalled
 
   useEffect(() => {
     if ('serviceWorker' in navigator) {
@@ -308,6 +368,45 @@ function App() {
       }
     } catch {
       localStorage.removeItem(CUSTOM_LAYOUT_KEY)
+    }
+  }, [])
+
+  useEffect(() => {
+    const fullscreenMode = window.matchMedia('(display-mode: fullscreen)')
+    const standaloneMode = window.matchMedia('(display-mode: standalone)')
+    const minimalMode = window.matchMedia('(display-mode: minimal-ui)')
+    const refreshAppContext = () => setAppContext(getAppContext())
+
+    fullscreenMode.addEventListener('change', refreshAppContext)
+    standaloneMode.addEventListener('change', refreshAppContext)
+    minimalMode.addEventListener('change', refreshAppContext)
+    window.addEventListener('visibilitychange', refreshAppContext)
+    window.addEventListener('focus', refreshAppContext)
+
+    return () => {
+      fullscreenMode.removeEventListener('change', refreshAppContext)
+      standaloneMode.removeEventListener('change', refreshAppContext)
+      minimalMode.removeEventListener('change', refreshAppContext)
+      window.removeEventListener('visibilitychange', refreshAppContext)
+      window.removeEventListener('focus', refreshAppContext)
+    }
+  }, [])
+
+  useEffect(() => {
+    const syncViewportHeight = () => {
+      const height = window.visualViewport?.height ?? window.innerHeight
+      document.documentElement.style.setProperty('--app-height', `${height}px`)
+    }
+
+    syncViewportHeight()
+    window.addEventListener('resize', syncViewportHeight)
+    window.visualViewport?.addEventListener('resize', syncViewportHeight)
+    window.visualViewport?.addEventListener('scroll', syncViewportHeight)
+
+    return () => {
+      window.removeEventListener('resize', syncViewportHeight)
+      window.visualViewport?.removeEventListener('resize', syncViewportHeight)
+      window.visualViewport?.removeEventListener('scroll', syncViewportHeight)
     }
   }, [])
 
@@ -380,8 +479,27 @@ function App() {
     }
   }
 
+  async function lockPortraitOrientation() {
+    const orientation = (screen as LockableScreen).orientation
+
+    if (!orientation?.lock) {
+      return
+    }
+
+    try {
+      await orientation.lock('portrait-primary')
+    } catch {
+      try {
+        await orientation.lock('portrait')
+      } catch {
+        // iOS browser tabs commonly ignore orientation locking; CSS keeps the app portrait-shaped.
+      }
+    }
+  }
+
   async function enterApp() {
     await requestAppFullscreen()
+    await lockPortraitOrientation()
 
     setStarted(true)
   }
@@ -964,17 +1082,30 @@ function App() {
       {!started && (
         <section className="start-screen" aria-label="Start Instacomic">
           <div className="start-mark">Instacomic</div>
-          <button
-            type="button"
-            onPointerDown={(event) => {
-              if (event.isPrimary && event.button === 0) {
-                startFromGesture()
-              }
-            }}
-            onClick={() => startFromGesture()}
-          >
-            Start
-          </button>
+          {installRequired ? (
+            <div className="install-card" role="status">
+              <div className="install-kicker">{appContext.browserName} browser</div>
+              <h1>Install to start</h1>
+              <p>Fullscreen and portrait lock need the Home Screen app on iPhone.</p>
+              <ol>
+                {appContext.browserName !== 'Safari' && <li>Open this page in Safari.</li>}
+                <li>Tap Share.</li>
+                <li>Tap Add to Home Screen.</li>
+              </ol>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onPointerDown={(event) => {
+                if (event.isPrimary && event.button === 0) {
+                  startFromGesture()
+                }
+              }}
+              onClick={() => startFromGesture()}
+            >
+              Start
+            </button>
+          )}
         </section>
       )}
       <video ref={videoRef} className="live-camera" autoPlay muted playsInline />
