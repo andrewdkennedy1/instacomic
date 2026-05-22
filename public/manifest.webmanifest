@@ -1,0 +1,41 @@
+{
+  "name": "Instacomic",
+  "short_name": "Instacomic",
+  "description": "Snap live camera photos into customizable comic strip layouts, stickers, speech bubbles, and text.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4ead3",
+  "theme_color": "#f4ead3",
+  "categories": ["photo", "creativity", "entertainment"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "New Comic",
+      "short_name": "New",
+      "description": "Open Instacomic ready to snap a strip.",
+      "url": "/",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ]
+}
