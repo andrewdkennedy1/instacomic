@@ -15,13 +15,32 @@ page.on('pageerror', (error) => errors.push(error.message))
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
 await tapStrip(page, 0.75, 0.31)
 const selectedPanel = await page.locator('.live-panel.is-live').getAttribute('data-panel-id')
+await page.setInputFiles('.photo-upload', {
+  name: 'panel.png',
+  mimeType: 'image/png',
+  buffer: Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAMAAAADCAIAAADZSiLoAAAAGklEQVR4nGP8z8DAwMDAxAADCBgYGD4DAwA8bQICbK8YJwAAAABJRU5ErkJggg==',
+    'base64',
+  ),
+})
+await page.waitForFunction(() => document.querySelector('[data-panel-id="2"] img'))
+const uploadedPhoto = await page.locator('[data-panel-id="2"] img').count()
 
-await page.getByRole('button', { name: 'Open drawer' }).tap()
+await openDrawer(page)
 await page.getByRole('button', { name: 'Stickers' }).tap()
 await page.getByRole('button', { name: 'speech' }).tap()
 const stickerCount = await page.locator('[data-sticker-id]').count()
+await page.waitForFunction(() => {
+  const box = document.querySelector('.motion-drawer')?.getBoundingClientRect()
+  return !!box && box.top > window.innerHeight
+})
+const drawerHidden = await page.locator('.motion-drawer').boundingBox().then((box) => box && box.y > 830)
 await page.locator('.sticker-text').tap()
 await page.getByLabel('Edit sticker text').fill('hello!')
+await page.getByLabel('Edit sticker text').press('Enter')
+await tapStrip(page, 0.12, 0.9)
+await page.locator('.sticker-text').tap()
+await page.getByLabel('Edit sticker text').fill('again!')
 await page.getByLabel('Edit sticker text').press('Enter')
 const stickerText = await page.locator('.sticker-text').textContent()
 await page.locator('[data-sticker-id]').scrollIntoViewIfNeeded()
@@ -46,6 +65,7 @@ if (before) {
 }
 const after = await page.locator('[data-sticker-id]').boundingBox()
 const pinchBefore = await page.locator('[data-sticker-id]').boundingBox()
+const rotationBefore = Number(await page.locator('[data-sticker-id]').getAttribute('data-rotation'))
 if (pinchBefore) {
   const client = await page.context().newCDPSession(page)
   const y = pinchBefore.y + pinchBefore.height / 2
@@ -61,49 +81,66 @@ if (pinchBefore) {
   await client.send('Input.dispatchTouchEvent', {
     type: 'touchMove',
     touchPoints: [
-      { x: left.x - 32, y, id: 1 },
-      { x: right.x + 32, y, id: 2 },
+      { x: left.x - 32, y: y + 30, id: 1 },
+      { x: right.x + 32, y: y - 30, id: 2 },
     ],
   })
   await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
 }
 const pinchAfter = await page.locator('[data-sticker-id]').boundingBox()
+const rotationAfter = Number(await page.locator('[data-sticker-id]').getAttribute('data-rotation'))
 
+await openDrawer(page)
 await page.getByRole('button', { name: 'Save' }).tap()
 const download = await Promise.all([
   page.waitForEvent('download'),
-  page.getByRole('button', { name: 'Save Image' }).tap(),
+  page.getByRole('button', { name: 'Share' }).tap(),
 ]).then(([download]) => download)
 const manifest = await (await page.request.get(new URL('/manifest.webmanifest', baseUrl).toString())).json()
 const bodyOverflow = await page.evaluate(() => getComputedStyle(document.body).overflow)
 await page.getByRole('button', { name: 'Create' }).tap()
-await dragCreatorLine(page, '.creator-line-vertical', 44, 0)
+await dragCreatorLine(page, '.creator-free-line', 38, -18)
+await dragCreatorLine(page, '.creator-handle-end', -18, 44)
 await page.getByRole('button', { name: 'Save layout' }).tap()
-const storedLayouts = await page.evaluate(() => JSON.parse(localStorage.getItem('instacomic.customLayouts.v1') ?? '[]').length)
+const storedLayoutInfo = await page.evaluate(() => {
+  const layouts = JSON.parse(localStorage.getItem('instacomic.customLayouts.v1') ?? '[]')
+  const latest = layouts.at(-1)
+  return {
+    count: layouts.length,
+    panels: latest?.panels?.length ?? 0,
+    hasDiagonal: latest?.panels?.some((panel) =>
+      panel.points?.some(([x, y]) => ![0, 100].includes(Math.round(x)) && ![0, 100].includes(Math.round(y))),
+    ) ?? false,
+  }
+})
 const title = await page.title()
 
 mkdirSync('test-results', { recursive: true })
 mkdirSync('docs', { recursive: true })
-try {
-  await page.getByRole('button', { name: 'Close controls' }).tap({ timeout: 1000 })
-} catch {
-  // The sheet may already be collapsed after the save flow.
-}
+await closeDrawer(page)
 await page.screenshot({ path: 'test-results/instacomic-mobile.png', fullPage: true })
 await page.screenshot({ path: 'docs/instacomic-mobile.png', fullPage: true })
+const beforeTrashCount = await page.locator('[data-sticker-id]').count()
+await page.locator('[data-sticker-id]').first().tap()
+await page.getByLabel('Delete sticker').tap()
+const afterTrashCount = await page.locator('[data-sticker-id]').count()
 await browser.close()
 
 const result = {
   title,
   selectedPanel,
+  uploadedPhoto,
   stickerCount,
+  drawerHidden,
   stickerText,
   moved: !!before && !!after && Math.abs(before.x - after.x) > 5,
   pinched: !!pinchBefore && !!pinchAfter && pinchAfter.width > pinchBefore.width + 8,
-  savedFile: download.suggestedFilename(),
+  rotated: Math.abs(rotationAfter - rotationBefore) > 5,
+  trashed: beforeTrashCount === 1 && afterTrashCount === 0,
+  sharedFile: download.suggestedFilename(),
   manifestName: manifest.name,
   bodyOverflow,
-  storedLayouts,
+  storedLayoutInfo,
   errors,
 }
 
@@ -111,14 +148,19 @@ console.log(JSON.stringify(result, null, 2))
 
 const failures = [
   result.selectedPanel === '2' ? null : 'panel selection did not land on panel 2',
+  result.uploadedPhoto === 1 ? null : 'photo upload did not fill the active panel',
   result.stickerCount === 1 ? null : 'speech sticker was not added',
-  result.stickerText?.trim().toLowerCase() === 'hello!' ? null : 'inline sticker text edit failed',
+  result.drawerHidden ? null : 'closed drawer is still visible',
+  result.stickerText?.trim().toLowerCase() === 'again!' ? null : 'inline sticker text re-edit failed',
   result.moved ? null : 'sticker drag failed',
   result.pinched ? null : 'sticker pinch resize failed',
-  result.savedFile === 'instacomic.png' ? null : 'one-tap save did not download instacomic.png',
+  result.rotated ? null : 'two-finger sticker rotation failed',
+  result.trashed ? null : 'drag-to-trash failed',
+  result.sharedFile === 'instacomic.png' ? null : 'share fallback did not produce instacomic.png',
   result.manifestName === 'Instacomic' ? null : 'manifest did not load',
   result.bodyOverflow === 'hidden' ? null : 'body is scrollable',
-  result.storedLayouts > 0 ? null : 'custom divider layout was not saved',
+  result.storedLayoutInfo.count > 0 ? null : 'custom divider layout was not saved',
+  result.storedLayoutInfo.hasDiagonal ? null : 'custom layout did not preserve diagonal panels',
   result.errors.length === 0 ? null : `page errors: ${result.errors.join('; ')}`,
 ].filter(Boolean)
 
@@ -129,6 +171,27 @@ if (failures.length > 0) {
 async function tapStrip(page, nx, ny) {
   const box = await page.locator('.live-strip').boundingBox()
   await page.mouse.click(box.x + box.width * nx, box.y + box.height * ny)
+}
+
+async function openDrawer(page) {
+  await page.locator('.capture-bar button[aria-label="Open drawer"]').tap()
+  try {
+    await page.locator('.motion-drawer.is-open').waitFor({ timeout: 1200 })
+  } catch {
+    await page.locator('.capture-bar button[aria-label="Open drawer"]').evaluate((button) => button.click())
+    await page.locator('.motion-drawer.is-open').waitFor()
+  }
+}
+
+async function closeDrawer(page) {
+  const open = await page.locator('.motion-drawer.is-open').count()
+  if (open > 0) {
+    await page.locator('.motion-drawer.is-open .drawer-grabber').evaluate((button) => button.click())
+  }
+  await page.waitForFunction(() => {
+    const box = document.querySelector('.motion-drawer')?.getBoundingClientRect()
+    return !!box && box.top > window.innerHeight
+  })
 }
 
 async function dragCreatorLine(page, selector, dx, dy) {

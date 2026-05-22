@@ -21,12 +21,20 @@ await page.waitForFunction(() => document.querySelector('.live-frame'))
 const liveFrameBefore = await page.locator('[data-panel-id="2"] .live-frame').count()
 await page.locator('.shutter').tap()
 await page.waitForFunction(() => document.querySelector('[data-panel-id="2"] img'))
+await page.locator('.shutter').tap()
+await page.waitForFunction(() => document.querySelector('[data-panel-id="3"] img'))
+await page.locator('.shutter').tap()
+await page.waitForFunction(() => document.querySelector('[data-panel-id="4"] img'))
+await page.locator('.shutter').tap()
+await page.waitForFunction(() => document.querySelector('[data-panel-id="5"] img'))
 
 const result = {
   title: await page.title(),
   liveFrameBefore,
   panel2HasImage: await page.locator('[data-panel-id="2"] img').count(),
-  activePanelAfterCapture: await page.locator('.live-panel.is-live').getAttribute('data-panel-id'),
+  panel5HasImage: await page.locator('[data-panel-id="5"] img').count(),
+  activePanelAfterFinalCapture: await page.locator('.live-panel.is-live').count(),
+  liveFrameAfterFinalCapture: await page.locator('.live-frame').count(),
   errors,
 }
 
@@ -36,7 +44,9 @@ console.log(JSON.stringify(result, null, 2))
 const failures = [
   result.liveFrameBefore === 1 ? null : 'panel 2 did not become live before capture',
   result.panel2HasImage === 1 ? null : 'panel 2 did not keep the captured image',
-  result.activePanelAfterCapture === '3' ? null : 'capture did not advance forward to panel 3',
+  result.panel5HasImage === 1 ? null : 'last panel did not keep the captured image',
+  result.activePanelAfterFinalCapture === 0 ? null : 'a panel stayed live after the final forward capture',
+  result.liveFrameAfterFinalCapture === 0 ? null : 'live preview still covered the final captured photo',
   result.errors.length === 0 ? null : `page errors: ${result.errors.join('; ')}`,
 ].filter(Boolean)
 

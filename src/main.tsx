@@ -7,7 +7,7 @@ import './style.css'
 type PanelFit = 'cover' | 'contain'
 type StickerKind = 'speech' | 'thought' | 'burst' | 'caption' | 'arrow' | 'star'
 type DrawerTab = 'layout' | 'create' | 'stickers' | 'style'
-type CustomLineOrientation = 'vertical' | 'horizontal'
+type CustomLinePreset = 'diagonal' | 'vertical' | 'horizontal'
 
 type Panel = {
   id: string
@@ -56,8 +56,10 @@ type Settings = {
 
 type CustomLine = {
   id: string
-  orientation: CustomLineOrientation
-  position: number
+  x1: number
+  y1: number
+  x2: number
+  y2: number
 }
 
 type TouchPoints = {
@@ -77,8 +79,10 @@ type DragState = {
   stickerY: number
   stickerW: number
   stickerH: number
+  stickerRotation: number
   rect: DOMRect
   startDistance?: number
+  startAngle?: number
   centerX?: number
   centerY?: number
 }
@@ -187,7 +191,7 @@ const CUSTOM_LAYOUT_KEY = 'instacomic.customLayouts.v1'
 
 function App() {
   const [layout, setLayout] = useState(layouts[0])
-  const [activePanelId, setActivePanelId] = useState(layouts[0].panels[0].id)
+  const [activePanelId, setActivePanelId] = useState<string | null>(layouts[0].panels[0].id)
   const [shots, setShots] = useState<Record<string, Shot>>({})
   const [stickers, setStickers] = useState<Sticker[]>([])
   const [activeStickerId, setActiveStickerId] = useState<string | null>(null)
@@ -206,14 +210,18 @@ function App() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
+  const trashRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const lastDragPointRef = useRef<{ x: number; y: number } | null>(null)
   const dragControls = useDragControls()
+  const [trashArmed, setTrashArmed] = useState(false)
 
   const activeSticker = useMemo(
     () => stickers.find((sticker) => sticker.id === activeStickerId) ?? null,
     [activeStickerId, stickers],
   )
   const allLayouts = useMemo(() => [...layouts, ...customLayouts], [customLayouts])
-  const activePanelIndex = layout.panels.findIndex((panel) => panel.id === activePanelId)
+  const activePanelIndex = activePanelId ? layout.panels.findIndex((panel) => panel.id === activePanelId) : -1
   const capturedCount = layout.panels.filter((panel) => shots[panel.id]).length
 
   useEffect(() => {
@@ -267,6 +275,24 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    if (!dragState) {
+      return
+    }
+
+    const finish = () => finishStickerDrag()
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    window.addEventListener('touchend', finish)
+    window.addEventListener('touchcancel', finish)
+    return () => {
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      window.removeEventListener('touchend', finish)
+      window.removeEventListener('touchcancel', finish)
+    }
+  }, [dragState])
+
   async function startCamera(nextFacing = facing) {
     if (!navigator.mediaDevices?.getUserMedia) {
       setStatus('Camera is not available in this browser.')
@@ -285,7 +311,7 @@ function App() {
         },
       })
       setStream(nextStream)
-      setStatus(`Live in panel ${activePanelIndex + 1}.`)
+      setStatus(activePanelIndex >= 0 ? `Live in panel ${activePanelIndex + 1}.` : 'Camera ready. Tap a panel to retake it.')
     } catch (error) {
       setStream(null)
       setStatus(error instanceof Error ? `Camera blocked: ${error.message}` : 'Camera blocked.')
@@ -326,6 +352,11 @@ function App() {
 
   function capturePanel() {
     const video = videoRef.current
+    if (!activePanelId) {
+      setStatus('Tap a panel to retake it, or share the comic.')
+      return
+    }
+
     if (!stream || !video || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
       void startCamera()
       setStatus('Starting camera...')
@@ -353,7 +384,44 @@ function App() {
       setActivePanelId(nextPanel.id)
       setStatus(`Saved panel ${currentIndex + 1}. Panel ${layout.panels.findIndex((panel) => panel.id === nextPanel.id) + 1} is live.`)
     } else {
-      setStatus(`Saved panel ${currentIndex + 1}. Tap another panel to retake it.`)
+      setActivePanelId(null)
+      setStatus(`Saved panel ${currentIndex + 1}. Tap another panel to retake it, or share.`)
+    }
+    clearExport()
+  }
+
+  async function uploadPhoto(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) {
+      return
+    }
+
+    if (!file.type.startsWith('image/')) {
+      setStatus('Choose an image file.')
+      return
+    }
+
+    const targetPanelId = activePanelId ?? layout.panels.find((panel) => !shots[panel.id])?.id
+    if (!targetPanelId) {
+      setStatus('Tap a panel before replacing a finished photo.')
+      return
+    }
+
+    const dataUrl = await readFileAsDataUrl(file)
+    setShots((current) => ({
+      ...current,
+      [targetPanelId]: { dataUrl },
+    }))
+
+    const currentIndex = layout.panels.findIndex((panel) => panel.id === targetPanelId)
+    const nextPanel = layout.panels.slice(currentIndex + 1).find((panel) => !shots[panel.id])
+    if (nextPanel) {
+      setActivePanelId(nextPanel.id)
+      setStatus(`Photo added to panel ${currentIndex + 1}. Panel ${layout.panels.findIndex((panel) => panel.id === nextPanel.id) + 1} is live.`)
+    } else {
+      setActivePanelId(null)
+      setStatus(`Photo added to panel ${currentIndex + 1}. Tap another panel to replace it, or share.`)
     }
     clearExport()
   }
@@ -405,19 +473,27 @@ function App() {
     if (!activeStickerId) {
       return
     }
-    setStickers((current) => current.filter((sticker) => sticker.id !== activeStickerId))
-    setEditingStickerId(null)
-    setActiveStickerId(null)
+
+    removeSticker(activeStickerId)
+  }
+
+  function removeSticker(stickerId: string) {
+    setStickers((current) => current.filter((sticker) => sticker.id !== stickerId))
+    setEditingStickerId((current) => (current === stickerId ? null : current))
+    setActiveStickerId((current) => (current === stickerId ? null : current))
+    setDragState((current) => (current?.id === stickerId ? null : current))
+    setTrashArmed(false)
+    lastDragPointRef.current = null
     clearExport()
   }
 
-  function addDraftLine(orientation: CustomLineOrientation) {
-    setDraftLines((current) => [...current, createDraftLine(orientation, suggestLinePosition(current, orientation))])
+  function addDraftLine(preset: CustomLinePreset) {
+    setDraftLines((current) => [...current, createDraftLine(preset, current.length)])
   }
 
-  function updateDraftLine(lineId: string, position: number) {
+  function updateDraftLine(lineId: string, update: Partial<CustomLine>) {
     setDraftLines((current) =>
-      current.map((line) => (line.id === lineId ? { ...line, position: clamp(Math.round(position), 8, 92) } : line)),
+      current.map((line) => (line.id === lineId ? clampCustomLine({ ...line, ...update }) : line)),
     )
   }
 
@@ -466,8 +542,13 @@ function App() {
       stickerY: sticker.y,
       stickerW: sticker.w,
       stickerH: sticker.h,
+      stickerRotation: sticker.rotation,
       rect,
     })
+    if (mode === 'move') {
+      lastDragPointRef.current = { x: point.clientX, y: point.clientY }
+      setTrashArmed(pointInTrash(point.clientX, point.clientY))
+    }
   }
 
   function beginStickerPinch(event: TouchEvent<HTMLElement>, sticker: Sticker) {
@@ -488,8 +569,10 @@ function App() {
       stickerY: sticker.y,
       stickerW: sticker.w,
       stickerH: sticker.h,
+      stickerRotation: sticker.rotation,
       rect,
       startDistance: touchDistance(event.touches),
+      startAngle: touchAngle(event.touches),
       centerX: sticker.x + sticker.w / 2,
       centerY: sticker.y + sticker.h / 2,
     })
@@ -502,6 +585,15 @@ function App() {
 
     const dx = (clientX - dragState.startX) / dragState.rect.width
     const dy = (clientY - dragState.startY) / dragState.rect.height
+    lastDragPointRef.current = { x: clientX, y: clientY }
+    if (dragState.mode === 'move') {
+      const overTrash = pointInTrash(clientX, clientY)
+      setTrashArmed(overTrash)
+      if (overTrash) {
+        removeSticker(dragState.id)
+        return
+      }
+    }
     setStickers((current) =>
       current.map((sticker) => {
         if (sticker.id !== dragState.id) {
@@ -534,6 +626,7 @@ function App() {
     }
 
     const scale = clamp(touchDistance(touches) / dragState.startDistance, 0.45, 2.4)
+    const rotation = dragState.stickerRotation + angleDelta(dragState.startAngle ?? touchAngle(touches), touchAngle(touches))
     const centerX = dragState.centerX ?? dragState.stickerX + dragState.stickerW / 2
     const centerY = dragState.centerY ?? dragState.stickerY + dragState.stickerH / 2
 
@@ -549,12 +642,32 @@ function App() {
           ...sticker,
           w,
           h,
+          rotation,
           x: clamp(centerX - w / 2, 0, 1 - w),
           y: clamp(centerY - h / 2, 0, 1 - h),
         }
       }),
     )
     clearExport()
+  }
+
+  function pointInTrash(clientX: number, clientY: number) {
+    const rect = trashRef.current?.getBoundingClientRect()
+    return !!rect && clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom
+  }
+
+  function finishStickerDrag(clientX?: number, clientY?: number) {
+    if (dragState?.mode === 'move') {
+      const point = clientX === undefined || clientY === undefined ? lastDragPointRef.current : { x: clientX, y: clientY }
+      if (point && pointInTrash(point.x, point.y)) {
+        removeSticker(dragState.id)
+        return
+      }
+    }
+
+    setDragState(null)
+    setTrashArmed(false)
+    lastDragPointRef.current = null
   }
 
   function openDrawer(tab?: DrawerTab) {
@@ -571,21 +684,6 @@ function App() {
     return { blob, url }
   }
 
-  async function saveComic() {
-    try {
-      const { url } = await renderComicBlob()
-      const link = document.createElement('a')
-      link.href = url
-      link.download = 'instacomic.png'
-      document.body.append(link)
-      link.click()
-      link.remove()
-      setStatus('Image saved.')
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Render failed.')
-    }
-  }
-
   async function shareComic() {
     try {
       const blob = exportUrl ? await fetch(exportUrl).then((response) => response.blob()) : (await renderComicBlob()).blob
@@ -594,7 +692,14 @@ function App() {
         await navigator.share({ files: [file], title: 'Instacomic' })
         setStatus('Shared.')
       } else {
-        setStatus('Use Save Image, then add to Photos.')
+        const fallbackUrl = exportUrl ?? URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.href = fallbackUrl
+        link.download = 'instacomic.png'
+        document.body.append(link)
+        link.click()
+        link.remove()
+        setStatus('Sharing is unavailable here, so the PNG downloaded.')
       }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Share failed.')
@@ -605,8 +710,8 @@ function App() {
     <main
       className="native-shell"
       onPointerMove={(event) => moveSticker(event.clientX, event.clientY)}
-      onPointerUp={() => setDragState(null)}
-      onPointerCancel={() => setDragState(null)}
+      onPointerUp={(event) => finishStickerDrag(event.clientX, event.clientY)}
+      onPointerCancel={() => finishStickerDrag()}
       onTouchMove={(event) => {
         if (dragState?.mode === 'pinch') {
           moveStickerPinch(event.touches)
@@ -614,10 +719,11 @@ function App() {
           moveSticker(event.touches[0].clientX, event.touches[0].clientY)
         }
       }}
-      onTouchEnd={() => setDragState(null)}
-      onTouchCancel={() => setDragState(null)}
+      onTouchEnd={() => finishStickerDrag()}
+      onTouchCancel={() => finishStickerDrag()}
     >
       <video ref={videoRef} className="live-camera" autoPlay muted playsInline />
+      <input ref={fileInputRef} className="photo-upload" type="file" accept="image/*" onChange={(event) => void uploadPhoto(event)} />
       <div className="sr-status" aria-live="polite">
         {status}
       </div>
@@ -671,6 +777,7 @@ function App() {
               }}
               onEditEnd={() => setEditingStickerId((current) => (current === sticker.id ? null : current))}
               onText={(text) => updateStickerById(sticker.id, { text })}
+              onDelete={() => removeSticker(sticker.id)}
               onDragStart={(event, mode) => beginStickerDrag(event, sticker, mode)}
               onPinchStart={(event) => beginStickerPinch(event, sticker)}
             />
@@ -680,9 +787,20 @@ function App() {
         </div>
       </section>
 
+      <div
+        ref={trashRef}
+        className={`sticker-trash ${dragState?.mode === 'move' ? 'is-visible' : ''} ${trashArmed ? 'is-armed' : ''}`}
+        aria-hidden={dragState?.mode !== 'move'}
+      >
+        <span>⌫</span>
+      </div>
+
       <nav className="capture-bar" aria-label="Capture controls">
         <button className="round-action" type="button" onClick={() => void flipCamera()} aria-label="Flip camera">
           ↺
+        </button>
+        <button className="round-action" type="button" onClick={() => fileInputRef.current?.click()} aria-label="Upload photo">
+          ▧
         </button>
         <button className="shutter" type="button" onClick={capturePanel} aria-label="Capture active panel">
           <span />
@@ -735,7 +853,6 @@ function App() {
               setSettings((current) => ({ ...current, ...next }))
               clearExport()
             }}
-            onSave={() => void saveComic()}
             onShare={() => void shareComic()}
           />
         )}
@@ -777,12 +894,13 @@ function Drawer({
   return (
     <motion.aside
       className={`motion-drawer motion-drawer-${tab} ${open ? 'is-open' : ''}`}
+      aria-hidden={!open}
       drag="y"
       dragControls={dragControls}
       dragListener={false}
       dragConstraints={{ top: 0, bottom: 0 }}
       dragElastic={0.08}
-      animate={{ y: open ? 0 : 'calc(100% - 92px)' }}
+      animate={{ y: open ? 0 : '112%' }}
       transition={{ type: 'spring', stiffness: 430, damping: 38 }}
       onDragEnd={(_, info) => {
         if (info.offset.y > 50 || info.velocity.y > 400) {
@@ -886,30 +1004,86 @@ function CreatorPanel({
   draftName: string
   draftLines: CustomLine[]
   onName: (name: string) => void
-  onAddLine: (orientation: CustomLineOrientation) => void
-  onMoveLine: (lineId: string, position: number) => void
+  onAddLine: (preset: CustomLinePreset) => void
+  onMoveLine: (lineId: string, update: Partial<CustomLine>) => void
   onReset: () => void
   onSave: () => void
 }) {
   const canvasRef = useRef<HTMLDivElement>(null)
-  const [draggingLineId, setDraggingLineId] = useState<string | null>(null)
+  const [lineDrag, setLineDrag] = useState<{
+    id: string
+    mode: 'line' | 'start' | 'end'
+    startX: number
+    startY: number
+    line: CustomLine
+  } | null>(null)
   const previewPanels = useMemo(() => panelsFromLines(draftLines), [draftLines])
 
-  function moveLineFromPointer(event: PointerEvent<HTMLElement>, lineId: string) {
+  function beginLineDrag(event: PointerEvent<HTMLElement>, line: CustomLine, mode: 'line' | 'start' | 'end') {
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setLineDrag({
+      id: line.id,
+      mode,
+      startX: event.clientX,
+      startY: event.clientY,
+      line,
+    })
+  }
+
+  function moveLineFromPointer(event: PointerEvent<HTMLElement>) {
     const rect = canvasRef.current?.getBoundingClientRect()
-    const line = draftLines.find((item) => item.id === lineId)
-    if (!rect || !line) {
+    if (!rect || !lineDrag) {
       return
     }
 
-    const position = line.orientation === 'vertical'
-      ? ((event.clientX - rect.left) / rect.width) * 100
-      : ((event.clientY - rect.top) / rect.height) * 100
-    onMoveLine(lineId, position)
+    const dx = ((event.clientX - lineDrag.startX) / rect.width) * 100
+    const dy = ((event.clientY - lineDrag.startY) / rect.height) * 100
+
+    if (lineDrag.mode === 'line') {
+      onMoveLine(lineDrag.id, {
+        x1: lineDrag.line.x1 + dx,
+        y1: lineDrag.line.y1 + dy,
+        x2: lineDrag.line.x2 + dx,
+        y2: lineDrag.line.y2 + dy,
+      })
+      return
+    }
+
+    if (lineDrag.mode === 'start') {
+      onMoveLine(lineDrag.id, {
+        x1: lineDrag.line.x1 + dx,
+        y1: lineDrag.line.y1 + dy,
+      })
+      return
+    }
+
+    onMoveLine(lineDrag.id, {
+      x2: lineDrag.line.x2 + dx,
+      y2: lineDrag.line.y2 + dy,
+    })
   }
 
-  function nudgeLine(line: CustomLine, amount: number) {
-    onMoveLine(line.id, line.position + amount)
+  function endLineDrag(event: PointerEvent<HTMLElement>) {
+    event.currentTarget.releasePointerCapture(event.pointerId)
+    setLineDrag(null)
+  }
+
+  function nudgeLine(line: CustomLine, key: string, shift: boolean) {
+    const step = shift ? 5 : 2
+    if (key === 'ArrowLeft') {
+      onMoveLine(line.id, { x1: line.x1 - step, x2: line.x2 - step })
+    }
+    if (key === 'ArrowRight') {
+      onMoveLine(line.id, { x1: line.x1 + step, x2: line.x2 + step })
+    }
+    if (key === 'ArrowUp') {
+      onMoveLine(line.id, { y1: line.y1 - step, y2: line.y2 - step })
+    }
+    if (key === 'ArrowDown') {
+      onMoveLine(line.id, { y1: line.y1 + step, y2: line.y2 + step })
+    }
   }
 
   return (
@@ -921,51 +1095,46 @@ function CreatorPanel({
           </div>
         ))}
         {draftLines.map((line) => (
-          <button
-            key={line.id}
-            className={`creator-line creator-line-${line.orientation}`}
-            style={line.orientation === 'vertical' ? { left: `${line.position}%` } : { top: `${line.position}%` }}
-            type="button"
-            aria-label={`${line.orientation} divider`}
-            onPointerDown={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              event.currentTarget.setPointerCapture(event.pointerId)
-              setDraggingLineId(line.id)
-              moveLineFromPointer(event, line.id)
-            }}
-            onPointerMove={(event) => {
-              if (draggingLineId === line.id) {
-                moveLineFromPointer(event, line.id)
-              }
-            }}
-            onPointerUp={(event) => {
-              event.currentTarget.releasePointerCapture(event.pointerId)
-              setDraggingLineId(null)
-            }}
-            onPointerCancel={() => setDraggingLineId(null)}
-            onKeyDown={(event) => {
-              const step = event.shiftKey ? 5 : 2
-              if (line.orientation === 'vertical' && event.key === 'ArrowLeft') {
-                event.preventDefault()
-                nudgeLine(line, -step)
-              }
-              if (line.orientation === 'vertical' && event.key === 'ArrowRight') {
-                event.preventDefault()
-                nudgeLine(line, step)
-              }
-              if (line.orientation === 'horizontal' && event.key === 'ArrowUp') {
-                event.preventDefault()
-                nudgeLine(line, -step)
-              }
-              if (line.orientation === 'horizontal' && event.key === 'ArrowDown') {
-                event.preventDefault()
-                nudgeLine(line, step)
-              }
-            }}
-          >
-            <span />
-          </button>
+          <React.Fragment key={line.id}>
+            <button
+              className="creator-free-line"
+              style={lineSegmentStyle(line)}
+              type="button"
+              aria-label="Move divider line"
+              onPointerDown={(event) => beginLineDrag(event, line, 'line')}
+              onPointerMove={moveLineFromPointer}
+              onPointerUp={endLineDrag}
+              onPointerCancel={() => setLineDrag(null)}
+              onKeyDown={(event) => {
+                if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+                  event.preventDefault()
+                  nudgeLine(line, event.key, event.shiftKey)
+                }
+              }}
+            >
+              <span />
+            </button>
+            <button
+              className="creator-handle creator-handle-start"
+              style={lineHandleStyle(line.x1, line.y1)}
+              type="button"
+              aria-label="Move divider start"
+              onPointerDown={(event) => beginLineDrag(event, line, 'start')}
+              onPointerMove={moveLineFromPointer}
+              onPointerUp={endLineDrag}
+              onPointerCancel={() => setLineDrag(null)}
+            />
+            <button
+              className="creator-handle creator-handle-end"
+              style={lineHandleStyle(line.x2, line.y2)}
+              type="button"
+              aria-label="Move divider end"
+              onPointerDown={(event) => beginLineDrag(event, line, 'end')}
+              onPointerMove={moveLineFromPointer}
+              onPointerUp={endLineDrag}
+              onPointerCancel={() => setLineDrag(null)}
+            />
+          </React.Fragment>
         ))}
       </div>
       <label className="field">
@@ -973,11 +1142,11 @@ function CreatorPanel({
         <input value={draftName} placeholder="My manga layout" onChange={(event) => onName(event.target.value)} />
       </label>
       <div className="creator-actions">
-        <button type="button" onClick={() => onAddLine('vertical')}>
-          Add vertical
+        <button type="button" onClick={() => onAddLine('diagonal')}>
+          Add diagonal
         </button>
-        <button type="button" onClick={() => onAddLine('horizontal')}>
-          Add horizontal
+        <button type="button" onClick={() => onAddLine('vertical')}>
+          Add straight
         </button>
         <button type="button" onClick={onReset}>
           Reset lines
@@ -1051,12 +1220,10 @@ function StickerPanel({
 function StylePanel({
   settings,
   onSettings,
-  onSave,
   onShare,
 }: {
   settings: Settings
   onSettings: (settings: Partial<Settings>) => void
-  onSave: () => void
   onShare: () => void
 }) {
   return (
@@ -1096,10 +1263,7 @@ function StylePanel({
           <input type="range" min="0" max="10" value={settings.border} onChange={(event) => onSettings({ border: Number(event.target.value) })} />
         </label>
       </div>
-      <div className="save-row save-row-two">
-        <button className="primary" type="button" onClick={onSave}>
-          Save Image
-        </button>
+      <div className="share-row">
         <button className="primary secondary" type="button" onClick={onShare}>
           Share
         </button>
@@ -1116,6 +1280,7 @@ function StickerView({
   onEditStart,
   onEditEnd,
   onText,
+  onDelete,
   onDragStart,
   onPinchStart,
 }: {
@@ -1126,6 +1291,7 @@ function StickerView({
   onEditStart: () => void
   onEditEnd: () => void
   onText: (text: string) => void
+  onDelete: () => void
   onDragStart: (event: PointerEvent<HTMLElement> | TouchEvent<HTMLElement>, mode: 'move' | 'resize') => void
   onPinchStart: (event: TouchEvent<HTMLElement>) => void
 }) {
@@ -1145,6 +1311,7 @@ function StickerView({
       className={`sticker sticker-${sticker.kind} ${active ? 'active' : ''}`}
       style={style}
       data-sticker-id={sticker.id}
+      data-rotation={Math.round(sticker.rotation)}
       role="button"
       tabIndex={0}
       onClick={(event) => {
@@ -1191,10 +1358,18 @@ function StickerView({
             onEditStart()
           }}
           onPointerDown={(event) => event.stopPropagation()}
+          onPointerUp={(event) => {
+            event.stopPropagation()
+            onEditStart()
+          }}
           onTouchStart={(event) => {
             if (event.touches.length < 2) {
               event.stopPropagation()
             }
+          }}
+          onTouchEnd={(event) => {
+            event.stopPropagation()
+            onEditStart()
           }}
         >
           {sticker.text}
@@ -1215,6 +1390,19 @@ function StickerView({
           }
         }}
       />
+      <button
+        className="sticker-delete"
+        type="button"
+        aria-label="Delete sticker"
+        onClick={(event) => {
+          event.stopPropagation()
+          onDelete()
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        onTouchStart={(event) => event.stopPropagation()}
+      >
+        ⌫
+      </button>
     </div>
   )
 }
@@ -1524,74 +1712,212 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   })
 }
 
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        resolve(reader.result)
+      } else {
+        reject(new Error('Photo upload failed.'))
+      }
+    }
+    reader.onerror = () => reject(new Error('Photo upload failed.'))
+    reader.readAsDataURL(file)
+  })
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
 }
 
-function createDraftLine(orientation: CustomLineOrientation, position: number): CustomLine {
+function createDraftLine(preset: CustomLinePreset, index = 0): CustomLine {
+  const offset = (index % 4) * 8
+  const base = {
+    id: `${preset}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+  }
+
+  if (preset === 'vertical') {
+    const x = clamp(42 + offset, 14, 86)
+    return { ...base, x1: x, y1: 4, x2: x, y2: 96 }
+  }
+
+  if (preset === 'horizontal') {
+    const y = clamp(36 + offset, 14, 86)
+    return { ...base, x1: 4, y1: y, x2: 96, y2: y }
+  }
+
   return {
-    id: `${orientation}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    orientation,
-    position,
+    ...base,
+    x1: 6,
+    y1: clamp(26 + offset, 10, 84),
+    x2: 94,
+    y2: clamp(72 - offset / 2, 16, 90),
   }
 }
 
 function createDefaultDraftLines() {
-  return [createDraftLine('vertical', 50), createDraftLine('horizontal', 50)]
+  return [createDraftLine('diagonal', 0), createDraftLine('vertical', 1)]
 }
 
-function suggestLinePosition(lines: CustomLine[], orientation: CustomLineOrientation) {
-  const positions = lines
-    .filter((line) => line.orientation === orientation)
-    .map((line) => line.position)
-    .sort((a, b) => a - b)
-  const cuts = [8, ...positions, 92]
-  let bestStart = cuts[0]
-  let bestEnd = cuts[cuts.length - 1]
-
-  for (let index = 0; index < cuts.length - 1; index += 1) {
-    if (cuts[index + 1] - cuts[index] > bestEnd - bestStart) {
-      bestStart = cuts[index]
-      bestEnd = cuts[index + 1]
-    }
+function clampCustomLine(line: CustomLine): CustomLine {
+  const next = {
+    ...line,
+    x1: clamp(Number(line.x1.toFixed(2)), 0, 100),
+    y1: clamp(Number(line.y1.toFixed(2)), 0, 100),
+    x2: clamp(Number(line.x2.toFixed(2)), 0, 100),
+    y2: clamp(Number(line.y2.toFixed(2)), 0, 100),
+  }
+  const length = Math.hypot(next.x2 - next.x1, next.y2 - next.y1)
+  if (length >= 8) {
+    return next
   }
 
-  return Math.round((bestStart + bestEnd) / 2)
+  if (next.x1 < 50) {
+    next.x2 = clamp(next.x1 + 14, 0, 100)
+  } else {
+    next.x2 = clamp(next.x1 - 14, 0, 100)
+  }
+  return next
+}
+
+function lineSegmentStyle(line: CustomLine) {
+  const dx = line.x2 - line.x1
+  const dy = (line.y2 - line.y1) * 1.45
+  return {
+    left: `${line.x1}%`,
+    top: `${line.y1}%`,
+    width: `${Math.hypot(dx, dy)}%`,
+    transform: `rotate(${Math.atan2(dy, dx)}rad)`,
+  } as React.CSSProperties
+}
+
+function lineHandleStyle(x: number, y: number) {
+  return {
+    left: `${x}%`,
+    top: `${y}%`,
+  } as React.CSSProperties
 }
 
 function panelsFromLines(lines: CustomLine[]) {
-  const xCuts = lineCuts(lines, 'vertical')
-  const yCuts = lineCuts(lines, 'horizontal')
-  const panels: Panel[] = []
+  let polygons: Array<Array<[number, number]>> = [
+    [
+      [0, 0],
+      [100, 0],
+      [100, 100],
+      [0, 100],
+    ],
+  ]
 
-  for (let row = 0; row < yCuts.length - 1; row += 1) {
-    for (let column = 0; column < xCuts.length - 1; column += 1) {
-      const x = xCuts[column] / 100
-      const y = yCuts[row] / 100
-      const w = (xCuts[column + 1] - xCuts[column]) / 100
-      const h = (yCuts[row + 1] - yCuts[row]) / 100
+  for (const line of lines) {
+    const nextPolygons: Array<Array<[number, number]>> = []
+    for (const polygon of polygons) {
+      const positive = clipPolygonByLine(polygon, line, true)
+      const negative = clipPolygonByLine(polygon, line, false)
+      const positiveArea = Math.abs(polygonArea(positive))
+      const negativeArea = Math.abs(polygonArea(negative))
 
-      if (w >= 0.05 && h >= 0.05) {
-        panels.push({ id: String(panels.length + 1), x, y, w, h })
+      if (positiveArea > 30 && negativeArea > 30) {
+        nextPolygons.push(positive, negative)
+      } else {
+        nextPolygons.push(polygon)
       }
+    }
+    polygons = nextPolygons
+  }
+
+  return polygons
+    .filter((polygon) => Math.abs(polygonArea(polygon)) > 30)
+    .map((points, index) => ({
+      id: String(index + 1),
+      x: 0,
+      y: 0,
+      w: 1,
+      h: 1,
+      points: simplifyPolygon(points).map(([x, y]) => [Number(x.toFixed(2)), Number(y.toFixed(2))] as [number, number]),
+    }))
+}
+
+function clipPolygonByLine(polygon: Array<[number, number]>, line: CustomLine, keepPositive: boolean) {
+  if (polygon.length === 0) {
+    return []
+  }
+
+  const output: Array<[number, number]> = []
+  const epsilon = 0.0001
+  for (let index = 0; index < polygon.length; index += 1) {
+    const current = polygon[index]
+    const previous = polygon[(index + polygon.length - 1) % polygon.length]
+    const currentSide = lineSide(current, line)
+    const previousSide = lineSide(previous, line)
+    const currentInside = keepPositive ? currentSide >= -epsilon : currentSide <= epsilon
+    const previousInside = keepPositive ? previousSide >= -epsilon : previousSide <= epsilon
+
+    if (currentInside) {
+      if (!previousInside) {
+        output.push(lineIntersection(previous, current, previousSide, currentSide))
+      }
+      output.push(current)
+    } else if (previousInside) {
+      output.push(lineIntersection(previous, current, previousSide, currentSide))
     }
   }
 
-  return panels
+  return simplifyPolygon(output)
 }
 
-function lineCuts(lines: CustomLine[], orientation: CustomLineOrientation) {
-  const positions = lines
-    .filter((line) => line.orientation === orientation)
-    .map((line) => clamp(Math.round(line.position), 8, 92))
-    .sort((a, b) => a - b)
-  return [0, ...Array.from(new Set(positions)), 100]
+function lineSide(point: [number, number], line: CustomLine) {
+  return (line.x2 - line.x1) * (point[1] - line.y1) - (line.y2 - line.y1) * (point[0] - line.x1)
+}
+
+function lineIntersection(
+  start: [number, number],
+  end: [number, number],
+  startSide: number,
+  endSide: number,
+): [number, number] {
+  const ratio = startSide / (startSide - endSide || 1)
+  return [start[0] + (end[0] - start[0]) * ratio, start[1] + (end[1] - start[1]) * ratio]
+}
+
+function polygonArea(points: Array<[number, number]>) {
+  let area = 0
+  for (let index = 0; index < points.length; index += 1) {
+    const [x1, y1] = points[index]
+    const [x2, y2] = points[(index + 1) % points.length]
+    area += x1 * y2 - x2 * y1
+  }
+  return area / 2
+}
+
+function simplifyPolygon(points: Array<[number, number]>) {
+  return points.filter((point, index) => {
+    const previous = points[(index + points.length - 1) % points.length]
+    return Math.hypot(point[0] - previous[0], point[1] - previous[1]) > 0.05
+  })
 }
 
 function touchDistance(touches: TouchPoints) {
   const first = touches[0]
   const second = touches[1]
   return Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY)
+}
+
+function touchAngle(touches: TouchPoints) {
+  const first = touches[0]
+  const second = touches[1]
+  return (Math.atan2(second.clientY - first.clientY, second.clientX - first.clientX) * 180) / Math.PI
+}
+
+function angleDelta(start: number, current: number) {
+  let delta = current - start
+  while (delta > 180) {
+    delta -= 360
+  }
+  while (delta < -180) {
+    delta += 360
+  }
+  return delta
 }
 
 function pointInPanel(panel: Panel, x: number, y: number) {

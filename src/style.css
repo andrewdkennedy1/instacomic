@@ -71,7 +71,8 @@ select:focus-visible,
   user-select: none;
 }
 
-.live-camera {
+.live-camera,
+.photo-upload {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -307,6 +308,7 @@ select:focus-visible,
   background: rgba(255, 248, 236, 0.9);
   box-shadow: 0 -18px 60px rgba(0, 0, 0, 0.34);
   backdrop-filter: blur(28px) saturate(1.15);
+  pointer-events: none;
 }
 
 .motion-drawer-style {
@@ -315,6 +317,7 @@ select:focus-visible,
 
 .motion-drawer.is-open {
   z-index: 80;
+  pointer-events: auto;
 }
 
 .drawer-grabber {
@@ -497,64 +500,61 @@ select:focus-visible,
   font-weight: 1000;
 }
 
-.creator-line {
+.creator-free-line {
   position: absolute;
   z-index: 4;
-  display: grid;
-  place-items: center;
+  height: 42px;
   border: 0;
   background: transparent;
+  transform-origin: left center;
   touch-action: none;
 }
 
-.creator-line::before {
+.creator-free-line::before {
   content: "";
   position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 6px;
   border-radius: 999px;
   background: var(--yellow);
   box-shadow:
     0 0 0 2px #111,
     0 8px 20px rgba(0, 0, 0, 0.28);
+  transform: translateY(-50%);
 }
 
-.creator-line span {
-  position: relative;
-  width: 24px;
-  height: 24px;
+.creator-free-line span,
+.creator-handle {
+  position: absolute;
+  width: 26px;
+  height: 26px;
   border: 3px solid #111;
   border-radius: 999px;
   background: #fff8ec;
   box-shadow: 2px 2px 0 #111;
 }
 
-.creator-line-vertical {
-  top: 0;
-  bottom: 0;
-  width: 44px;
-  transform: translateX(-50%);
-}
-
-.creator-line-vertical::before {
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 5px;
-  transform: translateX(-50%);
-}
-
-.creator-line-horizontal {
-  right: 0;
-  left: 0;
-  height: 44px;
-  transform: translateY(-50%);
-}
-
-.creator-line-horizontal::before {
+.creator-free-line span {
   top: 50%;
-  right: 0;
-  left: 0;
-  height: 5px;
-  transform: translateY(-50%);
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.creator-handle {
+  z-index: 5;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  touch-action: none;
+}
+
+.creator-handle-start {
+  background: var(--teal);
+}
+
+.creator-handle-end {
+  background: var(--accent);
 }
 
 .creator-actions {
@@ -633,8 +633,9 @@ select:focus-visible,
   gap: 9px;
 }
 
-.save-row-two {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.share-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .primary,
@@ -665,6 +666,45 @@ input:disabled {
 .subtle-danger {
   background: rgba(255, 93, 77, 0.14);
   color: #b3261e;
+}
+
+.sticker-trash {
+  position: absolute;
+  right: 22px;
+  bottom: calc(max(16px, env(safe-area-inset-bottom)) + 106px);
+  z-index: 70;
+  width: 74px;
+  height: 74px;
+  display: grid;
+  place-items: center;
+  border: 3px solid rgba(255, 248, 236, 0.9);
+  border-radius: 999px;
+  color: #fff8ec;
+  background: rgba(17, 17, 17, 0.76);
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.34);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(18px) scale(0.86);
+  transition:
+    opacity 150ms ease,
+    transform 150ms ease,
+    background 150ms ease;
+}
+
+.sticker-trash.is-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.sticker-trash.is-armed {
+  background: #b3261e;
+  transform: translateY(0) scale(1.1);
+}
+
+.sticker-trash span {
+  font-size: 30px;
+  font-weight: 1000;
+  line-height: 1;
 }
 
 .sticker {
@@ -727,6 +767,36 @@ input:disabled {
   border: 3px solid var(--sticker-ink);
   border-radius: 999px;
   background: var(--yellow);
+}
+
+.sticker-delete {
+  position: absolute;
+  top: -18px;
+  right: -18px;
+  z-index: 4;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 3px solid #fff8ec;
+  border-radius: 999px;
+  color: #fff8ec;
+  background: #b3261e;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.28);
+  font-size: 17px;
+  font-weight: 1000;
+  opacity: 0;
+  transform: scale(0.82);
+  transition:
+    opacity 130ms ease,
+    transform 130ms ease;
+}
+
+.sticker:hover .sticker-delete,
+.sticker:focus-within .sticker-delete,
+.sticker.active .sticker-delete {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .sticker-speech {

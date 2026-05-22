@@ -24,12 +24,13 @@ Instacomic turns a phone camera into a live comic strip editor. Pick a panel, sh
 ## Highlights
 
 - Live camera preview appears inside the selected comic panel.
-- Capture advances forward through the layout and does not jump back to overwrite earlier shots.
-- Speech bubble and sticker text edits happen directly on the comic.
-- Stickers stay on top of the capture surface, drag naturally, and pinch-resize on touch screens.
-- Custom layouts are built by dragging divider lines around the page.
+- Capture advances forward through the layout, then freezes the final photo instead of covering it with the live preview.
+- Upload an existing image into the active panel when the camera is not the right source.
+- Speech bubble and sticker text edits happen directly on the comic and can be reopened after clicking away.
+- Stickers stay on top of the capture surface, drag naturally, rotate and scale with two fingers, and can be thrown into a pop-up trash target.
+- Custom layouts are built from draggable divider lines with movable endpoints, including diagonal manga-style cuts.
 - Style controls cover paper, ink, gutters, borders, corners, captions, and image fit.
-- Save Image renders and downloads in one action; Share renders automatically when needed.
+- Share renders automatically and falls back to downloading the PNG when native share is unavailable.
 - Installable PWA shell with manifest icons and offline app caching.
 
 ## Local development
@@ -47,7 +48,7 @@ npm run smoke
 npm run smoke:camera
 ```
 
-The smoke checks exercise the mobile editor flow, inline sticker text, drag and pinch sizing, custom divider layouts, one-tap save, manifest loading, and fake-camera capture.
+The smoke checks exercise the mobile editor flow, inline and repeat sticker text editing, drag/scale/rotate gestures, drag-to-trash deletion, diagonal custom layouts, share fallback, manifest loading, and fake-camera capture through the final panel.
 
 ## Deploy
 
