@@ -7,6 +7,7 @@ import './style.css'
 type PanelFit = 'cover' | 'contain'
 type StickerKind = 'speech' | 'thought' | 'burst' | 'caption' | 'arrow' | 'star'
 type DrawerTab = 'layout' | 'create' | 'stickers' | 'style'
+type CustomLineOrientation = 'vertical' | 'horizontal'
 
 type Panel = {
   id: string
@@ -53,9 +54,23 @@ type Settings = {
   fit: PanelFit
 }
 
+type CustomLine = {
+  id: string
+  orientation: CustomLineOrientation
+  position: number
+}
+
+type TouchPoints = {
+  readonly length: number
+  readonly [index: number]: {
+    readonly clientX: number
+    readonly clientY: number
+  }
+}
+
 type DragState = {
   id: string
-  mode: 'move' | 'resize'
+  mode: 'move' | 'resize' | 'pinch'
   startX: number
   startY: number
   stickerX: number
@@ -63,6 +78,9 @@ type DragState = {
   stickerW: number
   stickerH: number
   rect: DOMRect
+  startDistance?: number
+  centerX?: number
+  centerY?: number
 }
 
 const layouts: Layout[] = [
@@ -173,17 +191,17 @@ function App() {
   const [shots, setShots] = useState<Record<string, Shot>>({})
   const [stickers, setStickers] = useState<Sticker[]>([])
   const [activeStickerId, setActiveStickerId] = useState<string | null>(null)
+  const [editingStickerId, setEditingStickerId] = useState<string | null>(null)
   const [settings, setSettings] = useState(defaultSettings)
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [facing, setFacing] = useState<'environment' | 'user'>('environment')
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [drawerTab, setDrawerTab] = useState<DrawerTab>('layout')
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>('stickers')
   const [status, setStatus] = useState('Tap a panel. Shoot. Repeat.')
   const [exportUrl, setExportUrl] = useState<string | null>(null)
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [customLayouts, setCustomLayouts] = useState<Layout[]>([])
-  const [draftPoints, setDraftPoints] = useState<Array<[number, number]>>([])
-  const [draftPanels, setDraftPanels] = useState<Panel[]>([])
+  const [draftLines, setDraftLines] = useState<CustomLine[]>(() => createDefaultDraftLines())
   const [draftName, setDraftName] = useState('')
   const videoRef = useRef<HTMLVideoElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -283,6 +301,7 @@ function App() {
   function selectPanel(panelId: string) {
     setActivePanelId(panelId)
     setActiveStickerId(null)
+    setEditingStickerId(null)
     setStatus(`Panel ${layout.panels.findIndex((panel) => panel.id === panelId) + 1} is live.`)
     if (!stream) {
       void startCamera()
@@ -329,10 +348,13 @@ function App() {
     }))
 
     const currentIndex = layout.panels.findIndex((panel) => panel.id === activePanelId)
-    const nextEmpty = layout.panels.find((panel) => panel.id !== activePanelId && !shots[panel.id])
-    const nextPanel = nextEmpty ?? layout.panels[(currentIndex + 1) % layout.panels.length]
-    setActivePanelId(nextPanel.id)
-    setStatus(`Saved panel ${currentIndex + 1}. Panel ${layout.panels.findIndex((panel) => panel.id === nextPanel.id) + 1} is live.`)
+    const nextPanel = layout.panels.slice(currentIndex + 1).find((panel) => !shots[panel.id])
+    if (nextPanel) {
+      setActivePanelId(nextPanel.id)
+      setStatus(`Saved panel ${currentIndex + 1}. Panel ${layout.panels.findIndex((panel) => panel.id === nextPanel.id) + 1} is live.`)
+    } else {
+      setStatus(`Saved panel ${currentIndex + 1}. Tap another panel to retake it.`)
+    }
     clearExport()
   }
 
@@ -369,8 +391,12 @@ function App() {
       return
     }
 
+    updateStickerById(activeStickerId, update)
+  }
+
+  function updateStickerById(stickerId: string, update: Partial<Sticker>) {
     setStickers((current) =>
-      current.map((sticker) => (sticker.id === activeStickerId ? { ...sticker, ...update } : sticker)),
+      current.map((sticker) => (sticker.id === stickerId ? { ...sticker, ...update } : sticker)),
     )
     clearExport()
   }
@@ -380,67 +406,31 @@ function App() {
       return
     }
     setStickers((current) => current.filter((sticker) => sticker.id !== activeStickerId))
+    setEditingStickerId(null)
     setActiveStickerId(null)
     clearExport()
   }
 
-  function addDraftPoint(clientX: number, clientY: number) {
-    const canvas = document.querySelector<HTMLElement>('.creator-canvas')
-    const rect = canvas?.getBoundingClientRect()
-
-    if (!rect) {
-      return
-    }
-
-    const x = clamp(((clientX - rect.left) / rect.width) * 100, 0, 100)
-    const y = clamp(((clientY - rect.top) / rect.height) * 100, 0, 100)
-    setDraftPoints((current) => [...current, [Math.round(x), Math.round(y)]])
+  function addDraftLine(orientation: CustomLineOrientation) {
+    setDraftLines((current) => [...current, createDraftLine(orientation, suggestLinePosition(current, orientation))])
   }
 
-  function finishDraftPanel() {
-    if (draftPoints.length < 3) {
-      setStatus('Tap at least 3 points to close a panel.')
-      return
-    }
-
-    setDraftPanels((current) => [
-      ...current,
-      {
-        id: String(current.length + 1),
-        x: 0,
-        y: 0,
-        w: 1,
-        h: 1,
-        points: draftPoints,
-      },
-    ])
-    setDraftPoints([])
-    setStatus('Panel saved in the creator.')
+  function updateDraftLine(lineId: string, position: number) {
+    setDraftLines((current) =>
+      current.map((line) => (line.id === lineId ? { ...line, position: clamp(Math.round(position), 8, 92) } : line)),
+    )
   }
 
-  function clearDraftLayout() {
-    setDraftPoints([])
-    setDraftPanels([])
-    setStatus('Creator cleared.')
+  function resetDraftLayout() {
+    setDraftLines(createDefaultDraftLines())
+    setStatus('Creator reset.')
   }
 
   function saveDraftLayout() {
-    const panels = draftPoints.length >= 3
-      ? [
-          ...draftPanels,
-          {
-            id: String(draftPanels.length + 1),
-            x: 0,
-            y: 0,
-            w: 1,
-            h: 1,
-            points: draftPoints,
-          },
-        ]
-      : draftPanels
+    const panels = panelsFromLines(draftLines)
 
     if (panels.length === 0) {
-      setStatus('Draw at least one panel before saving.')
+      setStatus('Move a divider before saving.')
       return
     }
 
@@ -453,8 +443,7 @@ function App() {
     setCustomLayouts((current) => [...current, customLayout])
     changeLayout(customLayout)
     setDraftName('')
-    setDraftPanels([])
-    setDraftPoints([])
+    setDraftLines(createDefaultDraftLines())
     setDrawerTab('layout')
     setStatus('Custom layout saved on this phone.')
   }
@@ -481,8 +470,33 @@ function App() {
     })
   }
 
+  function beginStickerPinch(event: TouchEvent<HTMLElement>, sticker: Sticker) {
+    const rect = stripRef.current?.getBoundingClientRect()
+    if (!rect || event.touches.length < 2) {
+      return
+    }
+
+    event.preventDefault()
+    setActiveStickerId(sticker.id)
+    setEditingStickerId(null)
+    setDragState({
+      id: sticker.id,
+      mode: 'pinch',
+      startX: 0,
+      startY: 0,
+      stickerX: sticker.x,
+      stickerY: sticker.y,
+      stickerW: sticker.w,
+      stickerH: sticker.h,
+      rect,
+      startDistance: touchDistance(event.touches),
+      centerX: sticker.x + sticker.w / 2,
+      centerY: sticker.y + sticker.h / 2,
+    })
+  }
+
   function moveSticker(clientX: number, clientY: number) {
-    if (!dragState) {
+    if (!dragState || dragState.mode === 'pinch') {
       return
     }
 
@@ -514,30 +528,76 @@ function App() {
     clearExport()
   }
 
-  async function renderComic() {
+  function moveStickerPinch(touches: TouchPoints) {
+    if (!dragState || dragState.mode !== 'pinch' || touches.length < 2 || !dragState.startDistance) {
+      return
+    }
+
+    const scale = clamp(touchDistance(touches) / dragState.startDistance, 0.45, 2.4)
+    const centerX = dragState.centerX ?? dragState.stickerX + dragState.stickerW / 2
+    const centerY = dragState.centerY ?? dragState.stickerY + dragState.stickerH / 2
+
+    setStickers((current) =>
+      current.map((sticker) => {
+        if (sticker.id !== dragState.id) {
+          return sticker
+        }
+
+        const w = clamp(dragState.stickerW * scale, 0.14, 0.85)
+        const h = clamp(dragState.stickerH * scale, 0.07, 0.5)
+        return {
+          ...sticker,
+          w,
+          h,
+          x: clamp(centerX - w / 2, 0, 1 - w),
+          y: clamp(centerY - h / 2, 0, 1 - h),
+        }
+      }),
+    )
+    clearExport()
+  }
+
+  function openDrawer(tab?: DrawerTab) {
+    setDrawerTab(tab ?? (activeStickerId ? 'stickers' : drawerTab))
+    setDrawerOpen(true)
+  }
+
+  async function renderComicBlob() {
+    setStatus('Rendering...')
+    const blob = await renderToPng(layout, shots, stickers, settings)
+    clearExport()
+    const url = URL.createObjectURL(blob)
+    setExportUrl(url)
+    return { blob, url }
+  }
+
+  async function saveComic() {
     try {
-      setStatus('Rendering...')
-      const blob = await renderToPng(layout, shots, stickers, settings)
-      clearExport()
-      setExportUrl(URL.createObjectURL(blob))
-      setStatus('Ready to save.')
+      const { url } = await renderComicBlob()
+      const link = document.createElement('a')
+      link.href = url
+      link.download = 'instacomic.png'
+      document.body.append(link)
+      link.click()
+      link.remove()
+      setStatus('Image saved.')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Render failed.')
     }
   }
 
   async function shareComic() {
-    if (!exportUrl) {
-      await renderComic()
-      return
-    }
-
-    const blob = await fetch(exportUrl).then((response) => response.blob())
-    const file = new File([blob], 'instacomic.png', { type: 'image/png' })
-    if ('canShare' in navigator && navigator.canShare?.({ files: [file] })) {
-      await navigator.share({ files: [file], title: 'Instacomic' })
-    } else {
-      setStatus('Use Save Image, then add to Photos.')
+    try {
+      const blob = exportUrl ? await fetch(exportUrl).then((response) => response.blob()) : (await renderComicBlob()).blob
+      const file = new File([blob], 'instacomic.png', { type: 'image/png' })
+      if ('canShare' in navigator && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'Instacomic' })
+        setStatus('Shared.')
+      } else {
+        setStatus('Use Save Image, then add to Photos.')
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Share failed.')
     }
   }
 
@@ -548,7 +608,9 @@ function App() {
       onPointerUp={() => setDragState(null)}
       onPointerCancel={() => setDragState(null)}
       onTouchMove={(event) => {
-        if (event.touches[0]) {
+        if (dragState?.mode === 'pinch') {
+          moveStickerPinch(event.touches)
+        } else if (event.touches[0]) {
           moveSticker(event.touches[0].clientX, event.touches[0].clientY)
         }
       }}
@@ -556,15 +618,11 @@ function App() {
       onTouchCancel={() => setDragState(null)}
     >
       <video ref={videoRef} className="live-camera" autoPlay muted playsInline />
+      <div className="sr-status" aria-live="polite">
+        {status}
+      </div>
 
       <section ref={stageRef} className="comic-stage" aria-label="Instacomic capture surface">
-        <div className="top-hint">
-          <span>{status}</span>
-          <button type="button" onClick={() => setDrawerOpen(true)} aria-label="Open controls">
-            Edit
-          </button>
-        </div>
-
         <div
           ref={stripRef}
           className={`live-strip layout-${layout.id} ${layout.panels.some((panel) => panel.points) ? 'is-manga' : ''}`}
@@ -605,8 +663,16 @@ function App() {
               key={sticker.id}
               sticker={sticker}
               active={sticker.id === activeStickerId}
+              editing={sticker.id === editingStickerId}
               onSelect={() => setActiveStickerId(sticker.id)}
+              onEditStart={() => {
+                setActiveStickerId(sticker.id)
+                setEditingStickerId(sticker.id)
+              }}
+              onEditEnd={() => setEditingStickerId((current) => (current === sticker.id ? null : current))}
+              onText={(text) => updateStickerById(sticker.id, { text })}
               onDragStart={(event, mode) => beginStickerDrag(event, sticker, mode)}
+              onPinchStart={(event) => beginStickerPinch(event, sticker)}
             />
           ))}
 
@@ -621,7 +687,7 @@ function App() {
         <button className="shutter" type="button" onClick={capturePanel} aria-label="Capture active panel">
           <span />
         </button>
-        <button className="round-action" type="button" onClick={() => setDrawerOpen(true)} aria-label="Open drawer">
+        <button className="round-action" type="button" onClick={() => openDrawer()} aria-label="Open drawer">
           ⋯
         </button>
       </nav>
@@ -646,13 +712,11 @@ function App() {
         {drawerTab === 'create' && (
           <CreatorPanel
             draftName={draftName}
-            draftPoints={draftPoints}
-            draftPanels={draftPanels}
+            draftLines={draftLines}
             onName={setDraftName}
-            onPoint={addDraftPoint}
-            onUndo={() => setDraftPoints((current) => current.slice(0, -1))}
-            onFinish={finishDraftPanel}
-            onClear={clearDraftLayout}
+            onAddLine={addDraftLine}
+            onMoveLine={updateDraftLine}
+            onReset={resetDraftLayout}
             onSave={saveDraftLayout}
           />
         )}
@@ -667,12 +731,11 @@ function App() {
         {drawerTab === 'style' && (
           <StylePanel
             settings={settings}
-            exportUrl={exportUrl}
             onSettings={(next) => {
               setSettings((current) => ({ ...current, ...next }))
               clearExport()
             }}
-            onRender={() => void renderComic()}
+            onSave={() => void saveComic()}
             onShare={() => void shareComic()}
           />
         )}
@@ -713,7 +776,7 @@ function Drawer({
 }) {
   return (
     <motion.aside
-      className={`motion-drawer ${open ? 'is-open' : ''}`}
+      className={`motion-drawer motion-drawer-${tab} ${open ? 'is-open' : ''}`}
       drag="y"
       dragControls={dragControls}
       dragListener={false}
@@ -740,14 +803,14 @@ function Drawer({
         <strong>Controls</strong>
       </button>
       <div className="drawer-tabs" role="tablist">
+        <button className={tab === 'stickers' ? 'active' : ''} type="button" onClick={() => onTab('stickers')}>
+          Stickers
+        </button>
         <button className={tab === 'layout' ? 'active' : ''} type="button" onClick={() => onTab('layout')}>
           Layout
         </button>
         <button className={tab === 'create' ? 'active' : ''} type="button" onClick={() => onTab('create')}>
           Create
-        </button>
-        <button className={tab === 'stickers' ? 'active' : ''} type="button" onClick={() => onTab('stickers')}>
-          Stickers
         </button>
         <button className={tab === 'style' ? 'active' : ''} type="button" onClick={() => onTab('style')}>
           Save
@@ -804,7 +867,7 @@ function LayoutPanel({
           <i />
           <i />
         </span>
-        <strong>Draw your own</strong>
+        <strong>Create your own</strong>
         <em>saved on this phone</em>
       </button>
     </div>
@@ -813,67 +876,113 @@ function LayoutPanel({
 
 function CreatorPanel({
   draftName,
-  draftPoints,
-  draftPanels,
+  draftLines,
   onName,
-  onPoint,
-  onUndo,
-  onFinish,
-  onClear,
+  onAddLine,
+  onMoveLine,
+  onReset,
   onSave,
 }: {
   draftName: string
-  draftPoints: Array<[number, number]>
-  draftPanels: Panel[]
+  draftLines: CustomLine[]
   onName: (name: string) => void
-  onPoint: (clientX: number, clientY: number) => void
-  onUndo: () => void
-  onFinish: () => void
-  onClear: () => void
+  onAddLine: (orientation: CustomLineOrientation) => void
+  onMoveLine: (lineId: string, position: number) => void
+  onReset: () => void
   onSave: () => void
 }) {
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const [draggingLineId, setDraggingLineId] = useState<string | null>(null)
+  const previewPanels = useMemo(() => panelsFromLines(draftLines), [draftLines])
+
+  function moveLineFromPointer(event: PointerEvent<HTMLElement>, lineId: string) {
+    const rect = canvasRef.current?.getBoundingClientRect()
+    const line = draftLines.find((item) => item.id === lineId)
+    if (!rect || !line) {
+      return
+    }
+
+    const position = line.orientation === 'vertical'
+      ? ((event.clientX - rect.left) / rect.width) * 100
+      : ((event.clientY - rect.top) / rect.height) * 100
+    onMoveLine(lineId, position)
+  }
+
+  function nudgeLine(line: CustomLine, amount: number) {
+    onMoveLine(line.id, line.position + amount)
+  }
+
   return (
     <div className="creator-stack">
-      <div
-        className="creator-canvas"
-        role="button"
-        tabIndex={0}
-        aria-label="Tap points to draw a custom manga panel"
-        onPointerDown={(event) => onPoint(event.clientX, event.clientY)}
-      >
-        {draftPanels.map((panel) => (
+      <div ref={canvasRef} className="creator-canvas" aria-label="Drag layout dividers">
+        {previewPanels.map((panel) => (
           <div key={panel.id} className="creator-panel" style={panelStyle(panel)}>
             {panel.id}
           </div>
         ))}
-        {draftPoints.length > 0 && (
-          <svg className="creator-lines" viewBox="0 0 100 145" preserveAspectRatio="none" aria-hidden="true">
-            <polyline points={draftPoints.map(([x, y]) => `${x},${y * 1.45}`).join(' ')} />
-            {draftPoints.length >= 3 && <polygon points={draftPoints.map(([x, y]) => `${x},${y * 1.45}`).join(' ')} />}
-          </svg>
-        )}
-        {draftPoints.map(([x, y], index) => (
-          <span key={`${x}-${y}-${index}`} className="creator-point" style={{ left: `${x}%`, top: `${y}%` }}>
-            {index + 1}
-          </span>
+        {draftLines.map((line) => (
+          <button
+            key={line.id}
+            className={`creator-line creator-line-${line.orientation}`}
+            style={line.orientation === 'vertical' ? { left: `${line.position}%` } : { top: `${line.position}%` }}
+            type="button"
+            aria-label={`${line.orientation} divider`}
+            onPointerDown={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              event.currentTarget.setPointerCapture(event.pointerId)
+              setDraggingLineId(line.id)
+              moveLineFromPointer(event, line.id)
+            }}
+            onPointerMove={(event) => {
+              if (draggingLineId === line.id) {
+                moveLineFromPointer(event, line.id)
+              }
+            }}
+            onPointerUp={(event) => {
+              event.currentTarget.releasePointerCapture(event.pointerId)
+              setDraggingLineId(null)
+            }}
+            onPointerCancel={() => setDraggingLineId(null)}
+            onKeyDown={(event) => {
+              const step = event.shiftKey ? 5 : 2
+              if (line.orientation === 'vertical' && event.key === 'ArrowLeft') {
+                event.preventDefault()
+                nudgeLine(line, -step)
+              }
+              if (line.orientation === 'vertical' && event.key === 'ArrowRight') {
+                event.preventDefault()
+                nudgeLine(line, step)
+              }
+              if (line.orientation === 'horizontal' && event.key === 'ArrowUp') {
+                event.preventDefault()
+                nudgeLine(line, -step)
+              }
+              if (line.orientation === 'horizontal' && event.key === 'ArrowDown') {
+                event.preventDefault()
+                nudgeLine(line, step)
+              }
+            }}
+          >
+            <span />
+          </button>
         ))}
-        {draftPanels.length === 0 && draftPoints.length === 0 && <p>Tap corners around each panel</p>}
       </div>
       <label className="field">
         <span>Name</span>
         <input value={draftName} placeholder="My manga layout" onChange={(event) => onName(event.target.value)} />
       </label>
       <div className="creator-actions">
-        <button type="button" onClick={onUndo} disabled={draftPoints.length === 0}>
-          Undo point
+        <button type="button" onClick={() => onAddLine('vertical')}>
+          Add vertical
         </button>
-        <button type="button" onClick={onFinish} disabled={draftPoints.length < 3}>
-          Finish panel
+        <button type="button" onClick={() => onAddLine('horizontal')}>
+          Add horizontal
         </button>
-        <button type="button" onClick={onClear} disabled={draftPoints.length === 0 && draftPanels.length === 0}>
-          Clear
+        <button type="button" onClick={onReset}>
+          Reset lines
         </button>
-        <button type="button" className="primary" onClick={onSave} disabled={draftPoints.length < 3 && draftPanels.length === 0}>
+        <button type="button" className="primary" onClick={onSave}>
           Save layout
         </button>
       </div>
@@ -901,15 +1010,6 @@ function StickerPanel({
           </button>
         ))}
       </div>
-      <label className="field">
-        <span>Text</span>
-        <input
-          value={activeSticker?.text ?? ''}
-          disabled={!activeSticker}
-          placeholder="Add or tap a sticker"
-          onChange={(event) => onUpdate({ text: event.target.value })}
-        />
-      </label>
       <div className="triple-fields">
         <label className="field">
           <span>Bubble</span>
@@ -950,15 +1050,13 @@ function StickerPanel({
 
 function StylePanel({
   settings,
-  exportUrl,
   onSettings,
-  onRender,
+  onSave,
   onShare,
 }: {
   settings: Settings
-  exportUrl: string | null
   onSettings: (settings: Partial<Settings>) => void
-  onRender: () => void
+  onSave: () => void
   onShare: () => void
 }) {
   return (
@@ -998,13 +1096,10 @@ function StylePanel({
           <input type="range" min="0" max="10" value={settings.border} onChange={(event) => onSettings({ border: Number(event.target.value) })} />
         </label>
       </div>
-      <div className="save-row">
-        <button className="primary" type="button" onClick={onRender}>
-          Render
-        </button>
-        <a className={`primary ${exportUrl ? '' : 'disabled'}`} href={exportUrl ?? undefined} download="instacomic.png" aria-disabled={!exportUrl}>
+      <div className="save-row save-row-two">
+        <button className="primary" type="button" onClick={onSave}>
           Save Image
-        </a>
+        </button>
         <button className="primary secondary" type="button" onClick={onShare}>
           Share
         </button>
@@ -1016,13 +1111,23 @@ function StylePanel({
 function StickerView({
   sticker,
   active,
+  editing,
   onSelect,
+  onEditStart,
+  onEditEnd,
+  onText,
   onDragStart,
+  onPinchStart,
 }: {
   sticker: Sticker
   active: boolean
+  editing: boolean
   onSelect: () => void
+  onEditStart: () => void
+  onEditEnd: () => void
+  onText: (text: string) => void
   onDragStart: (event: PointerEvent<HTMLElement> | TouchEvent<HTMLElement>, mode: 'move' | 'resize') => void
+  onPinchStart: (event: TouchEvent<HTMLElement>) => void
 }) {
   const style = {
     left: `${sticker.x * 100}%`,
@@ -1047,9 +1152,54 @@ function StickerView({
         onSelect()
       }}
       onPointerDown={(event) => onDragStart(event, 'move')}
-      onTouchStart={(event) => onDragStart(event, 'move')}
+      onTouchStart={(event) => {
+        if (event.touches.length > 1) {
+          onPinchStart(event)
+        } else {
+          onDragStart(event, 'move')
+        }
+      }}
     >
-      <span>{sticker.text}</span>
+      {editing ? (
+        <input
+          className="sticker-text-input"
+          value={sticker.text}
+          aria-label="Edit sticker text"
+          autoFocus
+          onFocus={(event) => event.currentTarget.select()}
+          onPointerDown={(event) => event.stopPropagation()}
+          onTouchStart={(event) => {
+            if (event.touches.length < 2) {
+              event.stopPropagation()
+            }
+          }}
+          onChange={(event) => onText(event.target.value)}
+          onBlur={onEditEnd}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === 'Escape') {
+              event.preventDefault()
+              event.currentTarget.blur()
+            }
+          }}
+        />
+      ) : (
+        <button
+          className="sticker-text"
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation()
+            onEditStart()
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onTouchStart={(event) => {
+            if (event.touches.length < 2) {
+              event.stopPropagation()
+            }
+          }}
+        >
+          {sticker.text}
+        </button>
+      )}
       <i
         aria-hidden="true"
         onPointerDown={(event) => {
@@ -1058,7 +1208,11 @@ function StickerView({
         }}
         onTouchStart={(event) => {
           event.stopPropagation()
-          onDragStart(event, 'resize')
+          if (event.touches.length > 1) {
+            onPinchStart(event)
+          } else {
+            onDragStart(event, 'resize')
+          }
         }}
       />
     </div>
@@ -1372,6 +1526,72 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
+}
+
+function createDraftLine(orientation: CustomLineOrientation, position: number): CustomLine {
+  return {
+    id: `${orientation}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    orientation,
+    position,
+  }
+}
+
+function createDefaultDraftLines() {
+  return [createDraftLine('vertical', 50), createDraftLine('horizontal', 50)]
+}
+
+function suggestLinePosition(lines: CustomLine[], orientation: CustomLineOrientation) {
+  const positions = lines
+    .filter((line) => line.orientation === orientation)
+    .map((line) => line.position)
+    .sort((a, b) => a - b)
+  const cuts = [8, ...positions, 92]
+  let bestStart = cuts[0]
+  let bestEnd = cuts[cuts.length - 1]
+
+  for (let index = 0; index < cuts.length - 1; index += 1) {
+    if (cuts[index + 1] - cuts[index] > bestEnd - bestStart) {
+      bestStart = cuts[index]
+      bestEnd = cuts[index + 1]
+    }
+  }
+
+  return Math.round((bestStart + bestEnd) / 2)
+}
+
+function panelsFromLines(lines: CustomLine[]) {
+  const xCuts = lineCuts(lines, 'vertical')
+  const yCuts = lineCuts(lines, 'horizontal')
+  const panels: Panel[] = []
+
+  for (let row = 0; row < yCuts.length - 1; row += 1) {
+    for (let column = 0; column < xCuts.length - 1; column += 1) {
+      const x = xCuts[column] / 100
+      const y = yCuts[row] / 100
+      const w = (xCuts[column + 1] - xCuts[column]) / 100
+      const h = (yCuts[row + 1] - yCuts[row]) / 100
+
+      if (w >= 0.05 && h >= 0.05) {
+        panels.push({ id: String(panels.length + 1), x, y, w, h })
+      }
+    }
+  }
+
+  return panels
+}
+
+function lineCuts(lines: CustomLine[], orientation: CustomLineOrientation) {
+  const positions = lines
+    .filter((line) => line.orientation === orientation)
+    .map((line) => clamp(Math.round(line.position), 8, 92))
+    .sort((a, b) => a - b)
+  return [0, ...Array.from(new Set(positions)), 100]
+}
+
+function touchDistance(touches: TouchPoints) {
+  const first = touches[0]
+  const second = touches[1]
+  return Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY)
 }
 
 function pointInPanel(panel: Panel, x: number, y: number) {

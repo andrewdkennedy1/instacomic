@@ -26,12 +26,23 @@ const result = {
   title: await page.title(),
   liveFrameBefore,
   panel2HasImage: await page.locator('[data-panel-id="2"] img').count(),
-  hintAfterCapture: await page.locator('.top-hint span').textContent(),
+  activePanelAfterCapture: await page.locator('.live-panel.is-live').getAttribute('data-panel-id'),
   errors,
 }
 
 await browser.close()
 console.log(JSON.stringify(result, null, 2))
+
+const failures = [
+  result.liveFrameBefore === 1 ? null : 'panel 2 did not become live before capture',
+  result.panel2HasImage === 1 ? null : 'panel 2 did not keep the captured image',
+  result.activePanelAfterCapture === '3' ? null : 'capture did not advance forward to panel 3',
+  result.errors.length === 0 ? null : `page errors: ${result.errors.join('; ')}`,
+].filter(Boolean)
+
+if (failures.length > 0) {
+  throw new Error(failures.join('\n'))
+}
 
 async function tapStrip(page, nx, ny) {
   const box = await page.locator('.live-strip').boundingBox()
