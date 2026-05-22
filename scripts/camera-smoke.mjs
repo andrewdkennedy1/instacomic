@@ -16,6 +16,7 @@ const errors = []
 page.on('pageerror', (error) => errors.push(error.message))
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
+await page.getByRole('button', { name: 'Start' }).tap()
 await tapStrip(page, 0.75, 0.31)
 await page.waitForFunction(() => document.querySelector('.live-frame'))
 const liveFrameBefore = await page.locator('[data-panel-id="2"] .live-frame').count()

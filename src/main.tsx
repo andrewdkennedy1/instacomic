@@ -27,6 +27,9 @@ type Layout = {
 
 type Shot = {
   dataUrl: string
+  offsetX: number
+  offsetY: number
+  scale: number
 }
 
 type Sticker = {
@@ -41,6 +44,12 @@ type Sticker = {
   fill: string
   ink: string
   fontSize: number
+}
+
+type StickerTextMetrics = {
+  fontSize: number
+  lineHeight: number
+  lines: string[]
 }
 
 type Settings = {
@@ -86,6 +95,49 @@ type DragState = {
   centerX?: number
   centerY?: number
 }
+
+type PhotoDragState = {
+  panelId: string
+  mode: 'move' | 'pinch'
+  startX: number
+  startY: number
+  offsetX: number
+  offsetY: number
+  scale: number
+  rect: DOMRect
+  startDistance?: number
+}
+
+type LineTouchState = {
+  id: string
+  line: CustomLine
+  startCenterX: number
+  startCenterY: number
+  startDistance: number
+  startAngle: number
+  rect: DOMRect
+}
+
+function createShot(dataUrl: string): Shot {
+  return {
+    dataUrl,
+    offsetX: 0,
+    offsetY: 0,
+    scale: 1,
+  }
+}
+
+function normalizeShot(shot: Shot): Shot {
+  const scale = clamp(shot.scale, 0.65, 4)
+  return {
+    ...shot,
+    scale,
+    offsetX: clamp(shot.offsetX, -0.65 * scale, 0.65 * scale),
+    offsetY: clamp(shot.offsetY, -0.65 * scale, 0.65 * scale),
+  }
+}
+
+const CREATOR_CANVAS_ASPECT = 1.45
 
 const layouts: Layout[] = [
   {
@@ -190,6 +242,7 @@ const defaultSettings: Settings = {
 const CUSTOM_LAYOUT_KEY = 'instacomic.customLayouts.v1'
 
 function App() {
+  const [started, setStarted] = useState(false)
   const [layout, setLayout] = useState(layouts[0])
   const [activePanelId, setActivePanelId] = useState<string | null>(layouts[0].panels[0].id)
   const [shots, setShots] = useState<Record<string, Shot>>({})
@@ -204,6 +257,7 @@ function App() {
   const [status, setStatus] = useState('Tap a panel. Shoot. Repeat.')
   const [exportUrl, setExportUrl] = useState<string | null>(null)
   const [dragState, setDragState] = useState<DragState | null>(null)
+  const [photoDragState, setPhotoDragState] = useState<PhotoDragState | null>(null)
   const [customLayouts, setCustomLayouts] = useState<Layout[]>([])
   const [draftLines, setDraftLines] = useState<CustomLine[]>(() => createDefaultDraftLines())
   const [draftName, setDraftName] = useState('')
@@ -213,6 +267,7 @@ function App() {
   const trashRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const lastDragPointRef = useRef<{ x: number; y: number } | null>(null)
+  const dragStateRef = useRef<DragState | null>(null)
   const dragControls = useDragControls()
   const [trashArmed, setTrashArmed] = useState(false)
 
@@ -275,6 +330,29 @@ function App() {
     }
   }
 
+  function setActiveDragState(next: DragState | null) {
+    dragStateRef.current = next
+    setDragState(next)
+  }
+
+  async function enterApp() {
+    const element = document.documentElement as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void
+    }
+
+    try {
+      if (!document.fullscreenElement && element.requestFullscreen) {
+        await element.requestFullscreen()
+      } else if (element.webkitRequestFullscreen) {
+        await element.webkitRequestFullscreen()
+      }
+    } catch {
+      // Fullscreen can be blocked by browser policy; the app still starts.
+    }
+
+    setStarted(true)
+  }
+
   useEffect(() => {
     if (!dragState) {
       return
@@ -328,22 +406,31 @@ function App() {
     setActivePanelId(panelId)
     setActiveStickerId(null)
     setEditingStickerId(null)
+    if (shots[panelId]) {
+      setStatus(`Panel ${layout.panels.findIndex((panel) => panel.id === panelId) + 1} photo selected. Drag or pinch to adjust.`)
+      return
+    }
+
     setStatus(`Panel ${layout.panels.findIndex((panel) => panel.id === panelId) + 1} is live.`)
     if (!stream) {
       void startCamera()
     }
   }
 
-  function selectPanelFromPoint(clientX: number, clientY: number) {
+  function panelFromPoint(clientX: number, clientY: number) {
     const rect = stripRef.current?.getBoundingClientRect()
 
     if (!rect) {
-      return
+      return null
     }
 
     const x = clamp((clientX - rect.left) / rect.width, 0, 1)
     const y = clamp((clientY - rect.top) / rect.height, 0, 1)
-    const panel = [...layout.panels].reverse().find((item) => pointInPanel(item, x, y))
+    return [...layout.panels].reverse().find((item) => pointInPanel(item, x, y)) ?? null
+  }
+
+  function selectPanelFromPoint(clientX: number, clientY: number) {
+    const panel = panelFromPoint(clientX, clientY)
 
     if (panel) {
       selectPanel(panel.id)
@@ -375,7 +462,7 @@ function App() {
     context.drawImage(video, 0, 0, canvas.width, canvas.height)
     setShots((current) => ({
       ...current,
-      [activePanelId]: { dataUrl: canvas.toDataURL('image/jpeg', 0.92) },
+      [activePanelId]: createShot(canvas.toDataURL('image/jpeg', 0.92)),
     }))
 
     const currentIndex = layout.panels.findIndex((panel) => panel.id === activePanelId)
@@ -411,7 +498,7 @@ function App() {
     const dataUrl = await readFileAsDataUrl(file)
     setShots((current) => ({
       ...current,
-      [targetPanelId]: { dataUrl },
+      [targetPanelId]: createShot(dataUrl),
     }))
 
     const currentIndex = layout.panels.findIndex((panel) => panel.id === targetPanelId)
@@ -481,7 +568,9 @@ function App() {
     setStickers((current) => current.filter((sticker) => sticker.id !== stickerId))
     setEditingStickerId((current) => (current === stickerId ? null : current))
     setActiveStickerId((current) => (current === stickerId ? null : current))
-    setDragState((current) => (current?.id === stickerId ? null : current))
+    if (dragStateRef.current?.id === stickerId) {
+      setActiveDragState(null)
+    }
     setTrashArmed(false)
     lastDragPointRef.current = null
     clearExport()
@@ -506,7 +595,7 @@ function App() {
     const panels = panelsFromLines(draftLines)
 
     if (panels.length === 0) {
-      setStatus('Move a divider before saving.')
+      setStatus('Move a ray before saving.')
       return
     }
 
@@ -533,7 +622,7 @@ function App() {
 
     event.preventDefault()
     setActiveStickerId(sticker.id)
-    setDragState({
+    setActiveDragState({
       id: sticker.id,
       mode,
       startX: point.clientX,
@@ -560,7 +649,7 @@ function App() {
     event.preventDefault()
     setActiveStickerId(sticker.id)
     setEditingStickerId(null)
-    setDragState({
+    setActiveDragState({
       id: sticker.id,
       mode: 'pinch',
       startX: 0,
@@ -579,29 +668,30 @@ function App() {
   }
 
   function moveSticker(clientX: number, clientY: number) {
-    if (!dragState || dragState.mode === 'pinch') {
+    const activeDrag = dragStateRef.current
+    if (!activeDrag || activeDrag.mode === 'pinch') {
       return
     }
 
-    const dx = (clientX - dragState.startX) / dragState.rect.width
-    const dy = (clientY - dragState.startY) / dragState.rect.height
+    const dx = (clientX - activeDrag.startX) / activeDrag.rect.width
+    const dy = (clientY - activeDrag.startY) / activeDrag.rect.height
     lastDragPointRef.current = { x: clientX, y: clientY }
-    if (dragState.mode === 'move') {
+    if (activeDrag.mode === 'move') {
       const overTrash = pointInTrash(clientX, clientY)
       setTrashArmed(overTrash)
       if (overTrash) {
-        removeSticker(dragState.id)
+        removeSticker(activeDrag.id)
         return
       }
     }
     setStickers((current) =>
       current.map((sticker) => {
-        if (sticker.id !== dragState.id) {
+        if (sticker.id !== activeDrag.id) {
           return sticker
         }
-        if (dragState.mode === 'resize') {
-          const w = clamp(dragState.stickerW + dx, 0.14, 0.85)
-          const h = clamp(dragState.stickerH + dy, 0.07, 0.5)
+        if (activeDrag.mode === 'resize') {
+          const w = clamp(activeDrag.stickerW + dx, 0.14, 0.85)
+          const h = clamp(activeDrag.stickerH + dy, 0.07, 0.5)
           return {
             ...sticker,
             w,
@@ -612,8 +702,8 @@ function App() {
         }
         return {
           ...sticker,
-          x: clamp(dragState.stickerX + dx, 0, 1 - sticker.w),
-          y: clamp(dragState.stickerY + dy, 0, 1 - sticker.h),
+          x: clamp(activeDrag.stickerX + dx, 0, 1 - sticker.w),
+          y: clamp(activeDrag.stickerY + dy, 0, 1 - sticker.h),
         }
       }),
     )
@@ -621,23 +711,24 @@ function App() {
   }
 
   function moveStickerPinch(touches: TouchPoints) {
-    if (!dragState || dragState.mode !== 'pinch' || touches.length < 2 || !dragState.startDistance) {
+    const activeDrag = dragStateRef.current
+    if (!activeDrag || activeDrag.mode !== 'pinch' || touches.length < 2 || !activeDrag.startDistance) {
       return
     }
 
-    const scale = clamp(touchDistance(touches) / dragState.startDistance, 0.45, 2.4)
-    const rotation = dragState.stickerRotation + angleDelta(dragState.startAngle ?? touchAngle(touches), touchAngle(touches))
-    const centerX = dragState.centerX ?? dragState.stickerX + dragState.stickerW / 2
-    const centerY = dragState.centerY ?? dragState.stickerY + dragState.stickerH / 2
+    const scale = clamp(touchDistance(touches) / activeDrag.startDistance, 0.45, 2.4)
+    const rotation = activeDrag.stickerRotation + angleDelta(activeDrag.startAngle ?? touchAngle(touches), touchAngle(touches))
+    const centerX = activeDrag.centerX ?? activeDrag.stickerX + activeDrag.stickerW / 2
+    const centerY = activeDrag.centerY ?? activeDrag.stickerY + activeDrag.stickerH / 2
 
     setStickers((current) =>
       current.map((sticker) => {
-        if (sticker.id !== dragState.id) {
+        if (sticker.id !== activeDrag.id) {
           return sticker
         }
 
-        const w = clamp(dragState.stickerW * scale, 0.14, 0.85)
-        const h = clamp(dragState.stickerH * scale, 0.07, 0.5)
+        const w = clamp(activeDrag.stickerW * scale, 0.14, 0.85)
+        const h = clamp(activeDrag.stickerH * scale, 0.07, 0.5)
         return {
           ...sticker,
           w,
@@ -651,23 +742,122 @@ function App() {
     clearExport()
   }
 
+  function beginPhotoMove(event: PointerEvent<HTMLElement>) {
+    const rect = stripRef.current?.getBoundingClientRect()
+    const panel = panelFromPoint(event.clientX, event.clientY)
+    const shot = panel ? shots[panel.id] : null
+    if (!rect || !panel || !shot) {
+      selectPanelFromPoint(event.clientX, event.clientY)
+      return
+    }
+
+    event.preventDefault()
+    setActivePanelId(panel.id)
+    setActiveStickerId(null)
+    setEditingStickerId(null)
+    setPhotoDragState({
+      panelId: panel.id,
+      mode: 'move',
+      startX: event.clientX,
+      startY: event.clientY,
+      offsetX: shot.offsetX,
+      offsetY: shot.offsetY,
+      scale: shot.scale,
+      rect,
+    })
+    setStatus(`Panel ${layout.panels.findIndex((item) => item.id === panel.id) + 1} photo selected. Drag or pinch to adjust.`)
+  }
+
+  function beginPhotoPinch(event: TouchEvent<HTMLElement>) {
+    if (event.touches.length < 2) {
+      return
+    }
+
+    const firstPanel = panelFromPoint(event.touches[0].clientX, event.touches[0].clientY)
+    const secondPanel = panelFromPoint(event.touches[1].clientX, event.touches[1].clientY)
+    const rect = stripRef.current?.getBoundingClientRect()
+    if (!rect || !firstPanel || !secondPanel || firstPanel.id !== secondPanel.id || !shots[firstPanel.id]) {
+      return
+    }
+
+    event.preventDefault()
+    const shot = shots[firstPanel.id]
+    setActivePanelId(firstPanel.id)
+    setActiveStickerId(null)
+    setEditingStickerId(null)
+    setPhotoDragState({
+      panelId: firstPanel.id,
+      mode: 'pinch',
+      startX: 0,
+      startY: 0,
+      offsetX: shot.offsetX,
+      offsetY: shot.offsetY,
+      scale: shot.scale,
+      rect,
+      startDistance: touchDistance(event.touches),
+    })
+  }
+
+  function movePhoto(clientX: number, clientY: number) {
+    if (!photoDragState || photoDragState.mode !== 'move') {
+      return
+    }
+
+    const dx = (clientX - photoDragState.startX) / photoDragState.rect.width
+    const dy = (clientY - photoDragState.startY) / photoDragState.rect.height
+    updateShotTransform(photoDragState.panelId, {
+      offsetX: photoDragState.offsetX + dx,
+      offsetY: photoDragState.offsetY + dy,
+    })
+  }
+
+  function movePhotoPinch(touches: TouchPoints) {
+    if (!photoDragState || photoDragState.mode !== 'pinch' || touches.length < 2 || !photoDragState.startDistance) {
+      return
+    }
+
+    const scale = photoDragState.scale * clamp(touchDistance(touches) / photoDragState.startDistance, 0.35, 3)
+    updateShotTransform(photoDragState.panelId, { scale })
+  }
+
+  function updateShotTransform(panelId: string, update: Partial<Pick<Shot, 'offsetX' | 'offsetY' | 'scale'>>) {
+    setShots((current) => {
+      const shot = current[panelId]
+      if (!shot) {
+        return current
+      }
+
+      return {
+        ...current,
+        [panelId]: normalizeShot({ ...shot, ...update }),
+      }
+    })
+    clearExport()
+  }
+
   function pointInTrash(clientX: number, clientY: number) {
     const rect = trashRef.current?.getBoundingClientRect()
     return !!rect && clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom
   }
 
   function finishStickerDrag(clientX?: number, clientY?: number) {
-    if (dragState?.mode === 'move') {
+    const activeDrag = dragStateRef.current
+    if (activeDrag?.mode === 'move') {
       const point = clientX === undefined || clientY === undefined ? lastDragPointRef.current : { x: clientX, y: clientY }
       if (point && pointInTrash(point.x, point.y)) {
-        removeSticker(dragState.id)
+        removeSticker(activeDrag.id)
         return
       }
     }
 
-    setDragState(null)
+    setActiveDragState(null)
     setTrashArmed(false)
     lastDragPointRef.current = null
+  }
+
+  function finishGestures(clientX?: number, clientY?: number) {
+    finishStickerDrag(clientX, clientY)
+    setPhotoDragState(null)
   }
 
   function openDrawer(tab?: DrawerTab) {
@@ -709,19 +899,33 @@ function App() {
   return (
     <main
       className="native-shell"
-      onPointerMove={(event) => moveSticker(event.clientX, event.clientY)}
-      onPointerUp={(event) => finishStickerDrag(event.clientX, event.clientY)}
-      onPointerCancel={() => finishStickerDrag()}
+      onPointerMove={(event) => {
+        moveSticker(event.clientX, event.clientY)
+        movePhoto(event.clientX, event.clientY)
+      }}
+      onPointerUp={(event) => finishGestures(event.clientX, event.clientY)}
+      onPointerCancel={() => finishGestures()}
       onTouchMove={(event) => {
-        if (dragState?.mode === 'pinch') {
+        if (dragStateRef.current?.mode === 'pinch') {
           moveStickerPinch(event.touches)
+        } else if (photoDragState?.mode === 'pinch') {
+          movePhotoPinch(event.touches)
         } else if (event.touches[0]) {
           moveSticker(event.touches[0].clientX, event.touches[0].clientY)
+          movePhoto(event.touches[0].clientX, event.touches[0].clientY)
         }
       }}
-      onTouchEnd={() => finishStickerDrag()}
-      onTouchCancel={() => finishStickerDrag()}
+      onTouchEnd={() => finishGestures()}
+      onTouchCancel={() => finishGestures()}
     >
+      {!started && (
+        <section className="start-screen" aria-label="Start Instacomic">
+          <div className="start-mark">Instacomic</div>
+          <button type="button" onClick={() => void enterApp()}>
+            Start
+          </button>
+        </section>
+      )}
       <video ref={videoRef} className="live-camera" autoPlay muted playsInline />
       <input ref={fileInputRef} className="photo-upload" type="file" accept="image/*" onChange={(event) => void uploadPhoto(event)} />
       <div className="sr-status" aria-live="polite">
@@ -736,7 +940,12 @@ function App() {
             if ((event.target as HTMLElement).closest('[data-sticker-id]')) {
               return
             }
-            selectPanelFromPoint(event.clientX, event.clientY)
+            beginPhotoMove(event)
+          }}
+          onTouchStart={(event) => {
+            if (event.touches.length > 1) {
+              beginPhotoPinch(event)
+            }
           }}
           style={
             {
@@ -758,9 +967,18 @@ function App() {
               onClick={() => selectPanel(panel.id)}
               aria-label={`Make panel ${index + 1} live`}
             >
-              {shots[panel.id] && <img src={shots[panel.id].dataUrl} alt={`Panel ${index + 1}`} />}
-              {panel.id === activePanelId && stream && <LiveVideo stream={stream} />}
-              <span className="panel-chip">{panel.id === activePanelId ? 'LIVE' : index + 1}</span>
+              {shots[panel.id] && (
+                <img
+                  src={shots[panel.id].dataUrl}
+                  alt={`Panel ${index + 1}`}
+                  style={shotImageStyle(shots[panel.id])}
+                  data-shot-scale={shots[panel.id].scale.toFixed(2)}
+                  data-shot-x={shots[panel.id].offsetX.toFixed(2)}
+                  data-shot-y={shots[panel.id].offsetY.toFixed(2)}
+                />
+              )}
+              {panel.id === activePanelId && stream && !shots[panel.id] && <LiveVideo stream={stream} />}
+              {panel.id === activePanelId && !shots[panel.id] && <span className="panel-chip">LIVE</span>}
             </button>
           ))}
 
@@ -1017,12 +1235,43 @@ function CreatorPanel({
     startY: number
     line: CustomLine
   } | null>(null)
+  const [lineTouch, setLineTouch] = useState<LineTouchState | null>(null)
+  const lineTouchRef = useRef<LineTouchState | null>(null)
+  const linePointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(new Map())
   const previewPanels = useMemo(() => panelsFromLines(draftLines), [draftLines])
 
   function beginLineDrag(event: PointerEvent<HTMLElement>, line: CustomLine, mode: 'line' | 'start' | 'end') {
     event.preventDefault()
     event.stopPropagation()
     event.currentTarget.setPointerCapture(event.pointerId)
+    setLineDrag({
+      id: line.id,
+      mode,
+      startX: event.clientX,
+      startY: event.clientY,
+      line,
+    })
+  }
+
+  function beginLinePointer(event: PointerEvent<HTMLElement>, line: CustomLine, mode: 'line' | 'start' | 'end') {
+    if (event.pointerType !== 'touch') {
+      beginLineDrag(event, line, mode)
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    linePointersRef.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY })
+
+    const rect = canvasRef.current?.getBoundingClientRect()
+    const touches = linePointerTouches()
+    if (rect && touches) {
+      setLineDrag(null)
+      startLineTouch(line, touches, rect)
+      return
+    }
+
     setLineDrag({
       id: line.id,
       mode,
@@ -1065,9 +1314,123 @@ function CreatorPanel({
     })
   }
 
+  function moveLinePointer(event: PointerEvent<HTMLElement>) {
+    if (event.pointerType === 'touch') {
+      linePointersRef.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY })
+      const touches = linePointerTouches()
+      if (touches && lineTouchRef.current) {
+        updateLineTouch(touches)
+        return
+      }
+    }
+
+    moveLineFromPointer(event)
+  }
+
   function endLineDrag(event: PointerEvent<HTMLElement>) {
-    event.currentTarget.releasePointerCapture(event.pointerId)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
     setLineDrag(null)
+  }
+
+  function endLinePointer(event: PointerEvent<HTMLElement>) {
+    if (event.pointerType !== 'touch') {
+      endLineDrag(event)
+      return
+    }
+
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    linePointersRef.current.delete(event.pointerId)
+    if (linePointersRef.current.size < 2) {
+      clearLineTouch()
+    }
+    if (linePointersRef.current.size === 0) {
+      setLineDrag(null)
+    }
+  }
+
+  function beginLineTouch(event: TouchEvent<HTMLElement>) {
+    if (event.touches.length < 2 || draftLines.length === 0) {
+      return
+    }
+
+    const rect = canvasRef.current?.getBoundingClientRect()
+    if (!rect) {
+      return
+    }
+
+    const center = touchCenterPercent(event.touches, rect)
+    const line = nearestLineToPoint(draftLines, center.x, center.y)
+    if (!line) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    startLineTouch(line, event.touches, rect)
+  }
+
+  function startLineTouch(line: CustomLine, touches: TouchPoints, rect: DOMRect) {
+    const center = touchCenterPercent(touches, rect)
+    setLineDrag(null)
+    const nextTouch = {
+      id: line.id,
+      line,
+      startCenterX: center.x,
+      startCenterY: center.y,
+      startDistance: Math.max(1, touchDistance(touches)),
+      startAngle: touchAngle(touches),
+      rect,
+    }
+    lineTouchRef.current = nextTouch
+    setLineTouch(nextTouch)
+  }
+
+  function moveLineFromTouch(event: TouchEvent<HTMLElement>) {
+    if (!lineTouchRef.current || event.touches.length < 2) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    updateLineTouch(event.touches)
+  }
+
+  function updateLineTouch(touches: TouchPoints) {
+    const activeTouch = lineTouchRef.current
+    if (!activeTouch || touches.length < 2) {
+      return
+    }
+
+    const center = touchCenterPercent(touches, activeTouch.rect)
+    const scale = clamp(touchDistance(touches) / activeTouch.startDistance, 0.35, 3)
+    const rotation = angleDelta(activeTouch.startAngle, touchAngle(touches))
+    onMoveLine(
+      activeTouch.id,
+      transformLineByTouch(activeTouch.line, activeTouch.startCenterX, activeTouch.startCenterY, center.x, center.y, scale, rotation),
+    )
+  }
+
+  function clearLineTouch() {
+    lineTouchRef.current = null
+    linePointersRef.current.clear()
+    setLineTouch(null)
+  }
+
+  function linePointerTouches(): TouchPoints | null {
+    const points = Array.from(linePointersRef.current.values()).slice(0, 2)
+    if (points.length < 2) {
+      return null
+    }
+
+    return {
+      length: 2,
+      0: points[0],
+      1: points[1],
+    }
   }
 
   function nudgeLine(line: CustomLine, key: string, shift: boolean) {
@@ -1088,23 +1451,53 @@ function CreatorPanel({
 
   return (
     <div className="creator-stack">
-      <div ref={canvasRef} className="creator-canvas" aria-label="Drag layout dividers">
+      <div
+        ref={canvasRef}
+        className="creator-canvas"
+        aria-label="Drag layout rays"
+        onTouchStart={beginLineTouch}
+        onTouchMove={moveLineFromTouch}
+        onTouchEnd={(event) => {
+          if (event.touches.length < 2) {
+            clearLineTouch()
+          }
+        }}
+        onTouchCancel={clearLineTouch}
+      >
+        <span className="creator-ray-chip" aria-hidden="true">
+          RAYS
+        </span>
         {previewPanels.map((panel) => (
-          <div key={panel.id} className="creator-panel" style={panelStyle(panel)}>
-            {panel.id}
-          </div>
+          <div key={panel.id} className="creator-panel" style={panelStyle(panel)} />
         ))}
         {draftLines.map((line) => (
           <React.Fragment key={line.id}>
             <button
-              className="creator-free-line"
+              className={`creator-free-line ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
               style={lineSegmentStyle(line)}
               type="button"
-              aria-label="Move divider line"
-              onPointerDown={(event) => beginLineDrag(event, line, 'line')}
-              onPointerMove={moveLineFromPointer}
-              onPointerUp={endLineDrag}
-              onPointerCancel={() => setLineDrag(null)}
+              aria-label="Move ray"
+              data-ray-id={line.id}
+              data-ray-x1={line.x1.toFixed(2)}
+              data-ray-y1={line.y1.toFixed(2)}
+              data-ray-x2={line.x2.toFixed(2)}
+              data-ray-y2={line.y2.toFixed(2)}
+              onPointerDown={(event) => beginLinePointer(event, line, 'line')}
+              onPointerMove={moveLinePointer}
+              onPointerUp={endLinePointer}
+              onPointerCancel={endLinePointer}
+              onTouchStart={(event) => {
+                if (event.touches.length > 1) {
+                  beginLineTouch(event)
+                }
+              }}
+              onTouchMove={moveLineFromTouch}
+              onTouchEnd={(event) => {
+                if (event.touches.length < 2) {
+                  clearLineTouch()
+                }
+              }}
+              onTouchCancel={clearLineTouch}
               onKeyDown={(event) => {
                 if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
                   event.preventDefault()
@@ -1112,27 +1505,51 @@ function CreatorPanel({
                 }
               }}
             >
-              <span />
+              <span aria-hidden="true">RAY</span>
             </button>
             <button
-              className="creator-handle creator-handle-start"
+              className={`creator-handle creator-handle-start ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
               style={lineHandleStyle(line.x1, line.y1)}
               type="button"
-              aria-label="Move divider start"
-              onPointerDown={(event) => beginLineDrag(event, line, 'start')}
-              onPointerMove={moveLineFromPointer}
-              onPointerUp={endLineDrag}
-              onPointerCancel={() => setLineDrag(null)}
+              aria-label="Move ray start"
+              onPointerDown={(event) => beginLinePointer(event, line, 'start')}
+              onPointerMove={moveLinePointer}
+              onPointerUp={endLinePointer}
+              onPointerCancel={endLinePointer}
+              onTouchStart={(event) => {
+                if (event.touches.length > 1) {
+                  beginLineTouch(event)
+                }
+              }}
+              onTouchMove={moveLineFromTouch}
+              onTouchEnd={(event) => {
+                if (event.touches.length < 2) {
+                  clearLineTouch()
+                }
+              }}
+              onTouchCancel={clearLineTouch}
             />
             <button
-              className="creator-handle creator-handle-end"
+              className={`creator-handle creator-handle-end ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
               style={lineHandleStyle(line.x2, line.y2)}
               type="button"
-              aria-label="Move divider end"
-              onPointerDown={(event) => beginLineDrag(event, line, 'end')}
-              onPointerMove={moveLineFromPointer}
-              onPointerUp={endLineDrag}
-              onPointerCancel={() => setLineDrag(null)}
+              aria-label="Move ray end"
+              onPointerDown={(event) => beginLinePointer(event, line, 'end')}
+              onPointerMove={moveLinePointer}
+              onPointerUp={endLinePointer}
+              onPointerCancel={endLinePointer}
+              onTouchStart={(event) => {
+                if (event.touches.length > 1) {
+                  beginLineTouch(event)
+                }
+              }}
+              onTouchMove={moveLineFromTouch}
+              onTouchEnd={(event) => {
+                if (event.touches.length < 2) {
+                  clearLineTouch()
+                }
+              }}
+              onTouchCancel={clearLineTouch}
             />
           </React.Fragment>
         ))}
@@ -1143,13 +1560,13 @@ function CreatorPanel({
       </label>
       <div className="creator-actions">
         <button type="button" onClick={() => onAddLine('diagonal')}>
-          Add diagonal
+          Add diagonal ray
         </button>
         <button type="button" onClick={() => onAddLine('vertical')}>
-          Add straight
+          Add straight ray
         </button>
         <button type="button" onClick={onReset}>
-          Reset lines
+          Reset rays
         </button>
         <button type="button" className="primary" onClick={onSave}>
           Save layout
@@ -1295,6 +1712,8 @@ function StickerView({
   onDragStart: (event: PointerEvent<HTMLElement> | TouchEvent<HTMLElement>, mode: 'move' | 'resize') => void
   onPinchStart: (event: TouchEvent<HTMLElement>) => void
 }) {
+  const textStartRef = useRef<{ x: number; y: number } | null>(null)
+  const suppressTextClickRef = useRef(false)
   const style = {
     left: `${sticker.x * 100}%`,
     top: `${sticker.y * 100}%`,
@@ -1305,6 +1724,44 @@ function StickerView({
     '--sticker-size': `${sticker.fontSize}px`,
     transform: `rotate(${sticker.rotation}deg)`,
   } as React.CSSProperties
+
+  function rememberTextPointer(event: PointerEvent<HTMLButtonElement>) {
+    textStartRef.current = { x: event.clientX, y: event.clientY }
+  }
+
+  function finishTextPointer(event: PointerEvent<HTMLButtonElement>) {
+    const start = textStartRef.current
+    textStartRef.current = null
+    if (!start) {
+      return
+    }
+
+    const isTap = Math.hypot(event.clientX - start.x, event.clientY - start.y) < 8
+    suppressTextClickRef.current = !isTap
+    if (isTap) {
+      onEditStart()
+    }
+  }
+
+  function rememberTextTouch(event: TouchEvent<HTMLButtonElement>) {
+    const point = event.touches[0]
+    textStartRef.current = point ? { x: point.clientX, y: point.clientY } : null
+  }
+
+  function finishTextTouch(event: TouchEvent<HTMLButtonElement>) {
+    const point = event.changedTouches[0]
+    const start = textStartRef.current
+    textStartRef.current = null
+    if (!point || !start) {
+      return
+    }
+
+    const isTap = Math.hypot(point.clientX - start.x, point.clientY - start.y) < 8
+    suppressTextClickRef.current = !isTap
+    if (isTap) {
+      onEditStart()
+    }
+  }
 
   return (
     <div
@@ -1328,7 +1785,7 @@ function StickerView({
       }}
     >
       {editing ? (
-        <input
+        <textarea
           className="sticker-text-input"
           value={sticker.text}
           aria-label="Edit sticker text"
@@ -1343,7 +1800,7 @@ function StickerView({
           onChange={(event) => onText(event.target.value)}
           onBlur={onEditEnd}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === 'Escape') {
+            if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Escape') {
               event.preventDefault()
               event.currentTarget.blur()
             }
@@ -1351,28 +1808,22 @@ function StickerView({
         />
       ) : (
         <button
-          className="sticker-text"
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation()
-            onEditStart()
-          }}
-          onPointerDown={(event) => event.stopPropagation()}
-          onPointerUp={(event) => {
-            event.stopPropagation()
-            onEditStart()
-          }}
-          onTouchStart={(event) => {
-            if (event.touches.length < 2) {
+            className="sticker-text"
+            type="button"
+            onClick={(event) => {
               event.stopPropagation()
-            }
-          }}
-          onTouchEnd={(event) => {
-            event.stopPropagation()
-            onEditStart()
-          }}
-        >
-          {sticker.text}
+              if (suppressTextClickRef.current) {
+                suppressTextClickRef.current = false
+                return
+              }
+              onEditStart()
+            }}
+            onPointerDown={rememberTextPointer}
+            onPointerUp={finishTextPointer}
+            onTouchStart={rememberTextTouch}
+            onTouchEnd={finishTextTouch}
+          >
+          <StickerText sticker={sticker} />
         </button>
       )}
       <i
@@ -1407,6 +1858,20 @@ function StickerView({
   )
 }
 
+function StickerText({ sticker }: { sticker: Sticker }) {
+  const metrics = fitStickerText(sticker.text, sticker)
+  return (
+    <span
+      className="sticker-text-fit"
+      style={{ fontSize: `${metrics.fontSize}px`, lineHeight: metrics.lineHeight }}
+    >
+      {metrics.lines.map((line, index) => (
+        <span key={`${line}-${index}`}>{line}</span>
+      ))}
+    </span>
+  )
+}
+
 async function renderToPng(layout: Layout, shots: Record<string, Shot>, stickers: Sticker[], settings: Settings) {
   const canvas = document.createElement('canvas')
   const width = 1440
@@ -1427,12 +1892,13 @@ async function renderToPng(layout: Layout, shots: Record<string, Shot>, stickers
   const images = await Promise.all(
     layout.panels.map(async (panel) => ({
       panel,
+      shot: shots[panel.id] ?? null,
       image: shots[panel.id] ? await loadImage(shots[panel.id].dataUrl) : null,
     })),
   )
 
-  for (const { panel, image } of images) {
-    drawPanel(context, panel, image, width, panelHeight, outer, gutter, settings)
+  for (const { panel, image, shot } of images) {
+    drawPanel(context, panel, image, shot, width, panelHeight, outer, gutter, settings)
   }
 
   for (const sticker of stickers) {
@@ -1463,6 +1929,7 @@ function drawPanel(
   context: CanvasRenderingContext2D,
   panel: Panel,
   image: HTMLImageElement | null,
+  shot: Shot | null,
   width: number,
   panelHeight: number,
   outer: number,
@@ -1485,7 +1952,7 @@ function drawPanel(
   context.fill()
   context.clip()
   if (image) {
-    drawImageFit(context, image, x, y, w, h, settings.fit)
+    drawImageFit(context, image, x, y, w, h, settings.fit, shot ?? createShot(''))
   } else {
     drawEmptyPanel(context, x, y, w, h)
   }
@@ -1553,11 +2020,15 @@ function drawSticker(context: CanvasRenderingContext2D, sticker: Sticker, width:
     context.fill()
     context.stroke()
   }
+  const textMetrics = fitStickerText(sticker.text, sticker)
   context.fillStyle = sticker.ink
-  context.font = `900 ${sticker.fontSize * 3}px ui-rounded, "Avenir Next", "Segoe UI", sans-serif`
+  context.font = `900 ${textMetrics.fontSize * 3}px ui-rounded, "Avenir Next", "Segoe UI", sans-serif`
   context.textAlign = 'center'
   context.textBaseline = 'middle'
-  context.fillText(sticker.text.toUpperCase(), w / 2, h * 0.43, w * 0.84)
+  textMetrics.lines.forEach((line, index) => {
+    const y = h * 0.43 + (index - (textMetrics.lines.length - 1) / 2) * textMetrics.fontSize * textMetrics.lineHeight * 3
+    context.fillText(line, w / 2, y, w * 0.84)
+  })
   context.restore()
 }
 
@@ -1572,6 +2043,12 @@ function panelStyle(panel: Panel) {
     '--chip-x': `${center.x * 100}%`,
     '--chip-y': `${center.y * 100}%`,
   }
+}
+
+function shotImageStyle(shot: Shot) {
+  return {
+    transform: `translate(${shot.offsetX * 100}%, ${shot.offsetY * 100}%) scale(${shot.scale})`,
+  } as React.CSSProperties
 }
 
 function pointsToClipPath(points: Array<[number, number]>) {
@@ -1618,6 +2095,7 @@ function drawImageFit(
   w: number,
   h: number,
   fit: PanelFit,
+  shot: Shot,
 ) {
   const imageWidth = image.videoWidth || image.width || w
   const imageHeight = image.videoHeight || image.height || h
@@ -1625,9 +2103,11 @@ function drawImageFit(
   const rectRatio = w / h
   const cover = fit === 'cover'
   const useWidth = cover ? imageRatio < rectRatio : imageRatio > rectRatio
-  const drawW = useWidth ? w : h * imageRatio
-  const drawH = useWidth ? w / imageRatio : h
-  context.drawImage(image, x + (w - drawW) / 2, y + (h - drawH) / 2, drawW, drawH)
+  const drawW = (useWidth ? w : h * imageRatio) * shot.scale
+  const drawH = (useWidth ? w / imageRatio : h) * shot.scale
+  const offsetX = shot.offsetX * w
+  const offsetY = shot.offsetY * h
+  context.drawImage(image, x + (w - drawW) / 2 + offsetX, y + (h - drawH) / 2 + offsetY, drawW, drawH)
 }
 
 function drawRoundedRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
@@ -1727,6 +2207,52 @@ function readFileAsDataUrl(file: File): Promise<string> {
   })
 }
 
+function fitStickerText(text: string, sticker: Sticker): StickerTextMetrics {
+  const raw = (text.trim() || 'TEXT').toUpperCase()
+  const maxChars = Math.max(4, Math.round(sticker.w * 42))
+  const lines = wrapText(raw, maxChars).slice(0, 4)
+  const longest = Math.max(...lines.map((line) => line.length), 1)
+  const widthFactor = (sticker.w * 120) / longest
+  const heightFactor = (sticker.h * 120) / Math.max(lines.length, 1)
+  const fontSize = clamp(Math.min(sticker.fontSize, widthFactor, heightFactor), 11, sticker.fontSize)
+  return {
+    fontSize,
+    lineHeight: lines.length > 2 ? 0.9 : 0.96,
+    lines,
+  }
+}
+
+function wrapText(text: string, maxChars: number) {
+  const explicitLines = text.split(/\n+/)
+  const lines: string[] = []
+
+  for (const explicitLine of explicitLines) {
+    const words = explicitLine.split(/\s+/).filter(Boolean)
+    let line = ''
+    for (const word of words) {
+      if (!line) {
+        line = word
+      } else if (`${line} ${word}`.length <= maxChars) {
+        line = `${line} ${word}`
+      } else {
+        lines.push(line)
+        line = word
+      }
+
+      while (line.length > maxChars) {
+        lines.push(line.slice(0, maxChars))
+        line = line.slice(maxChars)
+      }
+    }
+
+    if (line) {
+      lines.push(line)
+    }
+  }
+
+  return lines.length > 0 ? lines : ['TEXT']
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
 }
@@ -1783,12 +2309,12 @@ function clampCustomLine(line: CustomLine): CustomLine {
 
 function lineSegmentStyle(line: CustomLine) {
   const dx = line.x2 - line.x1
-  const dy = (line.y2 - line.y1) * 1.45
+  const dy = (line.y2 - line.y1) * CREATOR_CANVAS_ASPECT
   return {
     left: `${line.x1}%`,
     top: `${line.y1}%`,
     width: `${Math.hypot(dx, dy)}%`,
-    transform: `rotate(${Math.atan2(dy, dx)}rad)`,
+    transform: `translateY(-50%) rotate(${Math.atan2(dy, dx)}rad)`,
   } as React.CSSProperties
 }
 
@@ -1797,6 +2323,76 @@ function lineHandleStyle(x: number, y: number) {
     left: `${x}%`,
     top: `${y}%`,
   } as React.CSSProperties
+}
+
+function touchCenterPercent(touches: TouchPoints, rect: DOMRect) {
+  return {
+    x: ((((touches[0].clientX + touches[1].clientX) / 2) - rect.left) / rect.width) * 100,
+    y: ((((touches[0].clientY + touches[1].clientY) / 2) - rect.top) / rect.height) * 100,
+  }
+}
+
+function nearestLineToPoint(lines: CustomLine[], x: number, y: number) {
+  let nearest: CustomLine | null = null
+  let nearestDistance = Number.POSITIVE_INFINITY
+
+  for (const line of lines) {
+    const distance = lineDistanceToPoint(line, x, y)
+    if (distance < nearestDistance) {
+      nearest = line
+      nearestDistance = distance
+    }
+  }
+
+  return nearest
+}
+
+function lineDistanceToPoint(line: CustomLine, x: number, y: number) {
+  const pointX = x
+  const pointY = y * CREATOR_CANVAS_ASPECT
+  const startX = line.x1
+  const startY = line.y1 * CREATOR_CANVAS_ASPECT
+  const endX = line.x2
+  const endY = line.y2 * CREATOR_CANVAS_ASPECT
+  const dx = endX - startX
+  const dy = endY - startY
+  const lengthSquared = dx * dx + dy * dy || 1
+  const position = clamp(((pointX - startX) * dx + (pointY - startY) * dy) / lengthSquared, 0, 1)
+  const targetX = startX + dx * position
+  const targetY = startY + dy * position
+
+  return Math.hypot(pointX - targetX, pointY - targetY)
+}
+
+function transformLineByTouch(
+  line: CustomLine,
+  startCenterX: number,
+  startCenterY: number,
+  currentCenterX: number,
+  currentCenterY: number,
+  scale: number,
+  rotationDegrees: number,
+) {
+  const centerX = (line.x1 + line.x2) / 2
+  const centerY = ((line.y1 + line.y2) / 2) * CREATOR_CANVAS_ASPECT
+  const moveX = currentCenterX - startCenterX
+  const moveY = (currentCenterY - startCenterY) * CREATOR_CANVAS_ASPECT
+  const radians = (rotationDegrees * Math.PI) / 180
+  const cos = Math.cos(radians)
+  const sin = Math.sin(radians)
+
+  function point(x: number, y: number) {
+    const dx = x - centerX
+    const dy = y * CREATOR_CANVAS_ASPECT - centerY
+    return {
+      x: centerX + (dx * cos - dy * sin) * scale + moveX,
+      y: (centerY + (dx * sin + dy * cos) * scale + moveY) / CREATOR_CANVAS_ASPECT,
+    }
+  }
+
+  const start = point(line.x1, line.y1)
+  const end = point(line.x2, line.y2)
+  return { x1: start.x, y1: start.y, x2: end.x, y2: end.y }
 }
 
 function panelsFromLines(lines: CustomLine[]) {

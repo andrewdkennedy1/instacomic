@@ -13,6 +13,7 @@ const errors = []
 page.on('pageerror', (error) => errors.push(error.message))
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
+await page.getByRole('button', { name: 'Start' }).tap()
 await tapStrip(page, 0.75, 0.31)
 const selectedPanel = await page.locator('.live-panel.is-live').getAttribute('data-panel-id')
 await page.setInputFiles('.photo-upload', {
@@ -25,6 +26,11 @@ await page.setInputFiles('.photo-upload', {
 })
 await page.waitForFunction(() => document.querySelector('[data-panel-id="2"] img'))
 const uploadedPhoto = await page.locator('[data-panel-id="2"] img').count()
+const photoBefore = await photoTransform(page, '2')
+await dragPanelPhoto(page, 0.75, 0.31, 42, -28)
+const photoAfterDrag = await photoTransform(page, '2')
+await pinchPanelPhoto(page, 0.75, 0.31)
+const photoAfterPinch = await photoTransform(page, '2')
 
 await openDrawer(page)
 await page.getByRole('button', { name: 'Stickers' }).tap()
@@ -36,18 +42,19 @@ await page.waitForFunction(() => {
 })
 const drawerHidden = await page.locator('.motion-drawer').boundingBox().then((box) => box && box.y > 830)
 await page.locator('.sticker-text').tap()
-await page.getByLabel('Edit sticker text').fill('hello!')
+await page.getByLabel('Edit sticker text').fill('hello from inside this bubble')
 await page.getByLabel('Edit sticker text').press('Enter')
 await tapStrip(page, 0.12, 0.9)
 await page.locator('.sticker-text').tap()
-await page.getByLabel('Edit sticker text').fill('again!')
+await page.getByLabel('Edit sticker text').fill('again with wrapped story text')
 await page.getByLabel('Edit sticker text').press('Enter')
 const stickerText = await page.locator('.sticker-text').textContent()
+const stickerTextLines = await page.locator('.sticker-text-fit > span').count()
 await page.locator('[data-sticker-id]').scrollIntoViewIfNeeded()
 const before = await page.locator('[data-sticker-id]').boundingBox()
 if (before) {
   const client = await page.context().newCDPSession(page)
-  const start = { x: before.x + before.width / 2, y: before.y + before.height * 0.88 }
+  const start = { x: before.x + Math.max(8, before.width * 0.08), y: before.y + before.height / 2 }
   const end = { x: start.x + 70, y: start.y + 80 }
   await client.send('Input.dispatchTouchEvent', {
     type: 'touchStart',
@@ -62,6 +69,7 @@ if (before) {
     touchPoints: [{ ...end, id: 1 }],
   })
   await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await page.waitForTimeout(80)
 }
 const after = await page.locator('[data-sticker-id]').boundingBox()
 const pinchBefore = await page.locator('[data-sticker-id]').boundingBox()
@@ -86,6 +94,7 @@ if (pinchBefore) {
     ],
   })
   await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await page.waitForTimeout(80)
 }
 const pinchAfter = await page.locator('[data-sticker-id]').boundingBox()
 const rotationAfter = Number(await page.locator('[data-sticker-id]').getAttribute('data-rotation'))
@@ -99,6 +108,9 @@ const download = await Promise.all([
 const manifest = await (await page.request.get(new URL('/manifest.webmanifest', baseUrl).toString())).json()
 const bodyOverflow = await page.evaluate(() => getComputedStyle(document.body).overflow)
 await page.getByRole('button', { name: 'Create' }).tap()
+const rayBeforeTouch = await rayData(page)
+await pinchCreatorRay(page)
+const rayAfterTouch = await rayData(page)
 await dragCreatorLine(page, '.creator-free-line', 38, -18)
 await dragCreatorLine(page, '.creator-handle-end', -18, 44)
 await page.getByRole('button', { name: 'Save layout' }).tap()
@@ -130,9 +142,12 @@ const result = {
   title,
   selectedPanel,
   uploadedPhoto,
+  photoMoved: Math.abs(photoAfterDrag.x - photoBefore.x) > 0.03 || Math.abs(photoAfterDrag.y - photoBefore.y) > 0.03,
+  photoPinched: photoAfterPinch.scale > photoAfterDrag.scale + 0.08,
   stickerCount,
   drawerHidden,
   stickerText,
+  stickerTextLines,
   moved: !!before && !!after && Math.abs(before.x - after.x) > 5,
   pinched: !!pinchBefore && !!pinchAfter && pinchAfter.width > pinchBefore.width + 8,
   rotated: Math.abs(rotationAfter - rotationBefore) > 5,
@@ -140,6 +155,7 @@ const result = {
   sharedFile: download.suggestedFilename(),
   manifestName: manifest.name,
   bodyOverflow,
+  rayMultitouch: rayLength(rayAfterTouch) > rayLength(rayBeforeTouch) + 5,
   storedLayoutInfo,
   errors,
 }
@@ -149,9 +165,12 @@ console.log(JSON.stringify(result, null, 2))
 const failures = [
   result.selectedPanel === '2' ? null : 'panel selection did not land on panel 2',
   result.uploadedPhoto === 1 ? null : 'photo upload did not fill the active panel',
+  result.photoMoved ? null : 'panel photo drag did not update the image offset',
+  result.photoPinched ? null : 'panel photo pinch did not update the image scale',
   result.stickerCount === 1 ? null : 'speech sticker was not added',
   result.drawerHidden ? null : 'closed drawer is still visible',
-  result.stickerText?.trim().toLowerCase() === 'again!' ? null : 'inline sticker text re-edit failed',
+  result.stickerText?.replace(/\s+/g, '').toLowerCase() === 'againwithwrappedstorytext' ? null : 'inline sticker text re-edit failed',
+  result.stickerTextLines > 1 ? null : 'sticker text did not wrap into fitted lines',
   result.moved ? null : 'sticker drag failed',
   result.pinched ? null : 'sticker pinch resize failed',
   result.rotated ? null : 'two-finger sticker rotation failed',
@@ -159,7 +178,8 @@ const failures = [
   result.sharedFile === 'instacomic.png' ? null : 'share fallback did not produce instacomic.png',
   result.manifestName === 'Instacomic' ? null : 'manifest did not load',
   result.bodyOverflow === 'hidden' ? null : 'body is scrollable',
-  result.storedLayoutInfo.count > 0 ? null : 'custom divider layout was not saved',
+  result.rayMultitouch ? null : 'custom ray multitouch did not stretch the ray',
+  result.storedLayoutInfo.count > 0 ? null : 'custom ray layout was not saved',
   result.storedLayoutInfo.hasDiagonal ? null : 'custom layout did not preserve diagonal panels',
   result.errors.length === 0 ? null : `page errors: ${result.errors.join('; ')}`,
 ].filter(Boolean)
@@ -171,6 +191,85 @@ if (failures.length > 0) {
 async function tapStrip(page, nx, ny) {
   const box = await page.locator('.live-strip').boundingBox()
   await page.mouse.click(box.x + box.width * nx, box.y + box.height * ny)
+}
+
+async function photoTransform(page, panelId) {
+  const image = page.locator(`[data-panel-id="${panelId}"] img`)
+  return {
+    x: Number(await image.getAttribute('data-shot-x')),
+    y: Number(await image.getAttribute('data-shot-y')),
+    scale: Number(await image.getAttribute('data-shot-scale')),
+  }
+}
+
+async function dragPanelPhoto(page, nx, ny, dx, dy) {
+  const box = await page.locator('.live-strip').boundingBox()
+  const start = { x: box.x + box.width * nx, y: box.y + box.height * ny }
+  await page.mouse.move(start.x, start.y)
+  await page.mouse.down()
+  await page.mouse.move(start.x + dx, start.y + dy, { steps: 8 })
+  await page.mouse.up()
+}
+
+async function pinchPanelPhoto(page, nx, ny) {
+  const box = await page.locator('.live-strip').boundingBox()
+  const client = await page.context().newCDPSession(page)
+  const center = { x: box.x + box.width * nx, y: box.y + box.height * ny }
+  const left = { x: center.x - 18, y: center.y }
+  const right = { x: center.x + 18, y: center.y }
+  await client.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [
+      { ...left, id: 1 },
+      { ...right, id: 2 },
+    ],
+  })
+  await client.send('Input.dispatchTouchEvent', {
+    type: 'touchMove',
+    touchPoints: [
+      { x: left.x - 34, y: center.y, id: 1 },
+      { x: right.x + 34, y: center.y, id: 2 },
+    ],
+  })
+  await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await page.waitForTimeout(80)
+}
+
+async function rayData(page) {
+  return page.locator('.creator-free-line').first().evaluate((line) => ({
+    x1: Number(line.getAttribute('data-ray-x1')),
+    y1: Number(line.getAttribute('data-ray-y1')),
+    x2: Number(line.getAttribute('data-ray-x2')),
+    y2: Number(line.getAttribute('data-ray-y2')),
+  }))
+}
+
+function rayLength(ray) {
+  return Math.hypot(ray.x2 - ray.x1, (ray.y2 - ray.y1) * 1.45)
+}
+
+async function pinchCreatorRay(page) {
+  const box = await page.locator('.creator-free-line').first().boundingBox()
+  const client = await page.context().newCDPSession(page)
+  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  const left = { x: center.x - 18, y: center.y }
+  const right = { x: center.x + 18, y: center.y }
+  await client.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [
+      { ...left, id: 1 },
+      { ...right, id: 2 },
+    ],
+  })
+  await client.send('Input.dispatchTouchEvent', {
+    type: 'touchMove',
+    touchPoints: [
+      { x: left.x - 38, y: left.y + 24, id: 1 },
+      { x: right.x + 38, y: right.y - 24, id: 2 },
+    ],
+  })
+  await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  await page.waitForTimeout(80)
 }
 
 async function openDrawer(page) {
