@@ -241,6 +241,18 @@ const defaultSettings: Settings = {
 
 const CUSTOM_LAYOUT_KEY = 'instacomic.customLayouts.v1'
 
+type FullscreenHost = HTMLElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void
+  webkitRequestFullScreen?: () => Promise<void> | void
+  msRequestFullscreen?: () => Promise<void> | void
+}
+
+type FullscreenDocument = Document & {
+  webkitFullscreenElement?: Element | null
+  webkitFullScreenElement?: Element | null
+  msFullscreenElement?: Element | null
+}
+
 function App() {
   const [started, setStarted] = useState(false)
   const [layout, setLayout] = useState(layouts[0])
@@ -261,6 +273,7 @@ function App() {
   const [customLayouts, setCustomLayouts] = useState<Layout[]>([])
   const [draftLines, setDraftLines] = useState<CustomLine[]>(() => createDefaultDraftLines())
   const [draftName, setDraftName] = useState('')
+  const shellRef = useRef<HTMLElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
@@ -268,6 +281,7 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const lastDragPointRef = useRef<{ x: number; y: number } | null>(null)
   const dragStateRef = useRef<DragState | null>(null)
+  const startRequestedRef = useRef(false)
   const dragControls = useDragControls()
   const [trashArmed, setTrashArmed] = useState(false)
 
@@ -335,22 +349,50 @@ function App() {
     setDragState(next)
   }
 
-  async function enterApp() {
-    const element = document.documentElement as HTMLElement & {
-      webkitRequestFullscreen?: () => Promise<void> | void
+  async function requestAppFullscreen() {
+    const fullscreenDocument = document as FullscreenDocument
+    const existingFullscreenElement =
+      document.fullscreenElement ??
+      fullscreenDocument.webkitFullscreenElement ??
+      fullscreenDocument.webkitFullScreenElement ??
+      fullscreenDocument.msFullscreenElement
+
+    if (existingFullscreenElement) {
+      return
     }
 
     try {
-      if (!document.fullscreenElement && element.requestFullscreen) {
-        await element.requestFullscreen()
+      const element = (shellRef.current ?? document.documentElement) as FullscreenHost
+
+      if (element.requestFullscreen) {
+        await element.requestFullscreen({ navigationUI: 'hide' })
       } else if (element.webkitRequestFullscreen) {
         await element.webkitRequestFullscreen()
+      } else if (element.webkitRequestFullScreen) {
+        await element.webkitRequestFullScreen()
+      } else if (element.msRequestFullscreen) {
+        await element.msRequestFullscreen()
+      } else {
+        return
       }
     } catch {
       // Fullscreen can be blocked by browser policy; the app still starts.
     }
+  }
+
+  async function enterApp() {
+    await requestAppFullscreen()
 
     setStarted(true)
+  }
+
+  function startFromGesture() {
+    if (startRequestedRef.current) {
+      return
+    }
+
+    startRequestedRef.current = true
+    void enterApp()
   }
 
   useEffect(() => {
@@ -898,6 +940,7 @@ function App() {
 
   return (
     <main
+      ref={shellRef}
       className="native-shell"
       onPointerMove={(event) => {
         moveSticker(event.clientX, event.clientY)
@@ -921,7 +964,15 @@ function App() {
       {!started && (
         <section className="start-screen" aria-label="Start Instacomic">
           <div className="start-mark">Instacomic</div>
-          <button type="button" onClick={() => void enterApp()}>
+          <button
+            type="button"
+            onPointerDown={(event) => {
+              if (event.isPrimary && event.button === 0) {
+                startFromGesture()
+              }
+            }}
+            onClick={() => startFromGesture()}
+          >
             Start
           </button>
         </section>
