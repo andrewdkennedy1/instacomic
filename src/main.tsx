@@ -393,6 +393,8 @@ function App() {
   const [draftName, setDraftName] = useState('')
   const [appContext, setAppContext] = useState<AppContext>(() => getAppContext())
   const [storageReady, setStorageReady] = useState(false)
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null)
+  const [showInstallModal, setShowInstallModal] = useState(false)
   const shellRef = useRef<HTMLElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -413,11 +415,21 @@ function App() {
   const allLayouts = useMemo(() => [...layouts, ...customLayouts], [customLayouts])
   const activePanelIndex = activePanelId ? layout.panels.findIndex((panel) => panel.id === activePanelId) : -1
   const capturedCount = layout.panels.filter((panel) => shots[panel.id]).length
-  const installRequired = appContext.isIos && !appContext.isInstalled
   const pageStyle = {
     '--page-width': pageFormat.width,
     '--page-height': pageFormat.height,
   } as React.CSSProperties
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault()
+      setDeferredPrompt(e)
+    }
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+    }
+  }, [])
 
   useEffect(() => {
     if ('serviceWorker' in navigator) {
@@ -643,6 +655,23 @@ function App() {
       })
     } catch {
       // The user can dismiss the share sheet; keep the install instructions visible.
+    }
+  }
+
+  async function triggerNativeInstall() {
+    if (!deferredPrompt) {
+      return
+    }
+    try {
+      await deferredPrompt.prompt()
+      const { outcome } = await deferredPrompt.userChoice
+      if (outcome === 'accepted') {
+        setStatus('Installing Instacomic...')
+      }
+    } catch (error) {
+      console.error('Install prompt failed:', error)
+    } finally {
+      setDeferredPrompt(null)
     }
   }
 
@@ -1250,23 +1279,7 @@ function App() {
               ))}
             </div>
           </div>
-          {installRequired ? (
-            <div className="install-card" role="status">
-              <div className="install-kicker">{appContext.browserName} browser</div>
-              <h1>Install to start</h1>
-              <p>Fullscreen and portrait lock need the Home Screen app on iPhone.</p>
-              {'share' in navigator && (
-                <button className="install-share-button" type="button" onClick={() => void shareInstallPage()}>
-                  Open share sheet
-                </button>
-              )}
-              <ol>
-                {appContext.browserName !== 'Safari' && <li>Open this page in Safari.</li>}
-                <li>Tap Share.</li>
-                <li>Tap Add to Home Screen.</li>
-              </ol>
-            </div>
-          ) : (
+          <div className="start-actions">
             <button
               className="start-button"
               type="button"
@@ -1279,7 +1292,16 @@ function App() {
             >
               Start
             </button>
-          )}
+            {!appContext.isInstalled && (
+              <button
+                className="start-install-button"
+                type="button"
+                onClick={() => setShowInstallModal(true)}
+              >
+                Install App
+              </button>
+            )}
+          </div>
         </section>
       )}
       <video ref={videoRef} className="live-camera" autoPlay muted playsInline />
@@ -1432,9 +1454,20 @@ function App() {
               setSettings((current) => ({ ...current, ...next }))
               clearExport()
             }}
+            appContext={appContext}
+            onTriggerInstall={() => setShowInstallModal(true)}
           />
         )}
       </Drawer>
+
+      <InstallModal
+        open={showInstallModal}
+        onClose={() => setShowInstallModal(false)}
+        appContext={appContext}
+        deferredPrompt={deferredPrompt}
+        onTriggerNativeInstall={triggerNativeInstall}
+        onShareInstall={shareInstallPage}
+      />
     </main>
   )
 }
@@ -2013,9 +2046,13 @@ function StickerPanel({
 function StylePanel({
   settings,
   onSettings,
+  appContext,
+  onTriggerInstall,
 }: {
   settings: Settings
   onSettings: (settings: Partial<Settings>) => void
+  appContext: AppContext
+  onTriggerInstall: () => void
 }) {
   return (
     <div className="drawer-stack">
@@ -2054,7 +2091,109 @@ function StylePanel({
           <input type="range" min="0" max="10" value={settings.border} onChange={(event) => onSettings({ border: Number(event.target.value) })} />
         </label>
       </div>
+      {!appContext.isInstalled && (
+        <div className="drawer-install-section">
+          <button className="drawer-install-button" type="button" onClick={onTriggerInstall}>
+            Install Instacomic App
+          </button>
+        </div>
+      )}
     </div>
+  )
+}
+
+function InstallModal({
+  open,
+  onClose,
+  appContext,
+  deferredPrompt,
+  onTriggerNativeInstall,
+  onShareInstall,
+}: {
+  open: boolean
+  onClose: () => void
+  appContext: AppContext
+  deferredPrompt: any
+  onTriggerNativeInstall: () => void | Promise<void>
+  onShareInstall: () => void | Promise<void>
+}) {
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          className="install-modal-overlay"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={onClose}
+        >
+          <motion.div
+            className="install-modal"
+            initial={{ scale: 0.9, y: 20, opacity: 0 }}
+            animate={{ scale: 1, y: 0, opacity: 1 }}
+            exit={{ scale: 0.9, y: 20, opacity: 0 }}
+            transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="install-modal-title"
+          >
+            <button className="install-modal-close" onClick={onClose} aria-label="Close dialog">
+              ×
+            </button>
+            <div className="install-modal-header">
+              <div className="install-modal-icon">📸</div>
+              <h2 id="install-modal-title">Install Instacomic</h2>
+              <p>Add Instacomic to your home screen for the full app experience: fullscreen capture, offline access, and portrait lock.</p>
+            </div>
+
+            <div className="install-modal-body">
+              {deferredPrompt ? (
+                <button
+                  className="install-modal-action-btn"
+                  type="button"
+                  onClick={() => {
+                    void onTriggerNativeInstall()
+                    onClose()
+                  }}
+                >
+                  Install Now
+                </button>
+              ) : 'share' in navigator ? (
+                <button
+                  className="install-modal-action-btn"
+                  type="button"
+                  onClick={() => {
+                    void onShareInstall()
+                  }}
+                >
+                  Open Share Sheet
+                </button>
+              ) : null}
+
+              <div className="install-modal-instructions">
+                <h3>How to Install Manual Guide</h3>
+                
+                {appContext.isIos ? (
+                  <ol>
+                    {appContext.browserName !== 'Safari' && (
+                      <li className="warning-step">Open this page in the default <strong>Safari browser</strong>.</li>
+                    )}
+                    <li>Tap the <strong>Share</strong> button <span className="share-icon-placeholder">⇪</span> in Safari.</li>
+                    <li>Scroll down and tap <strong>Add to Home Screen</strong>.</li>
+                  </ol>
+                ) : (
+                  <ol>
+                    <li>Tap the <strong>browser menu</strong> (three dots <span className="menu-dots-placeholder">⋮</span>) at the top/bottom right of your screen.</li>
+                    <li>Tap <strong>Install app</strong> or <strong>Add to Home screen</strong>.</li>
+                  </ol>
+                )}
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   )
 }
 
