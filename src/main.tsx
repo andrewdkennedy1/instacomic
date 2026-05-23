@@ -8,6 +8,7 @@ type PanelFit = 'cover' | 'contain'
 type StickerKind = 'speech' | 'thought' | 'burst' | 'caption' | 'arrow' | 'star'
 type DrawerTab = 'layout' | 'create' | 'stickers' | 'style'
 type CustomLinePreset = 'diagonal' | 'vertical' | 'horizontal'
+type PageFormatId = '4:5' | '3:4' | '9:16' | '1:1'
 
 type Panel = {
   id: string
@@ -61,6 +62,14 @@ type Settings = {
   caption: string
   captionColor: string
   fit: PanelFit
+}
+
+type PageFormat = {
+  id: PageFormatId
+  label: string
+  detail: string
+  width: number
+  height: number
 }
 
 type CustomLine = {
@@ -137,7 +146,55 @@ function normalizeShot(shot: Shot): Shot {
   }
 }
 
+function mergeLayoutShotsIntoCache(layout: Layout, shots: Record<string, Shot>, cache: Shot[]) {
+  const next = [...cache]
+  layout.panels.forEach((panel, index) => {
+    const shot = shots[panel.id]
+    if (shot) {
+      next[index] = shot
+    }
+  })
+  return next
+}
+
+function putShotInCache(layout: Layout, shots: Record<string, Shot>, cache: Shot[], panelId: string, shot: Shot) {
+  const next = mergeLayoutShotsIntoCache(layout, shots, cache)
+  const index = layout.panels.findIndex((panel) => panel.id === panelId)
+  if (index >= 0) {
+    next[index] = shot
+  }
+  return next
+}
+
+function shotsForLayout(layout: Layout, cache: Shot[]) {
+  return Object.fromEntries(
+    layout.panels
+      .map((panel, index) => {
+        const shot = cache[index]
+        return shot ? ([panel.id, shot] as const) : null
+      })
+      .filter((entry): entry is readonly [string, Shot] => entry !== null),
+  )
+}
+
+function nextOpenPanelId(layout: Layout, shots: Record<string, Shot>) {
+  return layout.panels.find((panel) => !shots[panel.id])?.id ?? null
+}
+
 const CREATOR_CANVAS_ASPECT = 1.45
+
+const pageFormats: PageFormat[] = [
+  { id: '4:5', label: 'Post', detail: 'Instagram portrait', width: 4, height: 5 },
+  { id: '3:4', label: 'Tall', detail: 'Classic portrait', width: 3, height: 4 },
+  { id: '9:16', label: 'Story', detail: 'Stories/Reels', width: 9, height: 16 },
+  { id: '1:1', label: 'Square', detail: 'Grid post', width: 1, height: 1 },
+]
+
+const defaultPageFormat = pageFormats[0]
+
+function getPageFormat(id: string | null) {
+  return pageFormats.find((format) => format.id === id) ?? defaultPageFormat
+}
 
 const layouts: Layout[] = [
   {
@@ -241,6 +298,7 @@ const defaultSettings: Settings = {
 
 const CUSTOM_LAYOUT_KEY = 'instacomic.customLayouts.v1'
 const ACTIVE_LAYOUT_KEY = 'instacomic.activeLayout.v1'
+const PAGE_FORMAT_KEY = 'instacomic.pageFormat.v1'
 
 type FullscreenHost = HTMLElement & {
   webkitRequestFullscreen?: () => Promise<void> | void
@@ -321,6 +379,7 @@ function App() {
   const [activeStickerId, setActiveStickerId] = useState<string | null>(null)
   const [editingStickerId, setEditingStickerId] = useState<string | null>(null)
   const [settings, setSettings] = useState(defaultSettings)
+  const [pageFormat, setPageFormat] = useState<PageFormat>(defaultPageFormat)
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [facing, setFacing] = useState<'environment' | 'user'>('environment')
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -342,6 +401,7 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const lastDragPointRef = useRef<{ x: number; y: number } | null>(null)
   const dragStateRef = useRef<DragState | null>(null)
+  const shotCacheRef = useRef<Shot[]>([])
   const startRequestedRef = useRef(false)
   const dragControls = useDragControls()
   const [trashArmed, setTrashArmed] = useState(false)
@@ -354,6 +414,10 @@ function App() {
   const activePanelIndex = activePanelId ? layout.panels.findIndex((panel) => panel.id === activePanelId) : -1
   const capturedCount = layout.panels.filter((panel) => shots[panel.id]).length
   const installRequired = appContext.isIos && !appContext.isInstalled
+  const pageStyle = {
+    '--page-width': pageFormat.width,
+    '--page-height': pageFormat.height,
+  } as React.CSSProperties
 
   useEffect(() => {
     if ('serviceWorker' in navigator) {
@@ -365,6 +429,7 @@ function App() {
     try {
       const stored = localStorage.getItem(CUSTOM_LAYOUT_KEY)
       const storedActiveLayoutId = localStorage.getItem(ACTIVE_LAYOUT_KEY)
+      setPageFormat(getPageFormat(localStorage.getItem(PAGE_FORMAT_KEY)))
       if (stored) {
         const parsed = JSON.parse(stored) as Layout[]
         const validLayouts = parsed.filter((item) => Array.isArray(item.panels) && item.panels.length > 0)
@@ -387,6 +452,7 @@ function App() {
     } catch {
       localStorage.removeItem(CUSTOM_LAYOUT_KEY)
       localStorage.removeItem(ACTIVE_LAYOUT_KEY)
+      localStorage.removeItem(PAGE_FORMAT_KEY)
     } finally {
       setStorageReady(true)
     }
@@ -448,10 +514,20 @@ function App() {
   }, [layout.id, storageReady])
 
   useEffect(() => {
+    if (!storageReady) {
+      return
+    }
+
+    localStorage.setItem(PAGE_FORMAT_KEY, pageFormat.id)
+  }, [pageFormat.id, storageReady])
+
+  useEffect(() => {
     const video = videoRef.current
     if (video && stream) {
       video.srcObject = stream
-      void video.play()
+      video.play().catch(() => {
+        // The browser can interrupt play when React swaps preview nodes during capture.
+      })
     }
   }, [stream])
 
@@ -537,6 +613,12 @@ function App() {
     setStarted(true)
   }
 
+  function selectPageFormat(format: PageFormat) {
+    setPageFormat(format)
+    clearExport()
+    setStatus(`${format.id} ${format.label} canvas selected.`)
+  }
+
   function startFromGesture() {
     if (startRequestedRef.current) {
       return
@@ -544,6 +626,24 @@ function App() {
 
     startRequestedRef.current = true
     void enterApp()
+  }
+
+  async function shareInstallPage() {
+    const share = 'share' in navigator ? navigator.share.bind(navigator) : null
+    if (!share) {
+      setStatus('Use the browser Share menu, then Add to Home Screen.')
+      return
+    }
+
+    try {
+      await share({
+        title: 'Install Instacomic',
+        text: 'Add Instacomic to your Home Screen for fullscreen capture.',
+        url: window.location.href,
+      })
+    } catch {
+      // The user can dismiss the share sheet; keep the install instructions visible.
+    }
   }
 
   useEffect(() => {
@@ -653,13 +753,14 @@ function App() {
     }
 
     context.drawImage(video, 0, 0, canvas.width, canvas.height)
-    setShots((current) => ({
-      ...current,
-      [activePanelId]: createShot(canvas.toDataURL('image/jpeg', 0.92)),
-    }))
+    const nextShot = createShot(canvas.toDataURL('image/jpeg', 0.92))
+    const nextCache = putShotInCache(layout, shots, shotCacheRef.current, activePanelId, nextShot)
+    shotCacheRef.current = nextCache
+    const nextShots = shotsForLayout(layout, nextCache)
+    setShots(nextShots)
 
     const currentIndex = layout.panels.findIndex((panel) => panel.id === activePanelId)
-    const nextPanel = layout.panels.slice(currentIndex + 1).find((panel) => !shots[panel.id])
+    const nextPanel = layout.panels.slice(currentIndex + 1).find((panel) => !nextShots[panel.id])
     if (nextPanel) {
       setActivePanelId(nextPanel.id)
       setStatus(`Saved panel ${currentIndex + 1}. Panel ${layout.panels.findIndex((panel) => panel.id === nextPanel.id) + 1} is live.`)
@@ -689,13 +790,14 @@ function App() {
     }
 
     const dataUrl = await readFileAsDataUrl(file)
-    setShots((current) => ({
-      ...current,
-      [targetPanelId]: createShot(dataUrl),
-    }))
+    const nextShot = createShot(dataUrl)
+    const nextCache = putShotInCache(layout, shots, shotCacheRef.current, targetPanelId, nextShot)
+    shotCacheRef.current = nextCache
+    const nextShots = shotsForLayout(layout, nextCache)
+    setShots(nextShots)
 
     const currentIndex = layout.panels.findIndex((panel) => panel.id === targetPanelId)
-    const nextPanel = layout.panels.slice(currentIndex + 1).find((panel) => !shots[panel.id])
+    const nextPanel = layout.panels.slice(currentIndex + 1).find((panel) => !nextShots[panel.id])
     if (nextPanel) {
       setActivePanelId(nextPanel.id)
       setStatus(`Photo added to panel ${currentIndex + 1}. Panel ${layout.panels.findIndex((panel) => panel.id === nextPanel.id) + 1} is live.`)
@@ -707,11 +809,18 @@ function App() {
   }
 
   function changeLayout(nextLayout: Layout) {
-    const allowed = new Set(nextLayout.panels.map((panel) => panel.id))
+    const nextCache = mergeLayoutShotsIntoCache(layout, shots, shotCacheRef.current)
+    shotCacheRef.current = nextCache
+    const nextShots = shotsForLayout(nextLayout, nextCache)
+    const restoredCount = Object.keys(nextShots).length
     setLayout(nextLayout)
-    setActivePanelId(nextLayout.panels[0].id)
-    setShots((current) => Object.fromEntries(Object.entries(current).filter(([panelId]) => allowed.has(panelId))))
-    setStatus(`${nextLayout.name} layout. Panel 1 is live.`)
+    setActivePanelId(nextOpenPanelId(nextLayout, nextShots))
+    setShots(nextShots)
+    setStatus(
+      restoredCount > 0
+        ? `${nextLayout.name} layout. Restored ${restoredCount} photo${restoredCount === 1 ? '' : 's'}.`
+        : `${nextLayout.name} layout. Panel 1 is live.`,
+    )
     clearExport()
   }
 
@@ -1025,10 +1134,13 @@ function App() {
         return current
       }
 
-      return {
+      const nextShot = normalizeShot({ ...shot, ...update })
+      const next = {
         ...current,
-        [panelId]: normalizeShot({ ...shot, ...update }),
+        [panelId]: nextShot,
       }
+      shotCacheRef.current = putShotInCache(layout, next, shotCacheRef.current, panelId, nextShot)
+      return next
     })
     clearExport()
   }
@@ -1065,7 +1177,7 @@ function App() {
 
   async function renderComicBlob() {
     setStatus('Rendering...')
-    const blob = await renderToPng(layout, shots, stickers, settings)
+    const blob = await renderToPng(layout, shots, stickers, settings, pageFormat)
     clearExport()
     const url = URL.createObjectURL(blob)
     setExportUrl(url)
@@ -1098,6 +1210,7 @@ function App() {
     <main
       ref={shellRef}
       className="native-shell"
+      style={pageStyle}
       onPointerMove={(event) => {
         moveSticker(event.clientX, event.clientY)
         movePhoto(event.clientX, event.clientY)
@@ -1120,11 +1233,33 @@ function App() {
       {!started && (
         <section className="start-screen" aria-label="Start Instacomic">
           <div className="start-mark">Instacomic</div>
+          <div className="format-picker" aria-label="Canvas ratio">
+            <span>Choose canvas</span>
+            <div className="format-options" role="group" aria-label="Canvas ratio">
+              {pageFormats.map((format) => (
+                <button
+                  key={format.id}
+                  className={`format-option ${pageFormat.id === format.id ? 'active' : ''}`}
+                  type="button"
+                  aria-pressed={pageFormat.id === format.id}
+                  onClick={() => selectPageFormat(format)}
+                >
+                  <strong>{format.id}</strong>
+                  <em>{format.label}</em>
+                </button>
+              ))}
+            </div>
+          </div>
           {installRequired ? (
             <div className="install-card" role="status">
               <div className="install-kicker">{appContext.browserName} browser</div>
               <h1>Install to start</h1>
               <p>Fullscreen and portrait lock need the Home Screen app on iPhone.</p>
+              {'share' in navigator && (
+                <button className="install-share-button" type="button" onClick={() => void shareInstallPage()}>
+                  Open share sheet
+                </button>
+              )}
               <ol>
                 {appContext.browserName !== 'Safari' && <li>Open this page in Safari.</li>}
                 <li>Tap Share.</li>
@@ -1133,6 +1268,7 @@ function App() {
             </div>
           ) : (
             <button
+              className="start-button"
               type="button"
               onPointerDown={(event) => {
                 if (event.isPrimary && event.button === 0) {
@@ -1309,7 +1445,9 @@ function LiveVideo({ stream }: { stream: MediaStream }) {
   useEffect(() => {
     if (ref.current) {
       ref.current.srcObject = stream
-      void ref.current.play()
+      ref.current.play().catch(() => {
+        // The live preview may unmount while the hidden capture video keeps the stream.
+      })
     }
   }, [stream])
 
@@ -2103,13 +2241,18 @@ function StickerText({ sticker }: { sticker: Sticker }) {
   )
 }
 
-async function renderToPng(layout: Layout, shots: Record<string, Shot>, stickers: Sticker[], settings: Settings) {
+async function renderToPng(
+  layout: Layout,
+  shots: Record<string, Shot>,
+  stickers: Sticker[],
+  settings: Settings,
+  pageFormat: PageFormat,
+) {
   const canvas = document.createElement('canvas')
   const width = 1440
-  const captionHeight = settings.caption.trim() ? 130 : 0
-  const panelHeight = Math.round(width * 1.45)
+  const panelHeight = Math.round((width * pageFormat.height) / pageFormat.width)
   canvas.width = width
-  canvas.height = panelHeight + captionHeight
+  canvas.height = panelHeight
   const context = canvas.getContext('2d')
   if (!context) {
     throw new Error('Canvas is unavailable.')
@@ -2137,16 +2280,18 @@ async function renderToPng(layout: Layout, shots: Record<string, Shot>, stickers
   }
 
   if (settings.caption.trim()) {
+    const captionHeight = Math.min(130, panelHeight * 0.22)
+    const captionY = panelHeight - captionHeight - outer - gutter / 2
     context.fillStyle = '#ffffff'
-    context.fillRect(outer + gutter / 2, panelHeight + gutter / 2, width - outer * 2 - gutter, captionHeight - gutter)
+    context.fillRect(outer + gutter / 2, captionY, width - outer * 2 - gutter, captionHeight - gutter)
     context.strokeStyle = settings.borderColor
     context.lineWidth = Math.max(3, settings.border * 2)
-    context.strokeRect(outer + gutter / 2, panelHeight + gutter / 2, width - outer * 2 - gutter, captionHeight - gutter)
+    context.strokeRect(outer + gutter / 2, captionY, width - outer * 2 - gutter, captionHeight - gutter)
     context.fillStyle = settings.captionColor
     context.font = '900 74px ui-rounded, "Avenir Next", "Segoe UI", sans-serif'
     context.textAlign = 'center'
     context.textBaseline = 'middle'
-    context.fillText(settings.caption, width / 2, panelHeight + captionHeight / 2, width - 130)
+    context.fillText(settings.caption, width / 2, captionY + captionHeight / 2, width - 130)
   }
 
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))

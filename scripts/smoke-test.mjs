@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { chromium } from 'playwright'
 
 const browser = await chromium.launch()
@@ -13,6 +13,9 @@ const errors = []
 page.on('pageerror', (error) => errors.push(error.message))
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
+const formatOptionCount = await page.locator('.format-option').count()
+await page.getByRole('button', { name: /9:16/ }).tap()
+const selectedFormat = await page.locator('.format-option.active strong').textContent()
 await page.getByRole('button', { name: 'Start' }).tap()
 await tapStrip(page, 0.75, 0.31)
 const selectedPanel = await page.locator('.live-panel.is-live').getAttribute('data-panel-id')
@@ -31,6 +34,23 @@ await dragPanelPhoto(page, 0.75, 0.31, 42, -28)
 const photoAfterDrag = await photoTransform(page, '2')
 await pinchPanelPhoto(page, 0.75, 0.31)
 const photoAfterPinch = await photoTransform(page, '2')
+await page.locator('[data-panel-id="3"]').evaluate((button) => button.click())
+await page.setInputFiles('.photo-upload', {
+  name: 'panel-2.png',
+  mimeType: 'image/png',
+  buffer: Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAMAAAADCAIAAADZSiLoAAAAGklEQVR4nGP8z8DAwMDAxAADCBgYGD4DAwA8bQICbK8YJwAAAABJRU5ErkJggg==',
+    'base64',
+  ),
+})
+await page.waitForFunction(() => document.querySelector('[data-panel-id="3"] img'))
+await openDrawer(page)
+await page.getByRole('button', { name: 'Layout' }).tap()
+await page.getByRole('button', { name: /Story/ }).tap()
+const photosAfterSmallerTemplate = await page.locator('.live-panel img').count()
+await page.getByRole('button', { name: /Shard/ }).tap()
+const photosAfterRestoredTemplate = await page.locator('.live-panel img').count()
+await closeDrawer(page)
 
 await openDrawer(page)
 await page.getByRole('button', { name: 'Stickers' }).tap()
@@ -108,6 +128,8 @@ const download = await Promise.all([
   page.waitForEvent('download'),
   page.getByRole('button', { name: 'Share' }).tap(),
 ]).then(([download]) => download)
+const downloadPath = await download.path()
+const exportedSize = pngSize(downloadPath)
 const manifest = await (await page.request.get(new URL('/manifest.webmanifest', baseUrl).toString())).json()
 const bodyOverflow = await page.evaluate(() => getComputedStyle(document.body).overflow)
 await openDrawer(page)
@@ -145,10 +167,14 @@ await browser.close()
 
 const result = {
   title,
+  formatOptionCount,
+  selectedFormat,
   selectedPanel,
   uploadedPhoto,
   photoMoved: Math.abs(photoAfterDrag.x - photoBefore.x) > 0.03 || Math.abs(photoAfterDrag.y - photoBefore.y) > 0.03,
   photoPinched: photoAfterPinch.scale > photoAfterDrag.scale + 0.08,
+  photosAfterSmallerTemplate,
+  photosAfterRestoredTemplate,
   stickerCount,
   drawerHidden,
   stickerText,
@@ -158,6 +184,7 @@ const result = {
   rotated: Math.abs(rotationAfter - rotationBefore) > 5,
   trashed: beforeTrashCount === 1 && afterTrashCount === 0,
   sharedFile: download.suggestedFilename(),
+  exportedSize,
   manifestName: manifest.name,
   bodyOverflow,
   drawerHiddenAfterLayoutSave,
@@ -169,10 +196,14 @@ const result = {
 console.log(JSON.stringify(result, null, 2))
 
 const failures = [
+  result.formatOptionCount === 4 ? null : 'start ratio selector does not expose four options',
+  result.selectedFormat === '9:16' ? null : 'start ratio selector did not select 9:16',
   result.selectedPanel === '2' ? null : 'panel selection did not land on panel 2',
   result.uploadedPhoto === 1 ? null : 'photo upload did not fill the active panel',
   result.photoMoved ? null : 'panel photo drag did not update the image offset',
   result.photoPinched ? null : 'panel photo pinch did not update the image scale',
+  result.photosAfterSmallerTemplate === 2 ? null : 'template switch to fewer panels did not preserve visible photos',
+  result.photosAfterRestoredTemplate === 2 ? null : 'template switch back to more panels did not restore cached photos',
   result.stickerCount === 1 ? null : 'speech sticker was not added',
   result.drawerHidden ? null : 'closed drawer is still visible',
   result.stickerText?.replace(/\s+/g, '').toLowerCase() === 'againwithwrappedstorytext' ? null : 'inline sticker text re-edit failed',
@@ -182,6 +213,7 @@ const failures = [
   result.rotated ? null : 'two-finger sticker rotation failed',
   result.trashed ? null : 'drag-to-trash failed',
   result.sharedFile === 'instacomic.png' ? null : 'share fallback did not produce instacomic.png',
+  result.exportedSize.width === 1440 && result.exportedSize.height === 2560 ? null : '9:16 export dimensions are incorrect',
   result.manifestName === 'Instacomic' ? null : 'manifest did not load',
   result.bodyOverflow === 'hidden' ? null : 'body is scrollable',
   result.storedLayoutInfo.count > 0 ? null : 'custom ray layout was not saved',
@@ -218,6 +250,14 @@ async function dragPanelPhoto(page, nx, ny, dx, dy) {
   await page.mouse.down()
   await page.mouse.move(start.x + dx, start.y + dy, { steps: 8 })
   await page.mouse.up()
+}
+
+function pngSize(path) {
+  const buffer = readFileSync(path)
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20),
+  }
 }
 
 async function pinchPanelPhoto(page, nx, ny) {

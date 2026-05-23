@@ -78,7 +78,7 @@ select:focus-visible,
   display: grid;
   place-items: center;
   align-content: center;
-  gap: 24px;
+  gap: 20px;
   padding: 28px;
   color: #fff8ec;
   background:
@@ -94,7 +94,7 @@ select:focus-visible,
   text-align: center;
 }
 
-.start-screen button {
+.start-screen .start-button {
   min-width: 168px;
   min-height: 62px;
   border: 3px solid #111;
@@ -106,6 +106,58 @@ select:focus-visible,
   font-weight: 1000;
 }
 
+.format-picker {
+  width: min(100%, 360px);
+  display: grid;
+  gap: 10px;
+  text-align: center;
+}
+
+.format-picker > span {
+  color: rgba(255, 248, 236, 0.72);
+  font-size: 13px;
+  font-weight: 1000;
+  text-transform: uppercase;
+}
+
+.format-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.format-option {
+  min-height: 62px;
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  padding: 7px 3px;
+  border: 2px solid rgba(255, 248, 236, 0.32);
+  border-radius: 14px;
+  color: #fff8ec;
+  background: rgba(17, 17, 17, 0.28);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.2);
+}
+
+.format-option.active {
+  border-color: #111;
+  color: #111;
+  background: var(--yellow);
+  box-shadow: 3px 4px 0 #111;
+}
+
+.format-option strong {
+  font-size: 17px;
+  line-height: 1;
+}
+
+.format-option em {
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 1000;
+  line-height: 1;
+}
+
 .install-card {
   width: min(100%, 340px);
   padding: 22px;
@@ -114,6 +166,19 @@ select:focus-visible,
   color: #111;
   background: var(--cream);
   box-shadow: 7px 8px 0 #111;
+}
+
+.install-share-button {
+  width: 100%;
+  min-height: 46px;
+  margin: 0 0 14px;
+  border: 3px solid #111;
+  border-radius: 999px;
+  color: #111;
+  background: var(--yellow);
+  box-shadow: 3px 4px 0 #111;
+  font-size: 15px;
+  font-weight: 1000;
 }
 
 .install-kicker {
@@ -178,9 +243,9 @@ select:focus-visible,
   --radius: 7px;
   --border: 4px;
   position: relative;
-  width: min(100%, calc((100dvh - 136px) / 1.45));
+  width: min(100%, calc((var(--app-height, 100dvh) - 136px) * var(--page-width) / var(--page-height)));
   max-width: 580px;
-  height: min(100%, calc((100vw - 20px) * 1.45));
+  height: min(100%, calc((100vw - 20px) * var(--page-height) / var(--page-width)));
   max-height: 100%;
   align-self: center;
   justify-self: center;
@@ -191,7 +256,7 @@ select:focus-visible,
   box-shadow:
     0 24px 70px rgba(0, 0, 0, 0.4),
     0 0 0 1px rgba(255, 255, 255, 0.2) inset;
-  aspect-ratio: 1 / 1.45;
+  aspect-ratio: var(--page-width) / var(--page-height);
   overflow: visible;
 }
 
