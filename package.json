@@ -10,6 +10,7 @@
     "smoke": "node scripts/smoke-test.mjs",
     "smoke:installer": "node scripts/installer-smoke.mjs",
     "smoke:camera": "node scripts/camera-smoke.mjs",
+    "smoke:photos": "node scripts/photo-position-smoke.mjs",
     "deploy": "npm run build && wrangler deploy"
   },
   "devDependencies": {

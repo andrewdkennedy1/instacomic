@@ -113,7 +113,8 @@ type PhotoDragState = {
   offsetX: number
   offsetY: number
   scale: number
-  rect: DOMRect
+  frameWidth: number
+  frameHeight: number
   startDistance?: number
 }
 
@@ -852,6 +853,23 @@ function App() {
     clearExport()
   }
 
+  function deleteCustomLayout(layoutId: string) {
+    const targetLayout = customLayouts.find((item) => item.id === layoutId)
+    if (!targetLayout) {
+      return
+    }
+
+    setCustomLayouts((current) => current.filter((item) => item.id !== layoutId))
+    if (layout.id === layoutId) {
+      const fallbackLayout = layouts[0]
+      changeLayout(fallbackLayout)
+      setStatus(`${targetLayout.name} layout deleted. ${fallbackLayout.name} layout is active.`)
+    } else {
+      setStatus(`${targetLayout.name} layout deleted.`)
+      clearExport()
+    }
+  }
+
   function addSticker(kind: StickerKind) {
     const panel = layout.panels.find((item) => item.id === activePanelId) ?? layout.panels[0]
     const bounds = panelBounds(panel)
@@ -1098,7 +1116,7 @@ function App() {
       offsetX: shot.offsetX,
       offsetY: shot.offsetY,
       scale: shot.scale,
-      rect,
+      ...panelPhotoFrameSize(panel, rect),
     })
     setStatus(`Panel ${layout.panels.findIndex((item) => item.id === panel.id) + 1} photo selected. Drag or pinch to adjust.`)
   }
@@ -1128,7 +1146,7 @@ function App() {
       offsetX: shot.offsetX,
       offsetY: shot.offsetY,
       scale: shot.scale,
-      rect,
+      ...panelPhotoFrameSize(firstPanel, rect),
       startDistance: touchDistance(event.touches),
     })
   }
@@ -1138,8 +1156,8 @@ function App() {
       return
     }
 
-    const dx = (clientX - photoDragState.startX) / photoDragState.rect.width
-    const dy = (clientY - photoDragState.startY) / photoDragState.rect.height
+    const dx = (clientX - photoDragState.startX) / photoDragState.frameWidth
+    const dy = (clientY - photoDragState.startY) / photoDragState.frameHeight
     updateShotTransform(photoDragState.panelId, {
       offsetX: photoDragState.offsetX + dx,
       offsetY: photoDragState.offsetY + dy,
@@ -1350,13 +1368,15 @@ function App() {
                 <img
                   src={shots[panel.id].dataUrl}
                   alt={`Panel ${index + 1}`}
-                  style={shotImageStyle(shots[panel.id])}
+                  style={shotImageStyle(panel, shots[panel.id], settings.fit)}
                   data-shot-scale={shots[panel.id].scale.toFixed(2)}
                   data-shot-x={shots[panel.id].offsetX.toFixed(2)}
                   data-shot-y={shots[panel.id].offsetY.toFixed(2)}
                 />
               )}
-              {panel.id === activePanelId && stream && !shots[panel.id] && <LiveVideo stream={stream} />}
+              {panel.id === activePanelId && stream && !shots[panel.id] && (
+                <LiveVideo stream={stream} panel={panel} fit={settings.fit} />
+              )}
               {panel.id === activePanelId && !shots[panel.id] && <span className="panel-chip">LIVE</span>}
             </button>
           ))}
@@ -1425,7 +1445,13 @@ function App() {
         onTab={setDrawerTab}
       >
         {drawerTab === 'layout' && (
-          <LayoutPanel layout={layout} layouts={allLayouts} onLayout={changeLayout} onCreate={() => setDrawerTab('create')} />
+          <LayoutPanel
+            layout={layout}
+            layouts={allLayouts}
+            onLayout={changeLayout}
+            onCreate={() => setDrawerTab('create')}
+            onDeleteCustomLayout={deleteCustomLayout}
+          />
         )}
         {drawerTab === 'create' && (
           <CreatorPanel
@@ -1462,7 +1488,7 @@ function App() {
   )
 }
 
-function LiveVideo({ stream }: { stream: MediaStream }) {
+function LiveVideo({ stream, panel, fit }: { stream: MediaStream; panel: Panel; fit: PanelFit }) {
   const ref = useRef<HTMLVideoElement>(null)
 
   useEffect(() => {
@@ -1474,7 +1500,7 @@ function LiveVideo({ stream }: { stream: MediaStream }) {
     }
   }, [stream])
 
-  return <video ref={ref} className="live-frame" autoPlay muted playsInline aria-hidden="true" />
+  return <video ref={ref} className="live-frame" style={photoFrameStyle(panel, fit)} autoPlay muted playsInline aria-hidden="true" />
 }
 
 function Drawer({
@@ -1558,29 +1584,42 @@ function LayoutPanel({
   layouts,
   onLayout,
   onCreate,
+  onDeleteCustomLayout,
 }: {
   layout: Layout
   layouts: Layout[]
   onLayout: (layout: Layout) => void
   onCreate: () => void
+  onDeleteCustomLayout: (layoutId: string) => void
 }) {
   return (
     <div className="drawer-grid">
       {layouts.map((option) => (
-        <button
-          key={option.id}
-          className={`layout-card ${layout.id === option.id ? 'active' : ''}`}
-          type="button"
-          onClick={() => onLayout(option)}
-        >
-          <span className="layout-mini">
-            {option.panels.map((panel) => (
-              <i key={panel.id} style={panelStyle(panel)} />
-            ))}
-          </span>
-          <strong>{option.name}</strong>
-          {option.custom && <em>saved</em>}
-        </button>
+        <div key={option.id} className="layout-card-shell">
+          <button
+            className={`layout-card ${layout.id === option.id ? 'active' : ''} ${option.custom ? 'has-delete' : ''}`}
+            type="button"
+            onClick={() => onLayout(option)}
+          >
+            <span className="layout-mini">
+              {option.panels.map((panel) => (
+                <i key={panel.id} style={panelStyle(panel)} />
+              ))}
+            </span>
+            <strong>{option.name}</strong>
+            {option.custom && <em>saved</em>}
+          </button>
+          {option.custom && (
+            <button
+              className="layout-delete"
+              type="button"
+              aria-label={`Delete ${option.name} layout`}
+              onClick={() => onDeleteCustomLayout(option.id)}
+            >
+              ⌫
+            </button>
+          )}
+        </div>
       ))}
       <button className="layout-card create-card" type="button" onClick={onCreate}>
         <span className="layout-mini creator-mini">
@@ -2501,10 +2540,34 @@ function panelStyle(panel: Panel) {
   }
 }
 
-function shotImageStyle(shot: Shot) {
+function shotImageStyle(panel: Panel, shot: Shot, fit: PanelFit) {
   return {
+    ...photoFrameStyle(panel, fit),
     transform: `translate(${shot.offsetX * 100}%, ${shot.offsetY * 100}%) scale(${shot.scale})`,
   } as React.CSSProperties
+}
+
+function photoFrameStyle(panel: Panel, fit: PanelFit) {
+  const bounds = panelPhotoFrameBounds(panel)
+  return {
+    left: `${bounds.x * 100}%`,
+    top: `${bounds.y * 100}%`,
+    width: `${bounds.w * 100}%`,
+    height: `${bounds.h * 100}%`,
+    objectFit: fit,
+  } as React.CSSProperties
+}
+
+function panelPhotoFrameBounds(panel: Panel) {
+  return panel.points ? panelBounds(panel) : { x: 0, y: 0, w: 1, h: 1 }
+}
+
+function panelPhotoFrameSize(panel: Panel, stripRect: DOMRect) {
+  const bounds = panelBounds(panel)
+  return {
+    frameWidth: Math.max(1, bounds.w * stripRect.width),
+    frameHeight: Math.max(1, bounds.h * stripRect.height),
+  }
 }
 
 function pointsToClipPath(points: Array<[number, number]>) {

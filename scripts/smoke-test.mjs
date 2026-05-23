@@ -170,6 +170,26 @@ await page.screenshot({ path: 'test-results/instacomic-mobile.png', fullPage: tr
 await page.screenshot({ path: 'docs/instacomic-mobile.png', fullPage: true })
 await page.reload({ waitUntil: 'networkidle' })
 const restoredLayoutName = await page.locator('.live-strip').getAttribute('data-layout-name')
+await page.getByRole('button', { name: 'Start' }).tap()
+await openDrawer(page)
+await page.getByRole('button', { name: 'Layout' }).tap()
+const deleteLayoutButton = page.getByRole('button', { name: 'Delete Final Layout layout' })
+await deleteLayoutButton.scrollIntoViewIfNeeded()
+const deleteButtonVisible = await deleteLayoutButton.isVisible()
+await deleteLayoutButton.tap()
+await page.waitForFunction(() => {
+  const layouts = JSON.parse(localStorage.getItem('instacomic.customLayouts.v1') ?? '[]')
+  return layouts.length === 0 && localStorage.getItem('instacomic.activeLayout.v1') === 'shard'
+})
+const layoutAfterDeleteName = await page.locator('.live-strip').getAttribute('data-layout-name')
+const deletedLayoutInfo = await page.evaluate(() => {
+  const layouts = JSON.parse(localStorage.getItem('instacomic.customLayouts.v1') ?? '[]')
+  return {
+    count: layouts.length,
+    activeLayoutId: localStorage.getItem('instacomic.activeLayout.v1'),
+    deleteButtonCount: document.querySelectorAll('.layout-delete').length,
+  }
+})
 await browser.close()
 
 const result = {
@@ -197,6 +217,9 @@ const result = {
   drawerHiddenAfterLayoutSave,
   storedLayoutInfo,
   restoredLayoutName,
+  deleteButtonVisible,
+  deletedLayoutInfo,
+  layoutAfterDeleteName,
   errors,
 }
 
@@ -229,6 +252,11 @@ const failures = [
   result.restoredLayoutName === 'Final Layout' ? null : 'last custom layout was not restored on reload',
   result.drawerHiddenAfterLayoutSave ? null : 'drawer did not close after saving a custom layout',
   result.storedLayoutInfo.hasDiagonal ? null : 'custom layout did not preserve diagonal panels',
+  result.deleteButtonVisible ? null : 'custom layout delete button was not visible',
+  result.deletedLayoutInfo.count === 0 ? null : 'custom layout was not deleted from storage',
+  result.deletedLayoutInfo.activeLayoutId === 'shard' ? null : 'active layout did not fall back after deleting current custom layout',
+  result.deletedLayoutInfo.deleteButtonCount === 0 ? null : 'deleted custom layout card stayed visible',
+  result.layoutAfterDeleteName === 'Shard' ? null : 'current layout did not switch after deleting active custom layout',
   result.errors.length === 0 ? null : `page errors: ${result.errors.join('; ')}`,
 ].filter(Boolean)
 

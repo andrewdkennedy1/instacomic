@@ -47,10 +47,11 @@ npm run dev
 ```bash
 npm run build
 npm run smoke
+npm run smoke:photos
 npm run smoke:camera
 ```
 
-The smoke checks exercise the mobile editor flow, inline and repeat sticker text editing, drag/scale/rotate gestures, drag-to-trash deletion, diagonal custom layouts, share fallback, manifest loading, and fake-camera capture through the final panel.
+The smoke checks exercise the mobile editor flow, inline and repeat sticker text editing, drag/scale/rotate gestures, landscape photo positioning, drag-to-trash deletion, diagonal custom layouts, custom layout deletion, share fallback, manifest loading, and fake-camera capture through the final panel.
 
 ## Deploy
 
