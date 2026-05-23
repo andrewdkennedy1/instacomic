@@ -15,6 +15,13 @@ const page = await context.newPage()
 const errors = []
 page.on('pageerror', (error) => errors.push(error.message))
 
+await page.addInitScript(() => {
+  Object.defineProperty(navigator, 'standalone', {
+    configurable: true,
+    get: () => true,
+  })
+})
+
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
 await page.getByRole('button', { name: 'Start' }).tap()
 await tapStrip(page, 0.75, 0.31)

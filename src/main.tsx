@@ -335,10 +335,6 @@ type BeforeInstallPromptEvent = Event & {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
 }
 
-function hasWebShare() {
-  return typeof navigator !== 'undefined' && typeof navigator.share === 'function'
-}
-
 function isDisplayModeApp() {
   const nav = navigator as StandaloneNavigator
   return (
@@ -356,19 +352,23 @@ function isIosDevice() {
 function getBrowserName() {
   const userAgent = navigator.userAgent
 
-  if (/EdgiOS/i.test(userAgent)) {
+  if (/EdgiOS|EdgA|Edg\//i.test(userAgent)) {
     return 'Edge'
   }
 
-  if (/CriOS/i.test(userAgent)) {
-    return 'Chrome'
-  }
-
-  if (/FxiOS/i.test(userAgent)) {
+  if (/FxiOS|Firefox/i.test(userAgent)) {
     return 'Firefox'
   }
 
-  return 'Safari'
+  if (/CriOS|Chrome|Chromium/i.test(userAgent)) {
+    return 'Chrome'
+  }
+
+  if (/Safari/i.test(userAgent)) {
+    return 'Safari'
+  }
+
+  return 'Browser'
 }
 
 function getAppContext(): AppContext {
@@ -403,7 +403,6 @@ function App() {
   const [appContext, setAppContext] = useState<AppContext>(() => getAppContext())
   const [storageReady, setStorageReady] = useState(false)
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
-  const [showInstallModal, setShowInstallModal] = useState(false)
   const shellRef = useRef<HTMLElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -649,20 +648,12 @@ function App() {
     void enterApp()
   }
 
-  async function shareInstallPage() {
-    if (!hasWebShare()) {
-      setStatus('Use the browser Share menu, then Add to Home Screen.')
-      return
-    }
-
+  async function copyInstallLink() {
     try {
-      await navigator.share({
-        title: 'Install Instacomic',
-        text: 'Add Instacomic to your Home Screen for fullscreen capture.',
-        url: window.location.href,
-      })
+      await navigator.clipboard.writeText(window.location.href)
+      setStatus('Install link copied. Open it in your browser, then use Add to Home Screen.')
     } catch {
-      // The user can dismiss the share sheet; keep the install instructions visible.
+      setStatus('Use the browser menu, then Add to Home Screen.')
     }
   }
 
@@ -1246,7 +1237,7 @@ function App() {
   return (
     <main
       ref={shellRef}
-      className="native-shell"
+      className={`native-shell ${appContext.isInstalled ? 'is-app' : 'is-installer'}`}
       style={pageStyle}
       onPointerMove={(event) => {
         moveSticker(event.clientX, event.clientY)
@@ -1267,6 +1258,15 @@ function App() {
       onTouchEnd={() => finishGestures()}
       onTouchCancel={() => finishGestures()}
     >
+      {!appContext.isInstalled ? (
+        <InstallerScreen
+          appContext={appContext}
+          deferredPrompt={deferredPrompt}
+          onTriggerNativeInstall={triggerNativeInstall}
+          onCopyInstallLink={copyInstallLink}
+        />
+      ) : (
+        <>
       {!started && (
         <section className="start-screen" aria-label="Start Instacomic">
           <div className="start-mark">Instacomic</div>
@@ -1300,15 +1300,6 @@ function App() {
             >
               Start
             </button>
-            {!appContext.isInstalled && (
-              <button
-                className="start-install-button"
-                type="button"
-                onClick={() => setShowInstallModal(true)}
-              >
-                Install App
-              </button>
-            )}
           </div>
         </section>
       )}
@@ -1462,20 +1453,11 @@ function App() {
               setSettings((current) => ({ ...current, ...next }))
               clearExport()
             }}
-            appContext={appContext}
-            onTriggerInstall={() => setShowInstallModal(true)}
           />
         )}
       </Drawer>
-
-      <InstallModal
-        open={showInstallModal}
-        onClose={() => setShowInstallModal(false)}
-        appContext={appContext}
-        deferredPrompt={deferredPrompt}
-        onTriggerNativeInstall={triggerNativeInstall}
-        onShareInstall={shareInstallPage}
-      />
+        </>
+      )}
     </main>
   )
 }
@@ -2054,13 +2036,9 @@ function StickerPanel({
 function StylePanel({
   settings,
   onSettings,
-  appContext,
-  onTriggerInstall,
 }: {
   settings: Settings
   onSettings: (settings: Partial<Settings>) => void
-  appContext: AppContext
-  onTriggerInstall: () => void
 }) {
   return (
     <div className="drawer-stack">
@@ -2099,109 +2077,64 @@ function StylePanel({
           <input type="range" min="0" max="10" value={settings.border} onChange={(event) => onSettings({ border: Number(event.target.value) })} />
         </label>
       </div>
-      {!appContext.isInstalled && (
-        <div className="drawer-install-section">
-          <button className="drawer-install-button" type="button" onClick={onTriggerInstall}>
-            Install Instacomic App
-          </button>
-        </div>
-      )}
     </div>
   )
 }
 
-function InstallModal({
-  open,
-  onClose,
+function InstallerScreen({
   appContext,
   deferredPrompt,
   onTriggerNativeInstall,
-  onShareInstall,
+  onCopyInstallLink,
 }: {
-  open: boolean
-  onClose: () => void
   appContext: AppContext
   deferredPrompt: BeforeInstallPromptEvent | null
   onTriggerNativeInstall: () => void | Promise<void>
-  onShareInstall: () => void | Promise<void>
+  onCopyInstallLink: () => void | Promise<void>
 }) {
+  const browserName = appContext.browserName === 'Browser' ? 'your browser' : appContext.browserName
+  const isSafari = appContext.browserName === 'Safari'
+
   return (
-    <AnimatePresence>
-      {open && (
-        <motion.div
-          className="install-modal-overlay"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={onClose}
-        >
-          <motion.div
-            className="install-modal"
-            initial={{ scale: 0.9, y: 20, opacity: 0 }}
-            animate={{ scale: 1, y: 0, opacity: 1 }}
-            exit={{ scale: 0.9, y: 20, opacity: 0 }}
-            transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="install-modal-title"
-          >
-            <button className="install-modal-close" onClick={onClose} aria-label="Close dialog">
-              ×
-            </button>
-            <div className="install-modal-header">
-              <div className="install-modal-icon">📸</div>
-              <h2 id="install-modal-title">Install Instacomic</h2>
-              <p>Add Instacomic to your home screen for the full app experience: fullscreen capture, offline access, and portrait lock.</p>
-            </div>
+    <section className="installer-screen" aria-label="Install Instacomic">
+      <div className="installer-panel">
+        <div className="installer-kicker">Installer only</div>
+        <h1>Install Instacomic</h1>
+        <p className="installer-copy">The browser page only installs the app. Create comics from the Home Screen app after install.</p>
 
-            <div className="install-modal-body">
-              {deferredPrompt ? (
-                <button
-                  className="install-modal-action-btn"
-                  type="button"
-                  onClick={() => {
-                    void onTriggerNativeInstall()
-                    onClose()
-                  }}
-                >
-                  Install Now
-                </button>
-              ) : hasWebShare() ? (
-                <button
-                  className="install-modal-action-btn"
-                  type="button"
-                  onClick={() => {
-                    void onShareInstall()
-                  }}
-                >
-                  Open Share Sheet
-                </button>
-              ) : null}
+        {deferredPrompt ? (
+          <button className="installer-primary" type="button" onClick={() => void onTriggerNativeInstall()}>
+            Install App
+          </button>
+        ) : (
+          <div className="installer-note" role="status">
+            Use {browserName}'s own menu. The in-page share sheet cannot show Add to Home Screen.
+          </div>
+        )}
 
-              <div className="install-modal-instructions">
-                <h3>How to Install Manual Guide</h3>
-                
-                {appContext.isIos ? (
-                  <ol>
-                    {appContext.browserName !== 'Safari' && (
-                      <li className="warning-step">Open this page in the default <strong>Safari browser</strong>.</li>
-                    )}
-                    <li>Tap the <strong>Share</strong> button <span className="share-icon-placeholder">⇪</span> in Safari.</li>
-                    <li>Scroll down and tap <strong>Add to Home Screen</strong>.</li>
-                  </ol>
-                ) : (
-                  <ol>
-                    <li>Tap the <strong>browser menu</strong> (three dots <span className="menu-dots-placeholder">⋮</span>) at the top/bottom right of your screen.</li>
-                    <li>Tap <strong>Install app</strong> or <strong>Add to Home screen</strong>.</li>
-                  </ol>
-                )}
-              </div>
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+        <div className="installer-steps">
+          <h2>{deferredPrompt ? 'If the install prompt does not appear' : 'Add it to your Home Screen'}</h2>
+          {appContext.isIos ? (
+            <ol>
+              {!isSafari && <li>Open this page from {browserName}'s browser menu or in Safari.</li>}
+              <li>Tap the browser toolbar Share button or menu button.</li>
+              <li>Choose Add to Home Screen from the browser action list.</li>
+              <li>Launch Instacomic from the new Home Screen icon.</li>
+            </ol>
+          ) : (
+            <ol>
+              <li>Open the browser menu for this page.</li>
+              <li>Choose Install app or Add to Home screen.</li>
+              <li>Launch Instacomic from the installed app icon.</li>
+            </ol>
+          )}
+        </div>
+
+        <button className="installer-secondary" type="button" onClick={() => void onCopyInstallLink()}>
+          Copy Install Link
+        </button>
+      </div>
+    </section>
   )
 }
 

@@ -12,6 +12,13 @@ const baseUrl = process.env.SMOKE_BASE_URL ?? 'http://127.0.0.1:4174'
 const errors = []
 page.on('pageerror', (error) => errors.push(error.message))
 
+await page.addInitScript(() => {
+  Object.defineProperty(navigator, 'standalone', {
+    configurable: true,
+    get: () => true,
+  })
+})
+
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
 const formatOptionCount = await page.locator('.format-option').count()
 await page.getByRole('button', { name: /9:16/ }).tap()
