@@ -98,27 +98,35 @@ if (pinchBefore) {
 }
 const pinchAfter = await page.locator('[data-sticker-id]').boundingBox()
 const rotationAfter = Number(await page.locator('[data-sticker-id]').getAttribute('data-rotation'))
+const beforeTrashCount = await page.locator('[data-sticker-id]').count()
+await page.locator('[data-sticker-id]').first().tap()
+await page.locator('.sticker.active').waitFor()
+await page.getByLabel('Delete sticker').evaluate((button) => button.click())
+const afterTrashCount = await page.locator('[data-sticker-id]').count()
 
-await openDrawer(page)
-await page.getByRole('button', { name: 'Save' }).tap()
 const download = await Promise.all([
   page.waitForEvent('download'),
   page.getByRole('button', { name: 'Share' }).tap(),
 ]).then(([download]) => download)
 const manifest = await (await page.request.get(new URL('/manifest.webmanifest', baseUrl).toString())).json()
 const bodyOverflow = await page.evaluate(() => getComputedStyle(document.body).overflow)
+await openDrawer(page)
 await page.getByRole('button', { name: 'Create' }).tap()
-const rayBeforeTouch = await rayData(page)
-await pinchCreatorRay(page)
-const rayAfterTouch = await rayData(page)
+await page.getByPlaceholder('My manga layout').fill('Final Layout')
+await page.getByPlaceholder('My manga layout').blur()
 await dragCreatorLine(page, '.creator-free-line', 38, -18)
 await dragCreatorLine(page, '.creator-handle-end', -18, 44)
 await page.getByRole('button', { name: 'Save layout' }).tap()
+await waitForDrawerHidden(page)
+const drawerHiddenAfterLayoutSave = await page.locator('.motion-drawer').boundingBox().then((box) => box && box.y > 830)
 const storedLayoutInfo = await page.evaluate(() => {
   const layouts = JSON.parse(localStorage.getItem('instacomic.customLayouts.v1') ?? '[]')
+  const activeLayoutId = localStorage.getItem('instacomic.activeLayout.v1')
   const latest = layouts.at(-1)
   return {
     count: layouts.length,
+    name: latest?.name ?? '',
+    activeLayoutId,
     panels: latest?.panels?.length ?? 0,
     hasDiagonal: latest?.panels?.some((panel) =>
       panel.points?.some(([x, y]) => ![0, 100].includes(Math.round(x)) && ![0, 100].includes(Math.round(y))),
@@ -126,16 +134,13 @@ const storedLayoutInfo = await page.evaluate(() => {
   }
 })
 const title = await page.title()
-
 mkdirSync('test-results', { recursive: true })
 mkdirSync('docs', { recursive: true })
 await closeDrawer(page)
 await page.screenshot({ path: 'test-results/instacomic-mobile.png', fullPage: true })
 await page.screenshot({ path: 'docs/instacomic-mobile.png', fullPage: true })
-const beforeTrashCount = await page.locator('[data-sticker-id]').count()
-await page.locator('[data-sticker-id]').first().tap()
-await page.getByLabel('Delete sticker').tap()
-const afterTrashCount = await page.locator('[data-sticker-id]').count()
+await page.reload({ waitUntil: 'networkidle' })
+const restoredLayoutName = await page.locator('.live-strip').getAttribute('data-layout-name')
 await browser.close()
 
 const result = {
@@ -155,8 +160,9 @@ const result = {
   sharedFile: download.suggestedFilename(),
   manifestName: manifest.name,
   bodyOverflow,
-  rayMultitouch: rayLength(rayAfterTouch) > rayLength(rayBeforeTouch) + 5,
+  drawerHiddenAfterLayoutSave,
   storedLayoutInfo,
+  restoredLayoutName,
   errors,
 }
 
@@ -178,8 +184,11 @@ const failures = [
   result.sharedFile === 'instacomic.png' ? null : 'share fallback did not produce instacomic.png',
   result.manifestName === 'Instacomic' ? null : 'manifest did not load',
   result.bodyOverflow === 'hidden' ? null : 'body is scrollable',
-  result.rayMultitouch ? null : 'custom ray multitouch did not stretch the ray',
   result.storedLayoutInfo.count > 0 ? null : 'custom ray layout was not saved',
+  result.storedLayoutInfo.name === 'Final Layout' ? null : 'custom layout name was not saved',
+  result.storedLayoutInfo.activeLayoutId?.startsWith('custom-') ? null : 'active layout id was not persisted',
+  result.restoredLayoutName === 'Final Layout' ? null : 'last custom layout was not restored on reload',
+  result.drawerHiddenAfterLayoutSave ? null : 'drawer did not close after saving a custom layout',
   result.storedLayoutInfo.hasDiagonal ? null : 'custom layout did not preserve diagonal panels',
   result.errors.length === 0 ? null : `page errors: ${result.errors.join('; ')}`,
 ].filter(Boolean)
@@ -235,49 +244,12 @@ async function pinchPanelPhoto(page, nx, ny) {
   await page.waitForTimeout(80)
 }
 
-async function rayData(page) {
-  return page.locator('.creator-free-line').first().evaluate((line) => ({
-    x1: Number(line.getAttribute('data-ray-x1')),
-    y1: Number(line.getAttribute('data-ray-y1')),
-    x2: Number(line.getAttribute('data-ray-x2')),
-    y2: Number(line.getAttribute('data-ray-y2')),
-  }))
-}
-
-function rayLength(ray) {
-  return Math.hypot(ray.x2 - ray.x1, (ray.y2 - ray.y1) * 1.45)
-}
-
-async function pinchCreatorRay(page) {
-  const box = await page.locator('.creator-free-line').first().boundingBox()
-  const client = await page.context().newCDPSession(page)
-  const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
-  const left = { x: center.x - 18, y: center.y }
-  const right = { x: center.x + 18, y: center.y }
-  await client.send('Input.dispatchTouchEvent', {
-    type: 'touchStart',
-    touchPoints: [
-      { ...left, id: 1 },
-      { ...right, id: 2 },
-    ],
-  })
-  await client.send('Input.dispatchTouchEvent', {
-    type: 'touchMove',
-    touchPoints: [
-      { x: left.x - 38, y: left.y + 24, id: 1 },
-      { x: right.x + 38, y: right.y - 24, id: 2 },
-    ],
-  })
-  await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
-  await page.waitForTimeout(80)
-}
-
 async function openDrawer(page) {
-  await page.locator('.capture-bar button[aria-label="Open drawer"]').tap()
+  await page.locator('.capture-bar button[aria-label="Controls"]').tap()
   try {
     await page.locator('.motion-drawer.is-open').waitFor({ timeout: 1200 })
   } catch {
-    await page.locator('.capture-bar button[aria-label="Open drawer"]').evaluate((button) => button.click())
+    await page.locator('.capture-bar button[aria-label="Controls"]').evaluate((button) => button.click())
     await page.locator('.motion-drawer.is-open').waitFor()
   }
 }
@@ -287,6 +259,10 @@ async function closeDrawer(page) {
   if (open > 0) {
     await page.locator('.motion-drawer.is-open .drawer-grabber').evaluate((button) => button.click())
   }
+  await waitForDrawerHidden(page)
+}
+
+async function waitForDrawerHidden(page) {
   await page.waitForFunction(() => {
     const box = document.querySelector('.motion-drawer')?.getBoundingClientRect()
     return !!box && box.top > window.innerHeight

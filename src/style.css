@@ -298,7 +298,7 @@ select:focus-visible,
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 22px;
+  gap: clamp(10px, 3.6vw, 18px);
   pointer-events: none;
 }
 
@@ -339,6 +339,15 @@ select:focus-visible,
   backdrop-filter: blur(16px);
   font-size: 23px;
   font-weight: 900;
+}
+
+.share-action {
+  border-color: rgba(17, 17, 17, 0.68);
+  color: #111;
+  background: var(--yellow);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.28),
+    3px 4px 0 #111;
 }
 
 .capture-bar button:active,
@@ -699,9 +708,14 @@ select:focus-visible,
 }
 
 .creator-actions {
+  position: sticky;
+  bottom: -4px;
+  z-index: 12;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 9px;
+  padding-top: 8px;
+  background: linear-gradient(rgba(255, 248, 236, 0), rgba(255, 248, 236, 0.96) 26%);
 }
 
 .creator-actions button {
@@ -767,16 +781,10 @@ select:focus-visible,
   accent-color: var(--accent);
 }
 
-.triple-fields,
-.save-row {
+.triple-fields {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 9px;
-}
-
-.share-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
 }
 
 .primary,

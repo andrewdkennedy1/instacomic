@@ -240,6 +240,7 @@ const defaultSettings: Settings = {
 }
 
 const CUSTOM_LAYOUT_KEY = 'instacomic.customLayouts.v1'
+const ACTIVE_LAYOUT_KEY = 'instacomic.activeLayout.v1'
 
 type FullscreenHost = HTMLElement & {
   webkitRequestFullscreen?: () => Promise<void> | void
@@ -332,6 +333,7 @@ function App() {
   const [draftLines, setDraftLines] = useState<CustomLine[]>(() => createDefaultDraftLines())
   const [draftName, setDraftName] = useState('')
   const [appContext, setAppContext] = useState<AppContext>(() => getAppContext())
+  const [storageReady, setStorageReady] = useState(false)
   const shellRef = useRef<HTMLElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -362,12 +364,31 @@ function App() {
 
     try {
       const stored = localStorage.getItem(CUSTOM_LAYOUT_KEY)
+      const storedActiveLayoutId = localStorage.getItem(ACTIVE_LAYOUT_KEY)
       if (stored) {
         const parsed = JSON.parse(stored) as Layout[]
-        setCustomLayouts(parsed.filter((item) => Array.isArray(item.panels) && item.panels.length > 0))
+        const validLayouts = parsed.filter((item) => Array.isArray(item.panels) && item.panels.length > 0)
+        const restoredLayout = [...layouts, ...validLayouts].find((item) => item.id === storedActiveLayoutId)
+        setCustomLayouts(validLayouts)
+
+        if (restoredLayout) {
+          setLayout(restoredLayout)
+          setActivePanelId(restoredLayout.panels[0]?.id ?? null)
+          setStatus(`${restoredLayout.name} layout restored.`)
+        }
+      } else {
+        const restoredLayout = layouts.find((item) => item.id === storedActiveLayoutId)
+        if (restoredLayout) {
+          setLayout(restoredLayout)
+          setActivePanelId(restoredLayout.panels[0]?.id ?? null)
+          setStatus(`${restoredLayout.name} layout restored.`)
+        }
       }
     } catch {
       localStorage.removeItem(CUSTOM_LAYOUT_KEY)
+      localStorage.removeItem(ACTIVE_LAYOUT_KEY)
+    } finally {
+      setStorageReady(true)
     }
   }, [])
 
@@ -411,8 +432,20 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (!storageReady) {
+      return
+    }
+
     localStorage.setItem(CUSTOM_LAYOUT_KEY, JSON.stringify(customLayouts))
-  }, [customLayouts])
+  }, [customLayouts, storageReady])
+
+  useEffect(() => {
+    if (!storageReady) {
+      return
+    }
+
+    localStorage.setItem(ACTIVE_LAYOUT_KEY, layout.id)
+  }, [layout.id, storageReady])
 
   useEffect(() => {
     const video = videoRef.current
@@ -752,6 +785,10 @@ function App() {
   }
 
   function saveDraftLayout() {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur()
+    }
+
     const panels = panelsFromLines(draftLines)
 
     if (panels.length === 0) {
@@ -770,6 +807,7 @@ function App() {
     setDraftName('')
     setDraftLines(createDefaultDraftLines())
     setDrawerTab('layout')
+    setDrawerOpen(false)
     setStatus('Custom layout saved on this phone.')
   }
 
@@ -1118,6 +1156,8 @@ function App() {
         <div
           ref={stripRef}
           className={`live-strip layout-${layout.id} ${layout.panels.some((panel) => panel.points) ? 'is-manga' : ''}`}
+          data-layout-id={layout.id}
+          data-layout-name={layout.name}
           onPointerDown={(event) => {
             if ((event.target as HTMLElement).closest('[data-sticker-id]')) {
               return
@@ -1205,8 +1245,11 @@ function App() {
         <button className="shutter" type="button" onClick={capturePanel} aria-label="Capture active panel">
           <span />
         </button>
-        <button className="round-action" type="button" onClick={() => openDrawer()} aria-label="Open drawer">
+        <button className="round-action" type="button" onClick={() => openDrawer()} aria-label="Controls">
           ⋯
+        </button>
+        <button className="round-action share-action" type="button" onClick={() => void shareComic()} aria-label="Share">
+          ⇪
         </button>
       </nav>
 
@@ -1253,7 +1296,6 @@ function App() {
               setSettings((current) => ({ ...current, ...next }))
               clearExport()
             }}
-            onShare={() => void shareComic()}
           />
         )}
       </Drawer>
@@ -1631,8 +1673,16 @@ function CreatorPanel({
     }
   }
 
+  function submitLayout(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur()
+    }
+    onSave()
+  }
+
   return (
-    <div className="creator-stack">
+    <form className="creator-stack" onSubmit={submitLayout}>
       <div
         ref={canvasRef}
         className="creator-canvas"
@@ -1738,7 +1788,13 @@ function CreatorPanel({
       </div>
       <label className="field">
         <span>Name</span>
-        <input value={draftName} placeholder="My manga layout" onChange={(event) => onName(event.target.value)} />
+        <input
+          value={draftName}
+          placeholder="My manga layout"
+          autoComplete="off"
+          enterKeyHint="done"
+          onChange={(event) => onName(event.target.value)}
+        />
       </label>
       <div className="creator-actions">
         <button type="button" onClick={() => onAddLine('diagonal')}>
@@ -1750,11 +1806,11 @@ function CreatorPanel({
         <button type="button" onClick={onReset}>
           Reset rays
         </button>
-        <button type="button" className="primary" onClick={onSave}>
+        <button type="submit" className="primary">
           Save layout
         </button>
       </div>
-    </div>
+    </form>
   )
 }
 
@@ -1819,11 +1875,9 @@ function StickerPanel({
 function StylePanel({
   settings,
   onSettings,
-  onShare,
 }: {
   settings: Settings
   onSettings: (settings: Partial<Settings>) => void
-  onShare: () => void
 }) {
   return (
     <div className="drawer-stack">
@@ -1861,11 +1915,6 @@ function StylePanel({
           <span>Border</span>
           <input type="range" min="0" max="10" value={settings.border} onChange={(event) => onSettings({ border: Number(event.target.value) })} />
         </label>
-      </div>
-      <div className="share-row">
-        <button className="primary secondary" type="button" onClick={onShare}>
-          Share
-        </button>
       </div>
     </div>
   )
