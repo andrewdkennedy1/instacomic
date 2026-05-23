@@ -330,6 +330,15 @@ type LockableScreen = Screen & {
   orientation?: LockableScreenOrientation
 }
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
+}
+
+function hasWebShare() {
+  return typeof navigator !== 'undefined' && typeof navigator.share === 'function'
+}
+
 function isDisplayModeApp() {
   const nav = navigator as StandaloneNavigator
   return (
@@ -393,7 +402,7 @@ function App() {
   const [draftName, setDraftName] = useState('')
   const [appContext, setAppContext] = useState<AppContext>(() => getAppContext())
   const [storageReady, setStorageReady] = useState(false)
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null)
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const [showInstallModal, setShowInstallModal] = useState(false)
   const shellRef = useRef<HTMLElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -421,9 +430,9 @@ function App() {
   } as React.CSSProperties
 
   useEffect(() => {
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault()
-      setDeferredPrompt(e)
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault()
+      setDeferredPrompt(event as BeforeInstallPromptEvent)
     }
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
     return () => {
@@ -641,14 +650,13 @@ function App() {
   }
 
   async function shareInstallPage() {
-    const share = 'share' in navigator ? navigator.share.bind(navigator) : null
-    if (!share) {
+    if (!hasWebShare()) {
       setStatus('Use the browser Share menu, then Add to Home Screen.')
       return
     }
 
     try {
-      await share({
+      await navigator.share({
         title: 'Install Instacomic',
         text: 'Add Instacomic to your Home Screen for fullscreen capture.',
         url: window.location.href,
@@ -2113,7 +2121,7 @@ function InstallModal({
   open: boolean
   onClose: () => void
   appContext: AppContext
-  deferredPrompt: any
+  deferredPrompt: BeforeInstallPromptEvent | null
   onTriggerNativeInstall: () => void | Promise<void>
   onShareInstall: () => void | Promise<void>
 }) {
@@ -2159,7 +2167,7 @@ function InstallModal({
                 >
                   Install Now
                 </button>
-              ) : 'share' in navigator ? (
+              ) : hasWebShare() ? (
                 <button
                   className="install-modal-action-btn"
                   type="button"

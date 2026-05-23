@@ -1,4 +1,4 @@
-const CACHE_NAME = 'instacomic-v4'
+const CACHE_NAME = 'instacomic-v5'
 const APP_SHELL = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png']
 
 self.addEventListener('install', (event) => {
@@ -19,6 +19,21 @@ self.addEventListener('fetch', (event) => {
   const request = event.request
 
   if (request.method !== 'GET') {
+    return
+  }
+
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response.ok && new URL(request.url).origin === self.location.origin) {
+            const clone = response.clone()
+            caches.open(CACHE_NAME).then((cache) => cache.put('/', clone))
+          }
+          return response
+        })
+        .catch(() => caches.match('/')),
+    )
     return
   }
 
