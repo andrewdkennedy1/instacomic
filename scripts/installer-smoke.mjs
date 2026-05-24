@@ -20,6 +20,10 @@ const result = {
   installerVisible: await page.locator('.installer-screen').count(),
   editorVisible: await page.locator('.comic-stage').count(),
   startButtonVisible: await page.getByRole('button', { name: 'Start' }).count(),
+  addToHomeCta:
+    (await page.getByRole('button', { name: 'Add to Home Screen' }).count()) +
+    (await page.getByRole('link', { name: 'Add to Home Screen' }).count()),
+  copyInstallLink: await page.getByRole('button', { name: 'Copy Install Link' }).count(),
   mentionsWebShare: bodyText.includes('Open Share Sheet'),
   mentionsInstallerOnly: normalizedBodyText.includes('installer only'),
   mentionsAddToHome: normalizedBodyText.includes('add to home screen'),
@@ -33,6 +37,8 @@ const failures = [
   result.installerVisible === 1 ? null : 'installer screen did not render',
   result.editorVisible === 0 ? null : 'editor rendered in browser installer mode',
   result.startButtonVisible === 0 ? null : 'Start button rendered in browser installer mode',
+  result.addToHomeCta === 1 ? null : 'installer Add to Home Screen CTA is missing',
+  result.copyInstallLink === 0 ? null : 'installer still shows Copy Install Link',
   result.mentionsWebShare === false ? null : 'installer still offers the Web Share sheet',
   result.mentionsInstallerOnly === true ? null : 'installer-only message is missing',
   result.mentionsAddToHome === true ? null : 'Add to Home Screen instructions are missing',

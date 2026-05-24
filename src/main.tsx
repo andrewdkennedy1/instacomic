@@ -653,15 +653,6 @@ function App() {
     void enterApp()
   }
 
-  async function copyInstallLink() {
-    try {
-      await navigator.clipboard.writeText(window.location.href)
-      setStatus('Install link copied. Open it in your browser, then use Add to Home Screen.')
-    } catch {
-      setStatus('Use the browser menu, then Add to Home Screen.')
-    }
-  }
-
   async function triggerNativeInstall() {
     if (!deferredPrompt) {
       return
@@ -1292,7 +1283,6 @@ function App() {
           appContext={appContext}
           deferredPrompt={deferredPrompt}
           onTriggerNativeInstall={triggerNativeInstall}
-          onCopyInstallLink={copyInstallLink}
         />
       ) : (
         <>
@@ -2135,12 +2125,10 @@ function InstallerScreen({
   appContext,
   deferredPrompt,
   onTriggerNativeInstall,
-  onCopyInstallLink,
 }: {
   appContext: AppContext
   deferredPrompt: BeforeInstallPromptEvent | null
   onTriggerNativeInstall: () => void | Promise<void>
-  onCopyInstallLink: () => void | Promise<void>
 }) {
   const browserName = appContext.browserName === 'Browser' ? 'your browser' : appContext.browserName
   const isSafari = appContext.browserName === 'Safari'
@@ -2154,15 +2142,21 @@ function InstallerScreen({
 
         {deferredPrompt ? (
           <button className="installer-primary" type="button" onClick={() => void onTriggerNativeInstall()}>
-            Install App
+            Add to Home Screen
           </button>
         ) : (
+          <a className="installer-primary" href="#installer-steps">
+            Add to Home Screen
+          </a>
+        )}
+
+        {!deferredPrompt && (
           <div className="installer-note" role="status">
-            Use {browserName}'s own menu. The in-page share sheet cannot show Add to Home Screen.
+            Use {browserName}'s own menu to finish adding Instacomic to your Home Screen.
           </div>
         )}
 
-        <div className="installer-steps">
+        <div id="installer-steps" className="installer-steps">
           <h2>{deferredPrompt ? 'If the install prompt does not appear' : 'Add it to your Home Screen'}</h2>
           {appContext.isIos ? (
             <ol>
@@ -2179,10 +2173,6 @@ function InstallerScreen({
             </ol>
           )}
         </div>
-
-        <button className="installer-secondary" type="button" onClick={() => void onCopyInstallLink()}>
-          Copy Install Link
-        </button>
       </div>
     </section>
   )
