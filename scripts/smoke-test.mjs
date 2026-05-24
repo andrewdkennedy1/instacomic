@@ -218,13 +218,16 @@ await page
 await closeDrawer(page)
 const liveStripImage = decodePngBuffer(await page.locator('.live-strip').screenshot())
 const liveCustomDividerRun = paperRunFromImage(liveStripImage, Math.round(liveStripImage.width * 0.5), Math.round(liveStripImage.height * 0.24), '#ffed5a')
+const liveCustomBezelPixel = pixelAt(liveStripImage, Math.round(liveStripImage.width * 0.5), 0)
 const customDownload = await Promise.all([
   page.waitForEvent('download'),
   page.getByRole('button', { name: 'Share' }).tap(),
 ]).then(([download]) => download)
 const customDownloadPath = await customDownload.path()
 const customExportedSize = pngSize(customDownloadPath)
-const customDividerRun = paperRun(customDownloadPath, Math.round(customExportedSize.width * 0.5), Math.round(customExportedSize.height * 0.24), '#ffed5a')
+const customExportedImage = decodePng(customDownloadPath)
+const customDividerRun = paperRunFromImage(customExportedImage, Math.round(customExportedSize.width * 0.5), Math.round(customExportedSize.height * 0.24), '#ffed5a')
+const customBezelPixel = pixelAt(customExportedImage, Math.round(customExportedSize.width * 0.5), 3)
 await page.reload({ waitUntil: 'networkidle' })
 const restoredLayoutName = await page.locator('.live-strip').getAttribute('data-layout-name')
 const restoredLayoutAspect = await page.locator('.live-strip').boundingBox().then((box) => (box ? box.height / box.width : 0))
@@ -289,7 +292,9 @@ const result = {
   customSharedFile: customDownload.suggestedFilename(),
   customExportedSize,
   liveCustomDividerRun,
+  liveCustomBezelPixel,
   customDividerRun,
+  customBezelPixel,
   restoredLayoutName,
   restoredLayoutAspect,
   deleteButtonVisible,
@@ -342,7 +347,9 @@ const failures = [
   result.customSharedFile === 'instacomic.png' ? null : 'custom layout share fallback did not produce instacomic.png',
   result.customExportedSize.width === 1440 && result.customExportedSize.height === 2560 ? null : 'custom 9:16 export dimensions are incorrect',
   result.liveCustomDividerRun.width >= 12 ? null : 'custom layout live preview did not render the selected gap',
+  isDarkPixel(result.liveCustomBezelPixel) ? null : 'custom layout live preview did not render the outer bezel',
   result.customDividerRun.width >= 42 ? null : 'custom layout export did not render the selected divider thickness',
+  isDarkPixel(result.customBezelPixel) ? null : 'custom layout export did not render the outer bezel',
   result.restoredLayoutName === 'Final Layout' ? null : 'last custom layout was not restored on reload',
   Math.abs(result.restoredLayoutAspect - 16 / 9) < 0.08 ? null : 'restored custom layout did not use the persisted selected aspect ratio',
   result.drawerHiddenAfterLayoutSave ? null : 'drawer did not close after saving a custom layout',
@@ -543,6 +550,10 @@ function hexToRgb(hex) {
 
 function colorMatches(pixel, target) {
   return Math.abs(pixel[0] - target[0]) <= 8 && Math.abs(pixel[1] - target[1]) <= 8 && Math.abs(pixel[2] - target[2]) <= 8
+}
+
+function isDarkPixel(pixel) {
+  return pixel[0] < 70 && pixel[1] < 70 && pixel[2] < 70 && pixel[3] > 180
 }
 
 function clampNumber(value, min, max) {

@@ -11,6 +11,7 @@
     "smoke:installer": "node scripts/installer-smoke.mjs",
     "smoke:camera": "node scripts/camera-smoke.mjs",
     "smoke:photos": "node scripts/photo-position-smoke.mjs",
+    "smoke:video": "node scripts/video-smoke.mjs",
     "deploy": "npm run build && wrangler deploy"
   },
   "devDependencies": {

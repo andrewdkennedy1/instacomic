@@ -43,6 +43,17 @@ type CapturedPhoto = {
   height: number
 }
 
+type LoadedPanelFrame = {
+  panel: Panel
+  shot: Shot | null
+  image: HTMLImageElement | null
+}
+
+type StoryVideoFormat = {
+  mimeType: string
+  extension: 'mp4' | 'webm'
+}
+
 type Sticker = {
   id: string
   kind: StickerKind
@@ -72,6 +83,8 @@ type Settings = {
   caption: string
   captionColor: string
   fit: PanelFit
+  videoDuration: number
+  videoSpeed: number
 }
 
 type PageFormat = {
@@ -323,6 +336,8 @@ const defaultSettings: Settings = {
   caption: '',
   captionColor: '#111111',
   fit: 'cover',
+  videoDuration: 6,
+  videoSpeed: 1,
 }
 
 const CUSTOM_LAYOUT_KEY = 'instacomic.customLayouts.v1'
@@ -424,6 +439,7 @@ function App() {
   const [drawerTab, setDrawerTab] = useState<DrawerTab>('stickers')
   const [status, setStatus] = useState('Tap a panel. Shoot. Repeat.')
   const [exportUrl, setExportUrl] = useState<string | null>(null)
+  const [videoRendering, setVideoRendering] = useState(false)
   const [dragState, setDragState] = useState<DragState | null>(null)
   const [photoDragState, setPhotoDragState] = useState<PhotoDragState | null>(null)
   const [customLayouts, setCustomLayouts] = useState<Layout[]>([])
@@ -1306,6 +1322,40 @@ function App() {
     }
   }
 
+  async function exportStoryVideo() {
+    if (videoRendering) {
+      return
+    }
+
+    setVideoRendering(true)
+    try {
+      setStatus('Rendering story video...')
+      const video = await renderStoryVideo(layout, shots, stickers, settings, pageFormat, (progress) => {
+        setStatus(`Rendering story video ${Math.round(progress * 100)}%...`)
+      })
+      const fileName = `instacomic-story.${video.extension}`
+      const file = new File([video.blob], fileName, { type: video.mimeType })
+      if ('canShare' in navigator && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'Instacomic story video' })
+        setStatus(`Shared ${video.width}x${video.height} story video.`)
+      } else {
+        const url = URL.createObjectURL(video.blob)
+        const link = document.createElement('a')
+        link.href = url
+        link.download = fileName
+        document.body.append(link)
+        link.click()
+        link.remove()
+        window.setTimeout(() => URL.revokeObjectURL(url), 30000)
+        setStatus(`Downloaded ${video.width}x${video.height} ${video.extension.toUpperCase()} story video.`)
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Story video export failed.')
+    } finally {
+      setVideoRendering(false)
+    }
+  }
+
   return (
     <main
       ref={shellRef}
@@ -1383,7 +1433,7 @@ function App() {
       <section ref={stageRef} className="comic-stage" aria-label="Instacomic capture surface">
         <div
           ref={stripRef}
-          className={`live-strip layout-${layout.id} ${layout.panels.some((panel) => panel.points) ? 'is-manga' : ''}`}
+          className={`live-strip layout-${layout.id} ${layout.custom ? 'is-custom' : ''} ${layout.panels.some((panel) => panel.points) ? 'is-manga' : ''}`}
           data-layout-id={layout.id}
           data-layout-name={layout.name}
           onPointerDown={(event) => {
@@ -1486,6 +1536,15 @@ function App() {
         </button>
         <button className="round-action" type="button" onClick={() => openDrawer()} aria-label="Controls">
           ⋯
+        </button>
+        <button
+          className={`round-action video-action ${videoRendering ? 'is-rendering' : ''}`}
+          type="button"
+          onClick={() => void exportStoryVideo()}
+          aria-label="Export story video"
+          disabled={videoRendering}
+        >
+          ▶
         </button>
         <button className="round-action share-action" type="button" onClick={() => void shareComic()} aria-label="Share">
           ⇪
@@ -2209,6 +2268,36 @@ function StylePanel({
           <input type="range" min="0" max="10" value={settings.border} onChange={(event) => onSettings({ border: Number(event.target.value) })} />
         </label>
       </div>
+      <div className="video-settings">
+        <div>
+          <strong>Story video</strong>
+          <em>Sliding panel reveal, exported for vertical reels when using 9:16.</em>
+        </div>
+        <label className="field">
+          <span>{`Duration ${settings.videoDuration}s`}</span>
+          <input
+            aria-label="Video duration"
+            type="range"
+            min="3"
+            max="10"
+            step="1"
+            value={settings.videoDuration}
+            onChange={(event) => onSettings({ videoDuration: Number(event.target.value) })}
+          />
+        </label>
+        <label className="field">
+          <span>{`Speed ${settings.videoSpeed.toFixed(1)}x`}</span>
+          <input
+            aria-label="Video speed"
+            type="range"
+            min="0.6"
+            max="1.8"
+            step="0.1"
+            value={settings.videoSpeed}
+            onChange={(event) => onSettings({ videoSpeed: Number(event.target.value) })}
+          />
+        </label>
+      </div>
     </div>
   )
 }
@@ -2484,7 +2573,7 @@ async function renderToPng(
   )
 
   for (const { panel, image, shot } of images) {
-    drawPanel(context, panel, image, shot, width, panelHeight, outer, gutter, settings)
+    drawPanel(context, panel, image, shot, width, panelHeight, outer, gutter, settings, 3)
   }
 
   for (const divider of layout.dividers ?? []) {
@@ -2492,7 +2581,7 @@ async function renderToPng(
   }
 
   for (const sticker of stickers) {
-    drawSticker(context, sticker, width, panelHeight)
+    drawSticker(context, sticker, width, panelHeight, 3)
   }
 
   if (settings.caption.trim()) {
@@ -2510,11 +2599,239 @@ async function renderToPng(
     context.fillText(settings.caption, width / 2, captionY + captionHeight / 2, width - 130)
   }
 
+  drawOuterBezel(context, width, panelHeight, outer, settings, !!layout.custom)
+
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
   if (!blob) {
     throw new Error('PNG render failed.')
   }
   return blob
+}
+
+async function renderStoryVideo(
+  layout: Layout,
+  shots: Record<string, Shot>,
+  stickers: Sticker[],
+  settings: Settings,
+  pageFormat: PageFormat,
+  onProgress?: (progress: number) => void,
+) {
+  if (typeof MediaRecorder === 'undefined') {
+    throw new Error('Story video export is unavailable in this browser.')
+  }
+
+  const captureCanvas = document.createElement('canvas') as HTMLCanvasElement & {
+    captureStream?: (frameRate?: number) => MediaStream
+  }
+  if (!captureCanvas.captureStream) {
+    throw new Error('Story video export is unavailable in this browser.')
+  }
+
+  const videoFormat = bestStoryVideoFormat()
+  const width = 1080
+  const panelHeight = Math.round((width * pageFormat.height) / pageFormat.width)
+  const fps = 24
+  const duration = clamp(settings.videoDuration, 3, 10)
+  const totalFrames = Math.max(1, Math.round(duration * fps))
+  captureCanvas.width = width
+  captureCanvas.height = panelHeight
+  const context = captureCanvas.getContext('2d')
+  if (!context) {
+    throw new Error('Canvas is unavailable.')
+  }
+
+  const images = await loadPanelFrames(layout, shots)
+  const stream = captureCanvas.captureStream(fps)
+  const chunks: Blob[] = []
+  const recorder = new MediaRecorder(stream, { mimeType: videoFormat.mimeType, videoBitsPerSecond: 6_000_000 })
+  const done = new Promise<Blob>((resolve, reject) => {
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        chunks.push(event.data)
+      }
+    }
+    recorder.onerror = () => reject(new Error('Story video recording failed.'))
+    recorder.onstop = () => resolve(new Blob(chunks, { type: videoFormat.mimeType }))
+  })
+
+  recorder.start(250)
+  for (let frame = 0; frame < totalFrames; frame += 1) {
+    const progress = totalFrames <= 1 ? 1 : frame / (totalFrames - 1)
+    drawStoryVideoFrame(context, layout, images, stickers, settings, width, panelHeight, progress)
+    if (frame % 6 === 0 || frame === totalFrames - 1) {
+      onProgress?.((frame + 1) / totalFrames)
+    }
+    await wait(1000 / fps)
+  }
+  recorder.stop()
+  stream.getTracks().forEach((track) => track.stop())
+  const blob = await done
+  if (blob.size <= 0) {
+    throw new Error('Story video export produced an empty file.')
+  }
+
+  return {
+    blob,
+    width,
+    height: panelHeight,
+    mimeType: videoFormat.mimeType,
+    extension: videoFormat.extension,
+  }
+}
+
+async function loadPanelFrames(layout: Layout, shots: Record<string, Shot>): Promise<LoadedPanelFrame[]> {
+  return Promise.all(
+    layout.panels.map(async (panel) => ({
+      panel,
+      shot: shots[panel.id] ?? null,
+      image: shots[panel.id] ? await loadImage(shots[panel.id].dataUrl) : null,
+    })),
+  )
+}
+
+function drawStoryVideoFrame(
+  context: CanvasRenderingContext2D,
+  layout: Layout,
+  images: LoadedPanelFrame[],
+  stickers: Sticker[],
+  settings: Settings,
+  width: number,
+  panelHeight: number,
+  progress: number,
+) {
+  context.clearRect(0, 0, width, panelHeight)
+  context.fillStyle = settings.background
+  context.fillRect(0, 0, width, panelHeight)
+  const styleScale = width / 480
+  const gutter = settings.gutters * styleScale
+  const outer = settings.border * styleScale
+
+  images.forEach(({ panel, image, shot }, index) => {
+    const motion = panelRevealMotion(panel, index, images.length, progress, settings.videoSpeed, width, panelHeight)
+    context.save()
+    context.globalAlpha = motion.alpha
+    context.translate(motion.x, motion.y)
+    drawPanel(context, panel, image, shot, width, panelHeight, outer, gutter, settings, styleScale)
+    context.restore()
+  })
+
+  const decorationAlpha = easeOutCubic(clamp((progress - 0.56) / 0.24, 0, 1))
+  if (decorationAlpha > 0) {
+    context.save()
+    context.globalAlpha = decorationAlpha
+    for (const divider of layout.dividers ?? []) {
+      drawDividerGap(context, divider, width, panelHeight, outer, gutter, settings.background)
+    }
+    context.restore()
+  }
+
+  const stickerAlpha = easeOutCubic(clamp((progress - 0.7) / 0.24, 0, 1))
+  if (stickerAlpha > 0) {
+    context.save()
+    context.globalAlpha = stickerAlpha
+    for (const sticker of stickers) {
+      drawSticker(context, sticker, width, panelHeight, styleScale)
+    }
+    context.restore()
+  }
+
+  if (settings.caption.trim()) {
+    const captionAlpha = easeOutCubic(clamp((progress - 0.74) / 0.2, 0, 1))
+    const captionHeight = Math.min(96, panelHeight * 0.18)
+    const captionY = panelHeight - captionHeight - outer - gutter / 2 + (1 - captionAlpha) * 42
+    context.save()
+    context.globalAlpha = captionAlpha
+    context.fillStyle = '#ffffff'
+    context.fillRect(outer + gutter / 2, captionY, width - outer * 2 - gutter, captionHeight - gutter)
+    context.strokeStyle = bezelInk(settings)
+    context.lineWidth = Math.max(2, settings.border * styleScale)
+    context.strokeRect(outer + gutter / 2, captionY, width - outer * 2 - gutter, captionHeight - gutter)
+    context.fillStyle = settings.captionColor
+    context.font = `900 ${Math.round(54 * (width / 1080))}px ui-rounded, "Avenir Next", "Segoe UI", sans-serif`
+    context.textAlign = 'center'
+    context.textBaseline = 'middle'
+    context.fillText(settings.caption, width / 2, captionY + captionHeight / 2, width - 96)
+    context.restore()
+  }
+
+  drawOuterBezel(context, width, panelHeight, outer, settings, !!layout.custom)
+}
+
+function panelRevealMotion(
+  panel: Panel,
+  index: number,
+  count: number,
+  progress: number,
+  speed: number,
+  width: number,
+  panelHeight: number,
+) {
+  const start = count <= 1 ? 0 : (index / Math.max(1, count - 1)) * 0.36
+  const span = clamp(0.54 / clamp(speed, 0.6, 1.8), 0.3, 0.8)
+  const local = easeOutBack(clamp((progress - start) / span, 0, 1))
+  const center = panelCentroid(panel)
+  const xDirection = center.x < 0.45 ? -1 : center.x > 0.55 ? 1 : index % 2 === 0 ? -1 : 1
+  const yDirection = center.y < 0.42 ? -1 : center.y > 0.58 ? 1 : index % 2 === 0 ? -1 : 1
+  return {
+    x: (1 - local) * xDirection * width * 0.72,
+    y: (1 - local) * yDirection * panelHeight * 0.12,
+    alpha: clamp(local * 1.15, 0, 1),
+  }
+}
+
+function bestStoryVideoFormat(): StoryVideoFormat {
+  const formats: StoryVideoFormat[] = [
+    { mimeType: 'video/mp4;codecs=h264', extension: 'mp4' },
+    { mimeType: 'video/webm;codecs=vp9', extension: 'webm' },
+    { mimeType: 'video/webm;codecs=vp8', extension: 'webm' },
+    { mimeType: 'video/webm', extension: 'webm' },
+  ]
+  const supported = formats.find((format) => MediaRecorder.isTypeSupported(format.mimeType))
+  if (supported) {
+    return supported
+  }
+
+  return { mimeType: 'video/webm', extension: 'webm' }
+}
+
+function drawOuterBezel(
+  context: CanvasRenderingContext2D,
+  width: number,
+  panelHeight: number,
+  outer: number,
+  settings: Settings,
+  force: boolean,
+) {
+  const lineWidth = force ? Math.max(6, settings.border * 3) : settings.border > 0 ? Math.max(2, settings.border * 2) : 0
+  if (lineWidth <= 0) {
+    return
+  }
+
+  const inset = Math.max(lineWidth / 2, outer + lineWidth / 2)
+  context.save()
+  context.lineWidth = lineWidth
+  context.strokeStyle = force ? bezelInk(settings) : settings.borderColor
+  drawRoundedRect(context, inset, inset, width - inset * 2, panelHeight - inset * 2, Math.max(10, settings.radius * 3))
+  context.stroke()
+  context.restore()
+}
+
+function bezelInk(settings: Settings) {
+  return settings.borderColor.toLowerCase() === '#ffffff' ? '#111111' : settings.borderColor
+}
+
+function easeOutCubic(value: number) {
+  return 1 - Math.pow(1 - value, 3)
+}
+
+function easeOutBack(value: number) {
+  const c1 = 1.70158
+  const c3 = c1 + 1
+  return 1 + c3 * Math.pow(value - 1, 3) + c1 * Math.pow(value - 1, 2)
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
 }
 
 function drawPanel(
@@ -2527,6 +2844,7 @@ function drawPanel(
   outer: number,
   gutter: number,
   settings: Settings,
+  styleScale = 3,
 ) {
   const bounds = panelBounds(panel)
   const x = outer + bounds.x * (width - outer * 2) + gutter / 2
@@ -2538,7 +2856,7 @@ function drawPanel(
   if (panel.points) {
     drawPanelPolygon(context, panel, width, panelHeight, outer)
   } else {
-    drawRoundedRect(context, x, y, w, h, settings.radius * 3)
+    drawRoundedRect(context, x, y, w, h, settings.radius * styleScale)
   }
   context.fillStyle = '#ffffff'
   context.fill()
@@ -2556,7 +2874,7 @@ function drawPanel(
     if (panel.points) {
       drawPanelPolygon(context, panel, width, panelHeight, outer)
     } else {
-      drawRoundedRect(context, x, y, w, h, settings.radius * 3)
+      drawRoundedRect(context, x, y, w, h, settings.radius * styleScale)
     }
     context.stroke()
   }
@@ -2608,7 +2926,7 @@ function drawDividerGap(
   context.restore()
 }
 
-function drawSticker(context: CanvasRenderingContext2D, sticker: Sticker, width: number, panelHeight: number) {
+function drawSticker(context: CanvasRenderingContext2D, sticker: Sticker, width: number, panelHeight: number, styleScale = 3) {
   const x = sticker.x * width
   const y = sticker.y * panelHeight
   const w = sticker.w * width
@@ -2637,11 +2955,11 @@ function drawSticker(context: CanvasRenderingContext2D, sticker: Sticker, width:
   }
   const textMetrics = fitStickerText(sticker.text, sticker)
   context.fillStyle = sticker.ink
-  context.font = `900 ${textMetrics.fontSize * 3}px ui-rounded, "Avenir Next", "Segoe UI", sans-serif`
+  context.font = `900 ${textMetrics.fontSize * styleScale}px ui-rounded, "Avenir Next", "Segoe UI", sans-serif`
   context.textAlign = 'center'
   context.textBaseline = 'middle'
   textMetrics.lines.forEach((line, index) => {
-    const y = h * 0.43 + (index - (textMetrics.lines.length - 1) / 2) * textMetrics.fontSize * textMetrics.lineHeight * 3
+    const y = h * 0.43 + (index - (textMetrics.lines.length - 1) / 2) * textMetrics.fontSize * textMetrics.lineHeight * styleScale
     context.fillText(line, w / 2, y, w * 0.84)
   })
   context.restore()
