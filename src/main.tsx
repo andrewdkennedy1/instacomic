@@ -322,7 +322,7 @@ const defaultSettings: Settings = {
   borderColor: '#ffffff',
   caption: '',
   captionColor: '#111111',
-  fit: 'contain',
+  fit: 'cover',
 }
 
 const CUSTOM_LAYOUT_KEY = 'instacomic.customLayouts.v1'

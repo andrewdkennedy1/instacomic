@@ -40,6 +40,7 @@ const capturedFrame = await page.locator('[data-panel-id="2"] img').evaluate((im
     sourceRatio,
     renderedRatio: box.height > 0 ? box.width / box.height : 0,
     fitsPanel: !!panel && box.left >= panel.left - 1 && box.right <= panel.right + 1 && box.top >= panel.top - 1 && box.bottom <= panel.bottom + 1,
+    overflowsPanel: !!panel && (box.left < panel.left - 1 || box.right > panel.right + 1 || box.top < panel.top - 1 || box.bottom > panel.bottom + 1),
   }
 })
 await page.locator('.shutter').tap()
@@ -69,7 +70,7 @@ const failures = [
   Math.abs(result.capturedFrame.renderedRatio - result.capturedFrame.sourceRatio) / result.capturedFrame.sourceRatio < 0.08
     ? null
     : 'captured photo is rendered with the panel/canvas aspect ratio instead of the source photo aspect ratio',
-  result.capturedFrame.fitsPanel ? null : 'captured photo is still overflowing instead of fitting the full photo into the panel',
+  result.capturedFrame.overflowsPanel ? null : 'captured photo is fitting inside the panel instead of using the zoomed fill insert',
   result.panel2HasImage === 1 ? null : 'panel 2 did not keep the captured image',
   result.panel5HasImage === 1 ? null : 'last panel did not keep the captured image',
   result.activePanelAfterFinalCapture === 0 ? null : 'a panel stayed live after the final forward capture',
