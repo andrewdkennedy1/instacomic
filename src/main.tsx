@@ -1413,7 +1413,7 @@ function App() {
             <button
               key={panel.id}
               className={`live-panel ${panel.id === activePanelId ? 'is-live' : ''} ${shots[panel.id] ? 'is-shot' : ''}`}
-              style={panelStyle(panel)}
+              style={panelStyle(panel, settings.gutters, pageFormat)}
               type="button"
               data-panel-id={panel.id}
               onClick={() => selectPanel(panel.id)}
@@ -2069,7 +2069,7 @@ function CreatorPanel({
             />
           </label>
           <label className="field creator-thickness">
-            <span>Divider thickness</span>
+            <span>Section gap</span>
             <input
               type="range"
               min="6"
@@ -2560,15 +2560,13 @@ function drawPanelPolygon(
   gutter: number,
 ) {
   const points = panel.points ?? []
-  const center = panelCentroid(panel)
+  const canvasPoints = points.map(([px, py]) => [
+    outer + (px / 100) * (width - outer * 2),
+    outer + (py / 100) * (panelHeight - outer * 2),
+  ] as [number, number])
+  const insetPoints = insetPolygonPoints(canvasPoints, gutter / 2)
   context.beginPath()
-  points.forEach(([px, py], index) => {
-    const nx = px / 100
-    const ny = py / 100
-    const insetX = (center.x - nx) * gutter
-    const insetY = (center.y - ny) * gutter
-    const x = outer + nx * (width - outer * 2) + insetX
-    const y = outer + ny * (panelHeight - outer * 2) + insetY
+  insetPoints.forEach(([x, y], index) => {
     index === 0 ? context.moveTo(x, y) : context.lineTo(x, y)
   })
   context.closePath()
@@ -2613,14 +2611,14 @@ function drawSticker(context: CanvasRenderingContext2D, sticker: Sticker, width:
   context.restore()
 }
 
-function panelStyle(panel: Panel) {
+function panelStyle(panel: Panel, gutter = 0, pageFormat = defaultPageFormat) {
   const center = panelCentroid(panel)
   return {
     left: `${panel.x * 100}%`,
     top: `${panel.y * 100}%`,
     width: `${panel.w * 100}%`,
     height: `${panel.h * 100}%`,
-    clipPath: panel.points ? pointsToClipPath(panel.points) : undefined,
+    clipPath: panel.points ? pointsToClipPath(panel.points, gutter / 2, pageFormatCanvasAspect(pageFormat)) : undefined,
     '--chip-x': `${center.x * 100}%`,
     '--chip-y': `${center.y * 100}%`,
   }
@@ -2663,8 +2661,67 @@ function panelPhotoFrameSize(panel: Panel, stripRect: DOMRect) {
   }
 }
 
-function pointsToClipPath(points: Array<[number, number]>) {
-  return `polygon(${points.map(([x, y]) => `${x}% ${y}%`).join(', ')})`
+function pointsToClipPath(points: Array<[number, number]>, insetPx = 0, yScale = 1) {
+  const offsets = polygonInsetOffsets(points, insetPx, yScale)
+  return `polygon(${points.map(([x, y], index) => `${cssLengthPercent(x, offsets[index][0])} ${cssLengthPercent(y, offsets[index][1])}`).join(', ')})`
+}
+
+function cssLengthPercent(percent: number, pxOffset: number) {
+  if (Math.abs(pxOffset) < 0.01) {
+    return `${percent}%`
+  }
+
+  const sign = pxOffset >= 0 ? '+' : '-'
+  return `calc(${percent}% ${sign} ${Math.abs(pxOffset).toFixed(2)}px)`
+}
+
+function insetPolygonPoints(points: Array<[number, number]>, insetPx: number) {
+  const offsets = polygonInsetOffsets(points, insetPx)
+  return points.map(([x, y], index) => [x + offsets[index][0], y + offsets[index][1]] as [number, number])
+}
+
+function polygonInsetOffsets(points: Array<[number, number]>, insetPx: number, yScale = 1) {
+  if (insetPx <= 0 || points.length < 3) {
+    return points.map(() => [0, 0] as [number, number])
+  }
+
+  const orientation = polygonArea(points) >= 0 ? 1 : -1
+  return points.map((point, index) => {
+    const previous = points[(index + points.length - 1) % points.length]
+    const next = points[(index + 1) % points.length]
+    const previousNormal = inwardEdgeNormal(previous, point, orientation, yScale)
+    const nextNormal = inwardEdgeNormal(point, next, orientation, yScale)
+    const determinant = previousNormal[0] * nextNormal[1] - previousNormal[1] * nextNormal[0]
+
+    if (Math.abs(determinant) < 0.0001) {
+      const normalX = previousNormal[0] + nextNormal[0]
+      const normalY = previousNormal[1] + nextNormal[1]
+      const normalLength = Math.hypot(normalX, normalY)
+      const fallbackNormal = normalLength > 0.0001 ? [normalX / normalLength, normalY / normalLength] : previousNormal
+      return [fallbackNormal[0] * insetPx, fallbackNormal[1] * insetPx] as [number, number]
+    }
+
+    const offsetX = (insetPx * nextNormal[1] - previousNormal[1] * insetPx) / determinant
+    const offsetY = (previousNormal[0] * insetPx - insetPx * nextNormal[0]) / determinant
+    return limitInsetOffset([offsetX, offsetY], insetPx)
+  })
+}
+
+function inwardEdgeNormal(start: [number, number], end: [number, number], orientation: number, yScale: number) {
+  const dx = end[0] - start[0]
+  const dy = (end[1] - start[1]) * yScale
+  const length = Math.hypot(dx, dy) || 1
+  return orientation >= 0 ? ([-dy / length, dx / length] as [number, number]) : ([dy / length, -dx / length] as [number, number])
+}
+
+function limitInsetOffset(offset: [number, number], insetPx: number) {
+  const length = Math.hypot(offset[0], offset[1])
+  const limit = Math.max(1, insetPx) * 4
+  if (length <= limit) {
+    return offset
+  }
+
+  return [(offset[0] / length) * limit, (offset[1] / length) * limit] as [number, number]
 }
 
 function panelBounds(panel: Panel) {

@@ -722,7 +722,7 @@ select:focus-visible,
 
 .creator-canvas {
   position: relative;
-  width: min(100%, 480px);
+  width: min(100%, 480px, calc((var(--app-height, 100dvh) - 172px) * var(--creator-page-width) / var(--creator-page-height)));
   aspect-ratio: var(--creator-page-width) / var(--creator-page-height);
   justify-self: center;
   align-self: center;
@@ -1213,7 +1213,7 @@ input:disabled {
   }
 
   .creator-fullscreen .creator-canvas {
-    width: min(100%, 420px);
+    width: min(100%, 420px, calc((var(--app-height, 100dvh) - 220px) * var(--creator-page-width) / var(--creator-page-height)));
   }
 }
 

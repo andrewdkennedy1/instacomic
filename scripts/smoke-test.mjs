@@ -3,22 +3,18 @@ import { inflateSync } from 'node:zlib'
 import { chromium } from 'playwright'
 
 const browser = await chromium.launch()
+const baseUrl = process.env.SMOKE_BASE_URL ?? 'http://127.0.0.1:4174'
+const squareCreatorFit = await checkSquareCreatorFit(browser, baseUrl)
 const page = await browser.newPage({
   viewport: { width: 390, height: 844 },
   isMobile: true,
   hasTouch: true,
   acceptDownloads: true,
 })
-const baseUrl = process.env.SMOKE_BASE_URL ?? 'http://127.0.0.1:4174'
 const errors = []
 page.on('pageerror', (error) => errors.push(error.message))
 
-await page.addInitScript(() => {
-  Object.defineProperty(navigator, 'standalone', {
-    configurable: true,
-    get: () => true,
-  })
-})
+await enableStandalone(page)
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
 const formatOptionCount = await page.locator('.format-option').count()
@@ -210,6 +206,8 @@ await page
     color.dispatchEvent(new Event('change', { bubbles: true }))
   })
 await closeDrawer(page)
+const liveStripImage = decodePngBuffer(await page.locator('.live-strip').screenshot())
+const liveCustomDividerRun = paperRunFromImage(liveStripImage, Math.round(liveStripImage.width * 0.5), Math.round(liveStripImage.height * 0.24), '#ffed5a')
 const customDownload = await Promise.all([
   page.waitForEvent('download'),
   page.getByRole('button', { name: 'Share' }).tap(),
@@ -252,6 +250,7 @@ const result = {
   photoPinched: photoAfterPinch.scale > photoAfterDrag.scale + 0.08,
   photosAfterSmallerTemplate,
   photosAfterRestoredTemplate,
+  squareCreatorFit,
   stickerCount,
   drawerHidden,
   stickerText,
@@ -278,6 +277,7 @@ const result = {
   storedLayoutInfo,
   customSharedFile: customDownload.suggestedFilename(),
   customExportedSize,
+  liveCustomDividerRun,
   customDividerRun,
   restoredLayoutName,
   restoredLayoutAspect,
@@ -298,6 +298,11 @@ const failures = [
   result.photoPinched ? null : 'panel photo pinch did not update the image scale',
   result.photosAfterSmallerTemplate === 2 ? null : 'template switch to fewer panels did not preserve visible photos',
   result.photosAfterRestoredTemplate === 2 ? null : 'template switch back to more panels did not restore cached photos',
+  result.squareCreatorFit.selectedFormat === '1:1' ? null : 'square custom creator smoke did not select 1:1',
+  result.squareCreatorFit.creatorCanvasFormat === '1:1' ? null : 'square custom creator did not inherit 1:1',
+  Math.abs(result.squareCreatorFit.creatorCanvasAspect - 1) < 0.05 ? null : 'square custom creator canvas did not render as 1:1',
+  result.squareCreatorFit.canvasFitsViewport ? null : 'square custom creator canvas did not fit in the viewport',
+  result.squareCreatorFit.errors.length === 0 ? null : `square creator page errors: ${result.squareCreatorFit.errors.join('; ')}`,
   result.stickerCount === 1 ? null : 'speech sticker was not added',
   result.drawerHidden ? null : 'closed drawer is still visible',
   result.stickerText?.replace(/\s+/g, '').toLowerCase() === 'againwithwrappedstorytext' ? null : 'inline sticker text re-edit failed',
@@ -327,7 +332,8 @@ const failures = [
   Math.abs(result.liveAspectAfterLayoutSave - 16 / 9) < 0.08 ? null : 'saved custom layout did not keep the live canvas at 9:16',
   result.customSharedFile === 'instacomic.png' ? null : 'custom layout share fallback did not produce instacomic.png',
   result.customExportedSize.width === 1440 && result.customExportedSize.height === 2560 ? null : 'custom 9:16 export dimensions are incorrect',
-  result.customDividerRun.width >= 18 ? null : 'custom layout export did not render the selected divider thickness',
+  result.liveCustomDividerRun.width >= 12 ? null : 'custom layout live preview did not render the selected gap',
+  result.customDividerRun.width >= 42 ? null : 'custom layout export did not render the selected divider thickness',
   result.restoredLayoutName === 'Final Layout' ? null : 'last custom layout was not restored on reload',
   Math.abs(result.restoredLayoutAspect - 16 / 9) < 0.08 ? null : 'restored custom layout did not restore its saved aspect ratio',
   result.drawerHiddenAfterLayoutSave ? null : 'drawer did not close after saving a custom layout',
@@ -344,6 +350,48 @@ const failures = [
 
 if (failures.length > 0) {
   throw new Error(failures.join('\n'))
+}
+
+async function enableStandalone(page) {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'standalone', {
+      configurable: true,
+      get: () => true,
+    })
+  })
+}
+
+async function checkSquareCreatorFit(browser, baseUrl) {
+  const squarePage = await browser.newPage({
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+  })
+  const errors = []
+  squarePage.on('pageerror', (error) => errors.push(error.message))
+  await enableStandalone(squarePage)
+  await squarePage.goto(baseUrl, { waitUntil: 'networkidle' })
+  await squarePage.getByRole('button', { name: /1:1/ }).tap()
+  const selectedFormat = await squarePage.locator('.format-option.active strong').textContent()
+  await squarePage.getByRole('button', { name: 'Start' }).tap()
+  await openDrawer(squarePage)
+  await squarePage.getByRole('button', { name: 'Create' }).tap()
+  await squarePage.locator('.creator-fullscreen').waitFor()
+  await waitForDrawerHidden(squarePage)
+  const creatorCanvasFormat = await squarePage.locator('.creator-canvas').getAttribute('data-page-format')
+  const canvas = await squarePage.locator('.creator-canvas').boundingBox()
+  const viewport = squarePage.viewportSize() ?? { width: 0, height: 0 }
+  await squarePage.close()
+
+  return {
+    selectedFormat,
+    creatorCanvasFormat,
+    creatorCanvasAspect: canvas ? canvas.height / canvas.width : 0,
+    canvasFitsViewport: !!canvas && canvas.y >= 0 && canvas.y + canvas.height <= viewport.height,
+    canvasBottom: canvas ? canvas.y + canvas.height : 0,
+    viewportHeight: viewport.height,
+    errors,
+  }
 }
 
 async function tapStrip(page, nx, ny) {
@@ -378,7 +426,10 @@ function pngSize(path) {
 }
 
 function paperRun(path, x, y, paperHex) {
-  const image = decodePng(path)
+  return paperRunFromImage(decodePng(path), x, y, paperHex)
+}
+
+function paperRunFromImage(image, x, y, paperHex) {
   const target = hexToRgb(paperHex)
   const targetX = clampNumber(x, 0, image.width - 1)
   const targetY = clampNumber(y, 0, image.height - 1)
@@ -402,7 +453,10 @@ function paperRun(path, x, y, paperHex) {
 }
 
 function decodePng(path) {
-  const buffer = readFileSync(path)
+  return decodePngBuffer(readFileSync(path))
+}
+
+function decodePngBuffer(buffer) {
   const signature = '89504e470d0a1a0a'
   if (buffer.subarray(0, 8).toString('hex') !== signature) {
     throw new Error('Downloaded file is not a PNG')
