@@ -143,8 +143,8 @@ await openDrawer(page)
 await page.getByRole('button', { name: 'Create' }).tap()
 await page.getByPlaceholder('My manga layout').fill('Final Layout')
 await page.getByPlaceholder('My manga layout').blur()
-await dragCreatorLine(page, '.creator-free-line', 38, -18)
-await dragCreatorLine(page, '.creator-handle-end', -18, 44)
+const creatorTextHasRay = (await page.locator('.creator-stack').innerText()).toLowerCase().includes('ray')
+await dragCreatorHandleToPercent(page, '[data-divider-index="1"][data-handle="start"]', 0.5, 0.48)
 await page.getByRole('button', { name: 'Save layout' }).tap()
 await waitForDrawerHidden(page)
 const drawerHiddenAfterLayoutSave = await page.locator('.motion-drawer').boundingBox().then((box) => box && box.y > 830)
@@ -157,6 +157,9 @@ const storedLayoutInfo = await page.evaluate(() => {
     name: latest?.name ?? '',
     activeLayoutId,
     panels: latest?.panels?.length ?? 0,
+    snapJunction: latest?.panels?.some((panel) =>
+      panel.points?.some(([x, y]) => Math.abs(x - 50) < 0.5 && Math.abs(y - 48) < 0.5),
+    ) ?? false,
     hasDiagonal: latest?.panels?.some((panel) =>
       panel.points?.some(([x, y]) => ![0, 100].includes(Math.round(x)) && ![0, 100].includes(Math.round(y))),
     ) ?? false,
@@ -214,6 +217,7 @@ const result = {
   exportedSize,
   manifestName: manifest.name,
   bodyOverflow,
+  creatorTextHasRay,
   drawerHiddenAfterLayoutSave,
   storedLayoutInfo,
   restoredLayoutName,
@@ -246,12 +250,15 @@ const failures = [
   result.exportedSize.width === 1440 && result.exportedSize.height === 2560 ? null : '9:16 export dimensions are incorrect',
   result.manifestName === 'Instacomic' ? null : 'manifest did not load',
   result.bodyOverflow === 'hidden' ? null : 'body is scrollable',
-  result.storedLayoutInfo.count > 0 ? null : 'custom ray layout was not saved',
+  result.creatorTextHasRay === false ? null : 'custom layout maker still exposes ray copy',
+  result.storedLayoutInfo.count > 0 ? null : 'custom layout was not saved',
   result.storedLayoutInfo.name === 'Final Layout' ? null : 'custom layout name was not saved',
   result.storedLayoutInfo.activeLayoutId?.startsWith('custom-') ? null : 'active layout id was not persisted',
   result.restoredLayoutName === 'Final Layout' ? null : 'last custom layout was not restored on reload',
   result.drawerHiddenAfterLayoutSave ? null : 'drawer did not close after saving a custom layout',
-  result.storedLayoutInfo.hasDiagonal ? null : 'custom layout did not preserve diagonal panels',
+  result.storedLayoutInfo.panels === 3 ? null : 'custom snapped layout did not create three panels',
+  result.storedLayoutInfo.snapJunction ? null : 'custom layout did not snap divider endpoint to another divider',
+  result.storedLayoutInfo.hasDiagonal ? null : 'custom layout did not preserve connected non-rectangular panels',
   result.deleteButtonVisible ? null : 'custom layout delete button was not visible',
   result.deletedLayoutInfo.count === 0 ? null : 'custom layout was not deleted from storage',
   result.deletedLayoutInfo.activeLayoutId === 'shard' ? null : 'active layout did not fall back after deleting current custom layout',
@@ -344,11 +351,13 @@ async function waitForDrawerHidden(page) {
   })
 }
 
-async function dragCreatorLine(page, selector, dx, dy) {
+async function dragCreatorHandleToPercent(page, selector, targetX, targetY) {
+  const canvas = await page.locator('.creator-canvas').boundingBox()
   const box = await page.locator(selector).first().boundingBox()
   const start = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+  const end = { x: canvas.x + canvas.width * targetX, y: canvas.y + canvas.height * targetY }
   await page.mouse.move(start.x, start.y)
   await page.mouse.down()
-  await page.mouse.move(start.x + dx, start.y + dy, { steps: 8 })
+  await page.mouse.move(end.x, end.y, { steps: 8 })
   await page.mouse.up()
 }

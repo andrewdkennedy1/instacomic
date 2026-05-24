@@ -130,6 +130,11 @@ type LineTouchState = {
   rect: DOMRect
 }
 
+type CustomPoint = {
+  x: number
+  y: number
+}
+
 function createShot(dataUrl: string, width?: number, height?: number): Shot {
   return {
     dataUrl,
@@ -187,6 +192,7 @@ function nextOpenPanelId(layout: Layout, shots: Record<string, Shot>) {
 }
 
 const CREATOR_CANVAS_ASPECT = 1.45
+const CREATOR_SNAP_DISTANCE = 4.5
 
 const pageFormats: PageFormat[] = [
   { id: '4:5', label: 'Post', detail: 'Instagram portrait', width: 4, height: 5 },
@@ -932,7 +938,7 @@ function App() {
 
   function updateDraftLine(lineId: string, update: Partial<CustomLine>) {
     setDraftLines((current) =>
-      current.map((line) => (line.id === lineId ? clampCustomLine({ ...line, ...update }) : line)),
+      current.map((line) => (line.id === lineId ? snapCustomLine(clampCustomLine({ ...line, ...update }), current, lineId) : line)),
     )
   }
 
@@ -949,7 +955,7 @@ function App() {
     const panels = panelsFromLines(draftLines)
 
     if (panels.length === 0) {
-      setStatus('Move a ray before saving.')
+      setStatus('Move a divider before saving.')
       return
     }
 
@@ -1858,22 +1864,6 @@ function CreatorPanel({
     }
   }
 
-  function nudgeLine(line: CustomLine, key: string, shift: boolean) {
-    const step = shift ? 5 : 2
-    if (key === 'ArrowLeft') {
-      onMoveLine(line.id, { x1: line.x1 - step, x2: line.x2 - step })
-    }
-    if (key === 'ArrowRight') {
-      onMoveLine(line.id, { x1: line.x1 + step, x2: line.x2 + step })
-    }
-    if (key === 'ArrowUp') {
-      onMoveLine(line.id, { y1: line.y1 - step, y2: line.y2 - step })
-    }
-    if (key === 'ArrowDown') {
-      onMoveLine(line.id, { y1: line.y1 + step, y2: line.y2 + step })
-    }
-  }
-
   function submitLayout(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (document.activeElement instanceof HTMLElement) {
@@ -1887,7 +1877,7 @@ function CreatorPanel({
       <div
         ref={canvasRef}
         className="creator-canvas"
-        aria-label="Drag layout rays"
+        aria-label="Drag layout divider handles"
         onTouchStart={beginLineTouch}
         onTouchMove={moveLineFromTouch}
         onTouchEnd={(event) => {
@@ -1897,54 +1887,30 @@ function CreatorPanel({
         }}
         onTouchCancel={clearLineTouch}
       >
-        <span className="creator-ray-chip" aria-hidden="true">
-          RAYS
-        </span>
         {previewPanels.map((panel) => (
           <div key={panel.id} className="creator-panel" style={panelStyle(panel)} />
         ))}
-        {draftLines.map((line) => (
+        {draftLines.map((line, index) => (
           <React.Fragment key={line.id}>
-            <button
+            <span
               className={`creator-free-line ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
               style={lineSegmentStyle(line)}
-              type="button"
-              aria-label="Move ray"
-              data-ray-id={line.id}
-              data-ray-x1={line.x1.toFixed(2)}
-              data-ray-y1={line.y1.toFixed(2)}
-              data-ray-x2={line.x2.toFixed(2)}
-              data-ray-y2={line.y2.toFixed(2)}
-              onPointerDown={(event) => beginLinePointer(event, line, 'line')}
-              onPointerMove={moveLinePointer}
-              onPointerUp={endLinePointer}
-              onPointerCancel={endLinePointer}
-              onTouchStart={(event) => {
-                if (event.touches.length > 1) {
-                  beginLineTouch(event)
-                }
-              }}
-              onTouchMove={moveLineFromTouch}
-              onTouchEnd={(event) => {
-                if (event.touches.length < 2) {
-                  clearLineTouch()
-                }
-              }}
-              onTouchCancel={clearLineTouch}
-              onKeyDown={(event) => {
-                if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
-                  event.preventDefault()
-                  nudgeLine(line, event.key, event.shiftKey)
-                }
-              }}
-            >
-              <span aria-hidden="true">RAY</span>
-            </button>
+              aria-hidden="true"
+              data-divider-id={line.id}
+              data-divider-index={index}
+              data-divider-x1={line.x1.toFixed(2)}
+              data-divider-y1={line.y1.toFixed(2)}
+              data-divider-x2={line.x2.toFixed(2)}
+              data-divider-y2={line.y2.toFixed(2)}
+            />
             <button
               className={`creator-handle creator-handle-start ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
               style={lineHandleStyle(line.x1, line.y1)}
               type="button"
-              aria-label="Move ray start"
+              aria-label={`Move divider ${index + 1} start`}
+              data-divider-id={line.id}
+              data-divider-index={index}
+              data-handle="start"
               onPointerDown={(event) => beginLinePointer(event, line, 'start')}
               onPointerMove={moveLinePointer}
               onPointerUp={endLinePointer}
@@ -1966,7 +1932,10 @@ function CreatorPanel({
               className={`creator-handle creator-handle-end ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
               style={lineHandleStyle(line.x2, line.y2)}
               type="button"
-              aria-label="Move ray end"
+              aria-label={`Move divider ${index + 1} end`}
+              data-divider-id={line.id}
+              data-divider-index={index}
+              data-handle="end"
               onPointerDown={(event) => beginLinePointer(event, line, 'end')}
               onPointerMove={moveLinePointer}
               onPointerUp={endLinePointer}
@@ -1999,13 +1968,13 @@ function CreatorPanel({
       </label>
       <div className="creator-actions">
         <button type="button" onClick={() => onAddLine('diagonal')}>
-          Add diagonal ray
+          Add diagonal divider
         </button>
         <button type="button" onClick={() => onAddLine('vertical')}>
-          Add straight ray
+          Add straight divider
         </button>
         <button type="button" onClick={onReset}>
-          Reset rays
+          Reset
         </button>
         <button type="submit" className="primary">
           Save layout
@@ -2799,26 +2768,26 @@ function createDraftLine(preset: CustomLinePreset, index = 0): CustomLine {
   }
 
   if (preset === 'vertical') {
-    const x = clamp(42 + offset, 14, 86)
-    return { ...base, x1: x, y1: 4, x2: x, y2: 96 }
+    const x = clamp(50 + offset / 2, 14, 86)
+    return { ...base, x1: x, y1: 0, x2: x, y2: 100 }
   }
 
   if (preset === 'horizontal') {
-    const y = clamp(36 + offset, 14, 86)
-    return { ...base, x1: 4, y1: y, x2: 96, y2: y }
+    const y = clamp(48 + offset / 2, 14, 86)
+    return { ...base, x1: 0, y1: y, x2: 100, y2: y }
   }
 
   return {
     ...base,
-    x1: 6,
-    y1: clamp(26 + offset, 10, 84),
-    x2: 94,
-    y2: clamp(72 - offset / 2, 16, 90),
+    x1: 0,
+    y1: clamp(24 + offset, 10, 84),
+    x2: 100,
+    y2: clamp(74 - offset / 2, 16, 90),
   }
 }
 
 function createDefaultDraftLines() {
-  return [createDraftLine('diagonal', 0), createDraftLine('vertical', 1)]
+  return [createDraftLine('vertical', 0), createDraftLine('horizontal', 0)]
 }
 
 function clampCustomLine(line: CustomLine): CustomLine {
@@ -2840,6 +2809,67 @@ function clampCustomLine(line: CustomLine): CustomLine {
     next.x2 = clamp(next.x1 - 14, 0, 100)
   }
   return next
+}
+
+function snapCustomLine(line: CustomLine, lines: CustomLine[], activeLineId: string): CustomLine {
+  const start = snapCustomPoint({ x: line.x1, y: line.y1 }, lines, activeLineId)
+  const end = snapCustomPoint({ x: line.x2, y: line.y2 }, lines, activeLineId)
+  return clampCustomLine({ ...line, x1: start.x, y1: start.y, x2: end.x, y2: end.y })
+}
+
+function snapCustomPoint(point: CustomPoint, lines: CustomLine[], activeLineId: string): CustomPoint {
+  const target = { x: clamp(point.x, 0, 100), y: clamp(point.y, 0, 100) }
+  let snapped = target
+  let nearestDistance = CREATOR_SNAP_DISTANCE
+
+  function consider(candidate: CustomPoint) {
+    const distance = customPointDistance(target, candidate)
+    if (distance <= nearestDistance) {
+      nearestDistance = distance
+      snapped = {
+        x: clamp(Number(candidate.x.toFixed(2)), 0, 100),
+        y: clamp(Number(candidate.y.toFixed(2)), 0, 100),
+      }
+    }
+  }
+
+  consider({ x: 0, y: target.y })
+  consider({ x: 100, y: target.y })
+  consider({ x: target.x, y: 0 })
+  consider({ x: target.x, y: 100 })
+
+  for (const line of lines) {
+    if (line.id === activeLineId) {
+      continue
+    }
+
+    consider({ x: line.x1, y: line.y1 })
+    consider({ x: line.x2, y: line.y2 })
+    consider(projectPointToLineSegment(target, line))
+  }
+
+  return snapped
+}
+
+function projectPointToLineSegment(point: CustomPoint, line: CustomLine): CustomPoint {
+  const startX = line.x1
+  const startY = line.y1 * CREATOR_CANVAS_ASPECT
+  const endX = line.x2
+  const endY = line.y2 * CREATOR_CANVAS_ASPECT
+  const pointX = point.x
+  const pointY = point.y * CREATOR_CANVAS_ASPECT
+  const dx = endX - startX
+  const dy = endY - startY
+  const lengthSquared = dx * dx + dy * dy || 1
+  const t = clamp(((pointX - startX) * dx + (pointY - startY) * dy) / lengthSquared, 0, 1)
+  return {
+    x: startX + dx * t,
+    y: (startY + dy * t) / CREATOR_CANVAS_ASPECT,
+  }
+}
+
+function customPointDistance(first: CustomPoint, second: CustomPoint) {
+  return Math.hypot(first.x - second.x, (first.y - second.y) * CREATOR_CANVAS_ASPECT)
 }
 
 function lineSegmentStyle(line: CustomLine) {
@@ -2943,6 +2973,11 @@ function panelsFromLines(lines: CustomLine[]) {
   for (const line of lines) {
     const nextPolygons: Array<Array<[number, number]>> = []
     for (const polygon of polygons) {
+      if (!lineSegmentSplitsPolygon(polygon, line)) {
+        nextPolygons.push(polygon)
+        continue
+      }
+
       const positive = clipPolygonByLine(polygon, line, true)
       const negative = clipPolygonByLine(polygon, line, false)
       const positiveArea = Math.abs(polygonArea(positive))
@@ -2967,6 +3002,131 @@ function panelsFromLines(lines: CustomLine[]) {
       h: 1,
       points: simplifyPolygon(points).map(([x, y]) => [Number(x.toFixed(2)), Number(y.toFixed(2))] as [number, number]),
     }))
+}
+
+function lineSegmentSplitsPolygon(polygon: Array<[number, number]>, line: CustomLine) {
+  const boundaryPoints = segmentPolygonBoundaryPoints(polygon, line).sort(
+    (first, second) => lineSegmentPosition(first, line) - lineSegmentPosition(second, line),
+  )
+  if (boundaryPoints.length < 2) {
+    return false
+  }
+
+  for (let index = 1; index < boundaryPoints.length; index += 1) {
+    const first = boundaryPoints[index - 1]
+    const second = boundaryPoints[index]
+    if (Math.hypot(first[0] - second[0], first[1] - second[1]) < 0.5) {
+      continue
+    }
+
+    const midpoint: [number, number] = [(first[0] + second[0]) / 2, (first[1] + second[1]) / 2]
+    if (pointInPolygon(midpoint, polygon)) {
+      return true
+    }
+  }
+
+  return false
+}
+
+function segmentPolygonBoundaryPoints(polygon: Array<[number, number]>, line: CustomLine) {
+  const points: Array<[number, number]> = []
+  const start: [number, number] = [line.x1, line.y1]
+  const end: [number, number] = [line.x2, line.y2]
+
+  if (pointOnPolygonBoundary(start, polygon)) {
+    points.push(start)
+  }
+  if (pointOnPolygonBoundary(end, polygon)) {
+    points.push(end)
+  }
+
+  for (let index = 0; index < polygon.length; index += 1) {
+    const edgeStart = polygon[index]
+    const edgeEnd = polygon[(index + 1) % polygon.length]
+    const intersection = segmentIntersectionPoint(start, end, edgeStart, edgeEnd)
+    if (intersection) {
+      points.push(intersection)
+    }
+  }
+
+  return uniquePoints(points)
+}
+
+function segmentIntersectionPoint(
+  firstStart: [number, number],
+  firstEnd: [number, number],
+  secondStart: [number, number],
+  secondEnd: [number, number],
+): [number, number] | null {
+  const firstDx = firstEnd[0] - firstStart[0]
+  const firstDy = firstEnd[1] - firstStart[1]
+  const secondDx = secondEnd[0] - secondStart[0]
+  const secondDy = secondEnd[1] - secondStart[1]
+  const denominator = firstDx * secondDy - firstDy * secondDx
+  const epsilon = 0.0001
+
+  if (Math.abs(denominator) < epsilon) {
+    const candidates = [firstStart, firstEnd, secondStart, secondEnd].filter(
+      (point) => pointOnSegment(point, firstStart, firstEnd) && pointOnSegment(point, secondStart, secondEnd),
+    )
+    return candidates[0] ?? null
+  }
+
+  const deltaX = secondStart[0] - firstStart[0]
+  const deltaY = secondStart[1] - firstStart[1]
+  const firstPosition = (deltaX * secondDy - deltaY * secondDx) / denominator
+  const secondPosition = (deltaX * firstDy - deltaY * firstDx) / denominator
+  if (firstPosition < -epsilon || firstPosition > 1 + epsilon || secondPosition < -epsilon || secondPosition > 1 + epsilon) {
+    return null
+  }
+
+  return [firstStart[0] + firstDx * firstPosition, firstStart[1] + firstDy * firstPosition]
+}
+
+function pointOnPolygonBoundary(point: [number, number], polygon: Array<[number, number]>) {
+  return polygon.some((start, index) => pointOnSegment(point, start, polygon[(index + 1) % polygon.length]))
+}
+
+function pointOnSegment(point: [number, number], start: [number, number], end: [number, number]) {
+  const distance = Math.hypot(end[0] - start[0], end[1] - start[1]) || 1
+  const cross = Math.abs((point[1] - start[1]) * (end[0] - start[0]) - (point[0] - start[0]) * (end[1] - start[1]))
+  const dot = (point[0] - start[0]) * (end[0] - start[0]) + (point[1] - start[1]) * (end[1] - start[1])
+  return cross / distance < 0.08 && dot >= -0.08 && dot <= distance * distance + 0.08
+}
+
+function lineSegmentPosition(point: [number, number], line: CustomLine) {
+  const dx = line.x2 - line.x1
+  const dy = line.y2 - line.y1
+  const lengthSquared = dx * dx + dy * dy || 1
+  return ((point[0] - line.x1) * dx + (point[1] - line.y1) * dy) / lengthSquared
+}
+
+function pointInPolygon(point: [number, number], polygon: Array<[number, number]>) {
+  if (pointOnPolygonBoundary(point, polygon)) {
+    return true
+  }
+
+  let inside = false
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index += 1) {
+    const [xi, yi] = polygon[index]
+    const [xj, yj] = polygon[previous]
+    const crosses = yi > point[1] !== yj > point[1] && point[0] < ((xj - xi) * (point[1] - yi)) / (yj - yi) + xi
+    if (crosses) {
+      inside = !inside
+    }
+  }
+
+  return inside
+}
+
+function uniquePoints(points: Array<[number, number]>) {
+  const unique: Array<[number, number]> = []
+  for (const point of points) {
+    if (!unique.some((item) => Math.hypot(item[0] - point[0], item[1] - point[1]) < 0.1)) {
+      unique.push(point)
+    }
+  }
+  return unique
 }
 
 function clipPolygonByLine(polygon: Array<[number, number]>, line: CustomLine, keepPositive: boolean) {
