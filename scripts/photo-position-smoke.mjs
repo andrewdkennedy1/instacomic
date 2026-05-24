@@ -31,8 +31,11 @@ await page.addInitScript(() => {
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
 await page.getByRole('button', { name: 'Start' }).tap()
+await page.locator('.start-screen').waitFor({ state: 'detached' })
+await setLayout(page, 'Manga')
 await setFitMode(page, 'cover')
 await tapStrip(page, 0.75, 0.31)
+await page.waitForFunction(() => document.querySelector('.live-panel.is-live')?.getAttribute('data-panel-id') === '2')
 
 const selectedPanel = await page.locator('.live-panel.is-live').getAttribute('data-panel-id')
 await page.setInputFiles('.photo-upload', {
@@ -76,13 +79,13 @@ await browser.close()
 console.log(JSON.stringify(result, null, 2))
 
 const failures = [
-  result.selectedPanel === '2' ? null : 'panel selection did not land on polygon panel 2',
+  result.selectedPanel === '2' ? null : 'panel selection did not land on rectangular built-in panel 2',
   result.frame.sourceRatio > 2.95 && result.frame.sourceRatio < 3.05 ? null : 'uploaded landscape source dimensions were not preserved',
   Math.abs(result.frame.renderedRatio - result.frame.sourceRatio) / result.frame.sourceRatio < 0.08
     ? null
-    : 'uploaded landscape photo is rendered with the canvas aspect ratio instead of the source photo ratio',
-  result.frame.w > 1.8 && result.frame.w < 1.95 ? null : 'uploaded landscape fill mode did not account for the canvas aspect ratio',
-  result.frame.h > 0.45 && result.frame.h < 0.55 ? null : 'uploaded landscape photo is not fitted to the polygon panel height',
+    : 'uploaded landscape photo is rendered with the built-in panel aspect ratio instead of the source photo ratio',
+  result.frame.w > 2.9 && result.frame.w < 3.05 ? null : 'uploaded landscape fill mode did not account for the rectangular built-in panel aspect ratio',
+  result.frame.h > 0.95 && result.frame.h < 1.05 ? null : 'uploaded landscape photo is not fitted to the rectangular built-in panel height',
   result.afterTransform.x > result.beforeTransform.x + 0.2 ? null : 'manual photo drag did not update the shot offset',
   result.beforePixel.width === 1440 && result.beforePixel.height === 1800 ? null : 'default 4:5 export dimensions are incorrect',
   result.exportedMovedRedDelta > 25 && result.exportedMovedBlueDelta > 25
@@ -104,6 +107,13 @@ async function setFitMode(page, value) {
   await openDrawer(page)
   await page.getByRole('button', { name: 'Save', exact: true }).tap()
   await page.locator('.motion-drawer-style select').selectOption(value)
+  await closeDrawer(page)
+}
+
+async function setLayout(page, name) {
+  await openDrawer(page)
+  await page.getByRole('button', { name: 'Layout', exact: true }).tap()
+  await page.getByRole('button', { name: new RegExp(`^${name}$`) }).tap()
   await closeDrawer(page)
 }
 

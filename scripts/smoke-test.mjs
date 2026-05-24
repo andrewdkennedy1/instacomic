@@ -18,10 +18,19 @@ await enableStandalone(page)
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
 const formatOptionCount = await page.locator('.format-option').count()
 const squareFormatOptionCount = await page.locator('.format-option', { hasText: '1:1' }).count()
+const formatPickerCentered = await page.locator('.format-options').evaluate((picker) => {
+  const pickerBox = picker.getBoundingClientRect()
+  const optionBoxes = [...picker.querySelectorAll('.format-option')].map((option) => option.getBoundingClientRect())
+  const first = optionBoxes[0]
+  const last = optionBoxes.at(-1)
+  return !!first && !!last && Math.abs((first.left - pickerBox.left) - (pickerBox.right - last.right)) < 1
+})
 await page.getByRole('button', { name: /9:16/ }).tap()
 const selectedFormat = await page.locator('.format-option.active strong').textContent()
 await page.getByRole('button', { name: 'Start' }).tap()
+await page.locator('.start-screen').waitFor({ state: 'detached' })
 await tapStrip(page, 0.75, 0.31)
+await page.waitForFunction(() => document.querySelector('.live-panel.is-live')?.getAttribute('data-panel-id') === '2')
 const selectedPanel = await page.locator('.live-panel.is-live').getAttribute('data-panel-id')
 await page.setInputFiles('.photo-upload', {
   name: 'panel.png',
@@ -245,6 +254,7 @@ const result = {
   title,
   formatOptionCount,
   squareFormatOptionCount,
+  formatPickerCentered,
   selectedFormat,
   selectedPanel,
   uploadedPhoto,
@@ -293,6 +303,7 @@ console.log(JSON.stringify(result, null, 2))
 const failures = [
   result.formatOptionCount === 3 ? null : 'start ratio selector does not expose three options',
   result.squareFormatOptionCount === 0 ? null : 'start ratio selector still exposes 1:1',
+  result.formatPickerCentered ? null : 'start ratio selector options are not centered',
   result.selectedFormat === '9:16' ? null : 'start ratio selector did not select 9:16',
   result.selectedPanel === '2' ? null : 'panel selection did not land on panel 2',
   result.uploadedPhoto === 1 ? null : 'photo upload did not fill the active panel',

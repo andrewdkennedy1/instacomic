@@ -2663,7 +2663,7 @@ function panelStyle(panel: Panel) {
 function shotImageStyle(panel: Panel, shot: Shot, fit: PanelFit, pageFormat: PageFormat) {
   const bounds = panelPhotoFrameBounds(panel)
   const imageRatio = shot.width && shot.height ? shot.width / shot.height : bounds.w / bounds.h
-  const size = imageFitSize(imageRatio, bounds.w, bounds.h, fit, pageFormatCanvasAspect(pageFormat))
+  const size = imageFitSize(imageRatio, bounds.w, bounds.h, fit, panelCssAspectScale(panel, pageFormat))
 
   return {
     left: `${(bounds.x + (bounds.w - size.width * shot.scale) / 2 + shot.offsetX * bounds.w) * 100}%`,
@@ -2672,6 +2672,11 @@ function shotImageStyle(panel: Panel, shot: Shot, fit: PanelFit, pageFormat: Pag
     height: `${size.height * shot.scale * 100}%`,
     objectFit: 'fill',
   } as React.CSSProperties
+}
+
+function panelCssAspectScale(panel: Panel, pageFormat: PageFormat) {
+  const pageAspect = pageFormatCanvasAspect(pageFormat)
+  return panel.w > 0 ? (panel.h * pageAspect) / panel.w : pageAspect
 }
 
 function photoFrameStyle(panel: Panel, fit: PanelFit) {
