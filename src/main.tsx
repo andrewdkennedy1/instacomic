@@ -28,6 +28,8 @@ type Layout = {
 
 type Shot = {
   dataUrl: string
+  width?: number
+  height?: number
   offsetX: number
   offsetY: number
   scale: number
@@ -128,9 +130,11 @@ type LineTouchState = {
   rect: DOMRect
 }
 
-function createShot(dataUrl: string): Shot {
+function createShot(dataUrl: string, width?: number, height?: number): Shot {
   return {
     dataUrl,
+    width,
+    height,
     offsetX: 0,
     offsetY: 0,
     scale: 1,
@@ -782,7 +786,7 @@ function App() {
     }
 
     context.drawImage(video, 0, 0, canvas.width, canvas.height)
-    const nextShot = createShot(canvas.toDataURL('image/jpeg', 0.92))
+    const nextShot = createShot(canvas.toDataURL('image/jpeg', 0.92), canvas.width, canvas.height)
     const nextCache = putShotInCache(layout, shots, shotCacheRef.current, activePanelId, nextShot)
     shotCacheRef.current = nextCache
     const nextShots = shotsForLayout(layout, nextCache)
@@ -819,7 +823,14 @@ function App() {
     }
 
     const dataUrl = await readFileAsDataUrl(file)
-    const nextShot = createShot(dataUrl)
+    let image: HTMLImageElement
+    try {
+      image = await loadImage(dataUrl)
+    } catch {
+      setStatus('Photo upload failed.')
+      return
+    }
+    const nextShot = createShot(dataUrl, image.naturalWidth || image.width, image.naturalHeight || image.height)
     const nextCache = putShotInCache(layout, shots, shotCacheRef.current, targetPanelId, nextShot)
     shotCacheRef.current = nextCache
     const nextShots = shotsForLayout(layout, nextCache)
@@ -2541,9 +2552,16 @@ function panelStyle(panel: Panel) {
 }
 
 function shotImageStyle(panel: Panel, shot: Shot, fit: PanelFit) {
+  const bounds = panelPhotoFrameBounds(panel)
+  const imageRatio = shot.width && shot.height ? shot.width / shot.height : bounds.w / bounds.h
+  const size = imageFitSize(imageRatio, bounds.w, bounds.h, fit)
+
   return {
-    ...photoFrameStyle(panel, fit),
-    transform: `translate(${shot.offsetX * 100}%, ${shot.offsetY * 100}%) scale(${shot.scale})`,
+    left: `${(bounds.x + (bounds.w - size.width * shot.scale) / 2 + shot.offsetX * bounds.w) * 100}%`,
+    top: `${(bounds.y + (bounds.h - size.height * shot.scale) / 2 + shot.offsetY * bounds.h) * 100}%`,
+    width: `${size.width * shot.scale * 100}%`,
+    height: `${size.height * shot.scale * 100}%`,
+    objectFit: 'fill',
   } as React.CSSProperties
 }
 
@@ -2619,14 +2637,22 @@ function drawImageFit(
   const imageWidth = image.videoWidth || image.width || w
   const imageHeight = image.videoHeight || image.height || h
   const imageRatio = imageWidth / imageHeight
-  const rectRatio = w / h
-  const cover = fit === 'cover'
-  const useWidth = cover ? imageRatio < rectRatio : imageRatio > rectRatio
-  const drawW = (useWidth ? w : h * imageRatio) * shot.scale
-  const drawH = (useWidth ? w / imageRatio : h) * shot.scale
+  const size = imageFitSize(imageRatio, w, h, fit)
+  const drawW = size.width * shot.scale
+  const drawH = size.height * shot.scale
   const offsetX = shot.offsetX * w
   const offsetY = shot.offsetY * h
   context.drawImage(image, x + (w - drawW) / 2 + offsetX, y + (h - drawH) / 2 + offsetY, drawW, drawH)
+}
+
+function imageFitSize(imageRatio: number, w: number, h: number, fit: PanelFit) {
+  const rectRatio = w / h
+  const cover = fit === 'cover'
+  const useWidth = cover ? imageRatio < rectRatio : imageRatio > rectRatio
+  return {
+    width: useWidth ? w : h * imageRatio,
+    height: useWidth ? w / imageRatio : h,
+  }
 }
 
 function drawRoundedRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {

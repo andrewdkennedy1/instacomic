@@ -47,6 +47,7 @@ const frame = await page.locator('[data-panel-id="2"] img').evaluate((image) => 
   return {
     w: panel ? box.width / panel.width : 0,
     h: panel ? box.height / panel.height : 0,
+    sourceRatio: image instanceof HTMLImageElement ? image.naturalWidth / image.naturalHeight : 0,
   }
 })
 
@@ -74,8 +75,9 @@ console.log(JSON.stringify(result, null, 2))
 
 const failures = [
   result.selectedPanel === '2' ? null : 'panel selection did not land on polygon panel 2',
-  result.frame.w > 0.5 && result.frame.w < 0.6 ? null : 'polygon photo frame is not using the panel bounds width',
-  result.frame.h > 0.45 && result.frame.h < 0.55 ? null : 'polygon photo frame is not using the panel bounds height',
+  result.frame.sourceRatio > 2.95 && result.frame.sourceRatio < 3.05 ? null : 'uploaded landscape source dimensions were not preserved',
+  result.frame.w > 1.45 && result.frame.w < 1.55 ? null : 'uploaded landscape photo is still cropped to the panel width',
+  result.frame.h > 0.45 && result.frame.h < 0.55 ? null : 'uploaded landscape photo is not fitted to the polygon panel height',
   result.afterTransform.x > result.beforeTransform.x + 0.2 ? null : 'manual photo drag did not update the shot offset',
   result.beforePixel.width === 1440 && result.beforePixel.height === 1800 ? null : 'default 4:5 export dimensions are incorrect',
   result.exportedMovedRedDelta > 25 && result.exportedMovedBlueDelta > 25
