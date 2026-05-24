@@ -646,6 +646,8 @@ select:focus-visible,
 .creator-stack {
   --creator-divider-thickness: 9px;
   --creator-handle-size: 44px;
+  --creator-page-width: 4;
+  --creator-page-height: 5;
   display: grid;
   gap: 14px;
   width: 100%;
@@ -721,7 +723,7 @@ select:focus-visible,
 .creator-canvas {
   position: relative;
   width: min(100%, 480px);
-  aspect-ratio: 1 / 1.45;
+  aspect-ratio: var(--creator-page-width) / var(--creator-page-height);
   justify-self: center;
   align-self: center;
   overflow: hidden;

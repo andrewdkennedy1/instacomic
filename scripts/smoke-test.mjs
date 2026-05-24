@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync } from 'node:fs'
+import { inflateSync } from 'node:zlib'
 import { chromium } from 'playwright'
 
 const browser = await chromium.launch()
@@ -145,6 +146,8 @@ await page.locator('.creator-fullscreen').waitFor()
 await waitForDrawerHidden(page)
 const creatorFullscreenVisible = await page.locator('.creator-fullscreen').count()
 const drawerHiddenAfterCreate = await page.locator('.motion-drawer').boundingBox().then((box) => box && box.y > 830)
+const creatorCanvasFormat = await page.locator('.creator-canvas').getAttribute('data-page-format')
+const creatorCanvasAspect = await page.locator('.creator-canvas').boundingBox().then((box) => (box ? box.height / box.width : 0))
 await page.getByPlaceholder('My manga layout').fill('Final Layout')
 await page.getByPlaceholder('My manga layout').blur()
 await page.getByLabel('Divider thickness').evaluate((input) => {
@@ -164,6 +167,10 @@ await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
 const creatorClosedAfterLayoutSave = await page.locator('.creator-fullscreen').count() === 0
 await waitForDrawerHidden(page)
 const drawerHiddenAfterLayoutSave = await page.locator('.motion-drawer').boundingBox().then((box) => box && box.y > 830)
+const liveGutterAfterLayoutSave = await page.locator('.live-strip').evaluate((strip) => {
+  return Number.parseFloat(getComputedStyle(strip).getPropertyValue('--gutter'))
+})
+const liveAspectAfterLayoutSave = await page.locator('.live-strip').boundingBox().then((box) => (box ? box.height / box.width : 0))
 const storedLayoutInfo = await page.evaluate(() => {
   const layouts = JSON.parse(localStorage.getItem('instacomic.customLayouts.v1') ?? '[]')
   const activeLayoutId = localStorage.getItem('instacomic.activeLayout.v1')
@@ -172,6 +179,8 @@ const storedLayoutInfo = await page.evaluate(() => {
     count: layouts.length,
     name: latest?.name ?? '',
     activeLayoutId,
+    dividerThickness: latest?.dividerThickness ?? null,
+    pageFormatId: latest?.pageFormatId ?? null,
     panels: latest?.panels?.length ?? 0,
     snapJunction: latest?.panels?.some((panel) =>
       panel.points?.some(([x, y]) => Math.abs(x - 50) < 0.5 && Math.abs(y - 48) < 0.5),
@@ -187,8 +196,30 @@ mkdirSync('docs', { recursive: true })
 await closeDrawer(page)
 await page.screenshot({ path: 'test-results/instacomic-mobile.png', fullPage: true })
 await page.screenshot({ path: 'docs/instacomic-mobile.png', fullPage: true })
+await openDrawer(page)
+await page.getByRole('button', { name: 'Save', exact: true }).tap()
+await page
+  .locator('.motion-drawer-style label')
+  .filter({ hasText: 'Paper' })
+  .locator('input[type="color"]')
+  .evaluate((input) => {
+    const color = input
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    valueSetter?.call(color, '#ffed5a')
+    color.dispatchEvent(new Event('input', { bubbles: true }))
+    color.dispatchEvent(new Event('change', { bubbles: true }))
+  })
+await closeDrawer(page)
+const customDownload = await Promise.all([
+  page.waitForEvent('download'),
+  page.getByRole('button', { name: 'Share' }).tap(),
+]).then(([download]) => download)
+const customDownloadPath = await customDownload.path()
+const customExportedSize = pngSize(customDownloadPath)
+const customDividerRun = paperRun(customDownloadPath, Math.round(customExportedSize.width * 0.5), Math.round(customExportedSize.height * 0.24), '#ffed5a')
 await page.reload({ waitUntil: 'networkidle' })
 const restoredLayoutName = await page.locator('.live-strip').getAttribute('data-layout-name')
+const restoredLayoutAspect = await page.locator('.live-strip').boundingBox().then((box) => (box ? box.height / box.width : 0))
 await page.getByRole('button', { name: 'Start' }).tap()
 await openDrawer(page)
 await page.getByRole('button', { name: 'Layout' }).tap()
@@ -235,13 +266,21 @@ const result = {
   bodyOverflow,
   creatorFullscreenVisible,
   drawerHiddenAfterCreate,
+  creatorCanvasFormat,
+  creatorCanvasAspect,
   creatorThickness,
   dividerVisualThickness,
   creatorTextHasRay,
   creatorClosedAfterLayoutSave,
   drawerHiddenAfterLayoutSave,
+  liveGutterAfterLayoutSave,
+  liveAspectAfterLayoutSave,
   storedLayoutInfo,
+  customSharedFile: customDownload.suggestedFilename(),
+  customExportedSize,
+  customDividerRun,
   restoredLayoutName,
+  restoredLayoutAspect,
   deleteButtonVisible,
   deletedLayoutInfo,
   layoutAfterDeleteName,
@@ -273,6 +312,8 @@ const failures = [
   result.bodyOverflow === 'hidden' ? null : 'body is scrollable',
   result.creatorFullscreenVisible === 1 ? null : 'custom layout creator did not open fullscreen',
   result.drawerHiddenAfterCreate ? null : 'drawer stayed visible behind the fullscreen creator',
+  result.creatorCanvasFormat === '9:16' ? null : 'custom layout creator did not inherit the selected aspect ratio id',
+  Math.abs(result.creatorCanvasAspect - 16 / 9) < 0.08 ? null : 'custom layout creator canvas did not render as 9:16',
   result.creatorThickness === 16 ? null : 'custom layout thickness control did not update state',
   result.dividerVisualThickness >= 15 ? null : 'custom layout thickness control did not update divider styling',
   result.creatorTextHasRay === false ? null : 'custom layout maker still exposes ray copy',
@@ -280,7 +321,15 @@ const failures = [
   result.storedLayoutInfo.count > 0 ? null : 'custom layout was not saved',
   result.storedLayoutInfo.name === 'Final Layout' ? null : 'custom layout name was not saved',
   result.storedLayoutInfo.activeLayoutId?.startsWith('custom-') ? null : 'active layout id was not persisted',
+  result.storedLayoutInfo.dividerThickness === 16 ? null : 'custom layout did not persist divider thickness',
+  result.storedLayoutInfo.pageFormatId === '9:16' ? null : 'custom layout did not persist selected aspect ratio',
+  result.liveGutterAfterLayoutSave === 16 ? null : 'saved custom layout did not apply divider thickness to the live layout',
+  Math.abs(result.liveAspectAfterLayoutSave - 16 / 9) < 0.08 ? null : 'saved custom layout did not keep the live canvas at 9:16',
+  result.customSharedFile === 'instacomic.png' ? null : 'custom layout share fallback did not produce instacomic.png',
+  result.customExportedSize.width === 1440 && result.customExportedSize.height === 2560 ? null : 'custom 9:16 export dimensions are incorrect',
+  result.customDividerRun.width >= 18 ? null : 'custom layout export did not render the selected divider thickness',
   result.restoredLayoutName === 'Final Layout' ? null : 'last custom layout was not restored on reload',
+  Math.abs(result.restoredLayoutAspect - 16 / 9) < 0.08 ? null : 'restored custom layout did not restore its saved aspect ratio',
   result.drawerHiddenAfterLayoutSave ? null : 'drawer did not close after saving a custom layout',
   result.storedLayoutInfo.panels === 3 ? null : 'custom snapped layout did not create three panels',
   result.storedLayoutInfo.snapJunction ? null : 'custom layout did not snap divider endpoint to another divider',
@@ -326,6 +375,148 @@ function pngSize(path) {
     width: buffer.readUInt32BE(16),
     height: buffer.readUInt32BE(20),
   }
+}
+
+function paperRun(path, x, y, paperHex) {
+  const image = decodePng(path)
+  const target = hexToRgb(paperHex)
+  const targetX = clampNumber(x, 0, image.width - 1)
+  const targetY = clampNumber(y, 0, image.height - 1)
+  const centerPixel = pixelAt(image, targetX, targetY)
+  let left = targetX
+  let right = targetX
+
+  while (left > 0 && colorMatches(pixelAt(image, left - 1, targetY), target)) {
+    left -= 1
+  }
+  while (right < image.width - 1 && colorMatches(pixelAt(image, right + 1, targetY), target)) {
+    right += 1
+  }
+
+  return {
+    x: targetX,
+    y: targetY,
+    width: colorMatches(centerPixel, target) ? right - left + 1 : 0,
+    centerPixel,
+  }
+}
+
+function decodePng(path) {
+  const buffer = readFileSync(path)
+  const signature = '89504e470d0a1a0a'
+  if (buffer.subarray(0, 8).toString('hex') !== signature) {
+    throw new Error('Downloaded file is not a PNG')
+  }
+
+  let width = 0
+  let height = 0
+  let bitDepth = 0
+  let colorType = 0
+  const idat = []
+
+  for (let offset = 8; offset < buffer.length;) {
+    const length = buffer.readUInt32BE(offset)
+    const type = buffer.toString('ascii', offset + 4, offset + 8)
+    const dataStart = offset + 8
+    const dataEnd = dataStart + length
+
+    if (type === 'IHDR') {
+      width = buffer.readUInt32BE(dataStart)
+      height = buffer.readUInt32BE(dataStart + 4)
+      bitDepth = buffer[dataStart + 8]
+      colorType = buffer[dataStart + 9]
+    } else if (type === 'IDAT') {
+      idat.push(buffer.subarray(dataStart, dataEnd))
+    } else if (type === 'IEND') {
+      break
+    }
+
+    offset = dataEnd + 4
+  }
+
+  const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : 0
+  if (bitDepth !== 8 || channels === 0) {
+    throw new Error(`Unsupported PNG format: bit depth ${bitDepth}, color type ${colorType}`)
+  }
+
+  const inflated = inflateSync(Buffer.concat(idat))
+  const stride = width * channels
+  const pixels = Buffer.alloc(height * stride)
+  let sourceOffset = 0
+
+  for (let row = 0; row < height; row += 1) {
+    const filter = inflated[sourceOffset]
+    sourceOffset += 1
+    const rowOffset = row * stride
+    const previousRowOffset = rowOffset - stride
+
+    for (let column = 0; column < stride; column += 1) {
+      const raw = inflated[sourceOffset]
+      sourceOffset += 1
+      const left = column >= channels ? pixels[rowOffset + column - channels] : 0
+      const up = row > 0 ? pixels[previousRowOffset + column] : 0
+      const upLeft = row > 0 && column >= channels ? pixels[previousRowOffset + column - channels] : 0
+      pixels[rowOffset + column] = unfilterByte(filter, raw, left, up, upLeft)
+    }
+  }
+
+  return { width, height, channels, pixels }
+}
+
+function unfilterByte(filter, raw, left, up, upLeft) {
+  if (filter === 0) {
+    return raw
+  }
+  if (filter === 1) {
+    return (raw + left) & 0xff
+  }
+  if (filter === 2) {
+    return (raw + up) & 0xff
+  }
+  if (filter === 3) {
+    return (raw + Math.floor((left + up) / 2)) & 0xff
+  }
+  if (filter === 4) {
+    return (raw + paeth(left, up, upLeft)) & 0xff
+  }
+  throw new Error(`Unsupported PNG filter ${filter}`)
+}
+
+function paeth(left, up, upLeft) {
+  const estimate = left + up - upLeft
+  const leftDistance = Math.abs(estimate - left)
+  const upDistance = Math.abs(estimate - up)
+  const upLeftDistance = Math.abs(estimate - upLeft)
+  if (leftDistance <= upDistance && leftDistance <= upLeftDistance) {
+    return left
+  }
+  return upDistance <= upLeftDistance ? up : upLeft
+}
+
+function pixelAt(image, x, y) {
+  const offset = (y * image.width + x) * image.channels
+  return [
+    image.pixels[offset],
+    image.pixels[offset + 1],
+    image.pixels[offset + 2],
+    image.channels === 4 ? image.pixels[offset + 3] : 255,
+  ]
+}
+
+function hexToRgb(hex) {
+  return [
+    Number.parseInt(hex.slice(1, 3), 16),
+    Number.parseInt(hex.slice(3, 5), 16),
+    Number.parseInt(hex.slice(5, 7), 16),
+  ]
+}
+
+function colorMatches(pixel, target) {
+  return Math.abs(pixel[0] - target[0]) <= 8 && Math.abs(pixel[1] - target[1]) <= 8 && Math.abs(pixel[2] - target[2]) <= 8
+}
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, value))
 }
 
 async function pinchPanelPhoto(page, nx, ny) {

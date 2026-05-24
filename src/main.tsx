@@ -24,6 +24,8 @@ type Layout = {
   name: string
   panels: Panel[]
   custom?: boolean
+  dividerThickness?: number
+  pageFormatId?: PageFormatId
 }
 
 type Shot = {
@@ -191,7 +193,6 @@ function nextOpenPanelId(layout: Layout, shots: Record<string, Shot>) {
   return layout.panels.find((panel) => !shots[panel.id])?.id ?? null
 }
 
-const CREATOR_CANVAS_ASPECT = 1.45
 const CREATOR_SNAP_DISTANCE = 4.5
 
 const pageFormats: PageFormat[] = [
@@ -205,6 +206,22 @@ const defaultPageFormat = pageFormats[0]
 
 function getPageFormat(id: string | null) {
   return pageFormats.find((format) => format.id === id) ?? defaultPageFormat
+}
+
+function pageFormatCanvasAspect(format: PageFormat) {
+  return format.height / format.width
+}
+
+function pageFormatForLayout(layout: Layout, fallback: PageFormat) {
+  return pageFormats.find((format) => format.id === layout.pageFormatId) ?? fallback
+}
+
+function layoutDividerThickness(layout: Layout) {
+  if (typeof layout.dividerThickness !== 'number' || Number.isNaN(layout.dividerThickness)) {
+    return null
+  }
+
+  return clamp(Math.round(layout.dividerThickness), 0, 24)
 }
 
 const layouts: Layout[] = [
@@ -440,6 +457,7 @@ function App() {
     '--page-width': pageFormat.width,
     '--page-height': pageFormat.height,
   } as React.CSSProperties
+  const creatorCanvasAspect = pageFormatCanvasAspect(pageFormat)
 
   useEffect(() => {
     const handleBeforeInstallPrompt = (event: Event) => {
@@ -462,11 +480,12 @@ function App() {
     try {
       const stored = localStorage.getItem(CUSTOM_LAYOUT_KEY)
       const storedActiveLayoutId = localStorage.getItem(ACTIVE_LAYOUT_KEY)
-      setPageFormat(getPageFormat(localStorage.getItem(PAGE_FORMAT_KEY)))
+      const storedPageFormat = getPageFormat(localStorage.getItem(PAGE_FORMAT_KEY))
+      let restoredLayout: Layout | undefined
       if (stored) {
         const parsed = JSON.parse(stored) as Layout[]
         const validLayouts = parsed.filter((item) => Array.isArray(item.panels) && item.panels.length > 0)
-        const restoredLayout = [...layouts, ...validLayouts].find((item) => item.id === storedActiveLayoutId)
+        restoredLayout = [...layouts, ...validLayouts].find((item) => item.id === storedActiveLayoutId)
         setCustomLayouts(validLayouts)
 
         if (restoredLayout) {
@@ -475,12 +494,18 @@ function App() {
           setStatus(`${restoredLayout.name} layout restored.`)
         }
       } else {
-        const restoredLayout = layouts.find((item) => item.id === storedActiveLayoutId)
+        restoredLayout = layouts.find((item) => item.id === storedActiveLayoutId)
         if (restoredLayout) {
           setLayout(restoredLayout)
           setActivePanelId(restoredLayout.panels[0]?.id ?? null)
           setStatus(`${restoredLayout.name} layout restored.`)
         }
+      }
+
+      setPageFormat(restoredLayout ? pageFormatForLayout(restoredLayout, storedPageFormat) : storedPageFormat)
+      const restoredDividerThickness = restoredLayout ? layoutDividerThickness(restoredLayout) : null
+      if (restoredDividerThickness !== null) {
+        setSettings((current) => ({ ...current, gutters: restoredDividerThickness }))
       }
     } catch {
       localStorage.removeItem(CUSTOM_LAYOUT_KEY)
@@ -852,7 +877,14 @@ function App() {
     shotCacheRef.current = nextCache
     const nextShots = shotsForLayout(nextLayout, nextCache)
     const restoredCount = Object.keys(nextShots).length
+    const nextDividerThickness = layoutDividerThickness(nextLayout)
     setLayout(nextLayout)
+    if (nextLayout.pageFormatId) {
+      setPageFormat(pageFormatForLayout(nextLayout, pageFormat))
+    }
+    if (nextDividerThickness !== null) {
+      setSettings((current) => ({ ...current, gutters: nextDividerThickness }))
+    }
     setActivePanelId(nextOpenPanelId(nextLayout, nextShots))
     setShots(nextShots)
     setStatus(
@@ -940,7 +972,7 @@ function App() {
 
   function updateDraftLine(lineId: string, update: Partial<CustomLine>) {
     setDraftLines((current) =>
-      current.map((line) => (line.id === lineId ? snapCustomLine(clampCustomLine({ ...line, ...update }), current, lineId) : line)),
+      current.map((line) => (line.id === lineId ? snapCustomLine(clampCustomLine({ ...line, ...update }), current, lineId, creatorCanvasAspect) : line)),
     )
   }
 
@@ -976,6 +1008,8 @@ function App() {
       id: `custom-${Date.now()}`,
       name: draftName.trim() || `Custom ${customLayouts.length + 1}`,
       custom: true,
+      dividerThickness: draftThickness,
+      pageFormatId: pageFormat.id,
       panels,
     }
     setCustomLayouts((current) => [...current, customLayout])
@@ -1512,6 +1546,7 @@ function App() {
               draftName={draftName}
               draftLines={draftLines}
               dividerThickness={draftThickness}
+              pageFormat={pageFormat}
               onName={setDraftName}
               onAddLine={addDraftLine}
               onMoveLine={updateDraftLine}
@@ -1679,6 +1714,7 @@ function CreatorPanel({
   draftName,
   draftLines,
   dividerThickness,
+  pageFormat,
   onName,
   onAddLine,
   onMoveLine,
@@ -1690,6 +1726,7 @@ function CreatorPanel({
   draftName: string
   draftLines: CustomLine[]
   dividerThickness: number
+  pageFormat: PageFormat
   onName: (name: string) => void
   onAddLine: (preset: CustomLinePreset) => void
   onMoveLine: (lineId: string, update: Partial<CustomLine>) => void
@@ -1710,9 +1747,12 @@ function CreatorPanel({
   const lineTouchRef = useRef<LineTouchState | null>(null)
   const linePointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(new Map())
   const previewPanels = useMemo(() => panelsFromLines(draftLines), [draftLines])
+  const canvasAspect = pageFormatCanvasAspect(pageFormat)
   const creatorStyle = {
     '--creator-divider-thickness': `${dividerThickness}px`,
     '--creator-handle-size': `${Math.max(40, dividerThickness * 4)}px`,
+    '--creator-page-width': pageFormat.width,
+    '--creator-page-height': pageFormat.height,
   } as React.CSSProperties
 
   function beginLineDrag(event: PointerEvent<HTMLElement>, line: CustomLine, mode: 'line' | 'start' | 'end') {
@@ -1838,7 +1878,7 @@ function CreatorPanel({
     }
 
     const center = touchCenterPercent(event.touches, rect)
-    const line = nearestLineToPoint(draftLines, center.x, center.y)
+    const line = nearestLineToPoint(draftLines, center.x, center.y, canvasAspect)
     if (!line) {
       return
     }
@@ -1885,7 +1925,7 @@ function CreatorPanel({
     const rotation = angleDelta(activeTouch.startAngle, touchAngle(touches))
     onMoveLine(
       activeTouch.id,
-      transformLineByTouch(activeTouch.line, activeTouch.startCenterX, activeTouch.startCenterY, center.x, center.y, scale, rotation),
+      transformLineByTouch(activeTouch.line, activeTouch.startCenterX, activeTouch.startCenterY, center.x, center.y, scale, rotation, canvasAspect),
     )
   }
 
@@ -1917,7 +1957,13 @@ function CreatorPanel({
   }
 
   return (
-    <form className="creator-stack" style={creatorStyle} data-divider-thickness={dividerThickness} onSubmit={submitLayout}>
+    <form
+      className="creator-stack"
+      style={creatorStyle}
+      data-divider-thickness={dividerThickness}
+      data-page-format={pageFormat.id}
+      onSubmit={submitLayout}
+    >
       <div className="creator-topbar">
         <button type="button" onClick={onCancel} aria-label="Close creator">
           Close
@@ -1932,6 +1978,7 @@ function CreatorPanel({
           ref={canvasRef}
           className="creator-canvas"
           aria-label="Drag layout divider handles"
+          data-page-format={pageFormat.id}
           onTouchStart={beginLineTouch}
           onTouchMove={moveLineFromTouch}
           onTouchEnd={(event) => {
@@ -1948,7 +1995,7 @@ function CreatorPanel({
             <React.Fragment key={line.id}>
               <span
                 className={`creator-free-line ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
-                style={lineSegmentStyle(line)}
+                style={lineSegmentStyle(line, canvasAspect)}
                 aria-hidden="true"
                 data-divider-id={line.id}
                 data-divider-index={index}
@@ -2880,19 +2927,19 @@ function clampCustomLine(line: CustomLine): CustomLine {
   return next
 }
 
-function snapCustomLine(line: CustomLine, lines: CustomLine[], activeLineId: string): CustomLine {
-  const start = snapCustomPoint({ x: line.x1, y: line.y1 }, lines, activeLineId)
-  const end = snapCustomPoint({ x: line.x2, y: line.y2 }, lines, activeLineId)
+function snapCustomLine(line: CustomLine, lines: CustomLine[], activeLineId: string, canvasAspect: number): CustomLine {
+  const start = snapCustomPoint({ x: line.x1, y: line.y1 }, lines, activeLineId, canvasAspect)
+  const end = snapCustomPoint({ x: line.x2, y: line.y2 }, lines, activeLineId, canvasAspect)
   return clampCustomLine({ ...line, x1: start.x, y1: start.y, x2: end.x, y2: end.y })
 }
 
-function snapCustomPoint(point: CustomPoint, lines: CustomLine[], activeLineId: string): CustomPoint {
+function snapCustomPoint(point: CustomPoint, lines: CustomLine[], activeLineId: string, canvasAspect: number): CustomPoint {
   const target = { x: clamp(point.x, 0, 100), y: clamp(point.y, 0, 100) }
   let snapped = target
   let nearestDistance = CREATOR_SNAP_DISTANCE
 
   function consider(candidate: CustomPoint) {
-    const distance = customPointDistance(target, candidate)
+    const distance = customPointDistance(target, candidate, canvasAspect)
     if (distance <= nearestDistance) {
       nearestDistance = distance
       snapped = {
@@ -2914,36 +2961,36 @@ function snapCustomPoint(point: CustomPoint, lines: CustomLine[], activeLineId: 
 
     consider({ x: line.x1, y: line.y1 })
     consider({ x: line.x2, y: line.y2 })
-    consider(projectPointToLineSegment(target, line))
+    consider(projectPointToLineSegment(target, line, canvasAspect))
   }
 
   return snapped
 }
 
-function projectPointToLineSegment(point: CustomPoint, line: CustomLine): CustomPoint {
+function projectPointToLineSegment(point: CustomPoint, line: CustomLine, canvasAspect: number): CustomPoint {
   const startX = line.x1
-  const startY = line.y1 * CREATOR_CANVAS_ASPECT
+  const startY = line.y1 * canvasAspect
   const endX = line.x2
-  const endY = line.y2 * CREATOR_CANVAS_ASPECT
+  const endY = line.y2 * canvasAspect
   const pointX = point.x
-  const pointY = point.y * CREATOR_CANVAS_ASPECT
+  const pointY = point.y * canvasAspect
   const dx = endX - startX
   const dy = endY - startY
   const lengthSquared = dx * dx + dy * dy || 1
   const t = clamp(((pointX - startX) * dx + (pointY - startY) * dy) / lengthSquared, 0, 1)
   return {
     x: startX + dx * t,
-    y: (startY + dy * t) / CREATOR_CANVAS_ASPECT,
+    y: (startY + dy * t) / canvasAspect,
   }
 }
 
-function customPointDistance(first: CustomPoint, second: CustomPoint) {
-  return Math.hypot(first.x - second.x, (first.y - second.y) * CREATOR_CANVAS_ASPECT)
+function customPointDistance(first: CustomPoint, second: CustomPoint, canvasAspect: number) {
+  return Math.hypot(first.x - second.x, (first.y - second.y) * canvasAspect)
 }
 
-function lineSegmentStyle(line: CustomLine) {
+function lineSegmentStyle(line: CustomLine, canvasAspect: number) {
   const dx = line.x2 - line.x1
-  const dy = (line.y2 - line.y1) * CREATOR_CANVAS_ASPECT
+  const dy = (line.y2 - line.y1) * canvasAspect
   return {
     left: `${line.x1}%`,
     top: `${line.y1}%`,
@@ -2966,12 +3013,12 @@ function touchCenterPercent(touches: TouchPoints, rect: DOMRect) {
   }
 }
 
-function nearestLineToPoint(lines: CustomLine[], x: number, y: number) {
+function nearestLineToPoint(lines: CustomLine[], x: number, y: number, canvasAspect: number) {
   let nearest: CustomLine | null = null
   let nearestDistance = Number.POSITIVE_INFINITY
 
   for (const line of lines) {
-    const distance = lineDistanceToPoint(line, x, y)
+    const distance = lineDistanceToPoint(line, x, y, canvasAspect)
     if (distance < nearestDistance) {
       nearest = line
       nearestDistance = distance
@@ -2981,13 +3028,13 @@ function nearestLineToPoint(lines: CustomLine[], x: number, y: number) {
   return nearest
 }
 
-function lineDistanceToPoint(line: CustomLine, x: number, y: number) {
+function lineDistanceToPoint(line: CustomLine, x: number, y: number, canvasAspect: number) {
   const pointX = x
-  const pointY = y * CREATOR_CANVAS_ASPECT
+  const pointY = y * canvasAspect
   const startX = line.x1
-  const startY = line.y1 * CREATOR_CANVAS_ASPECT
+  const startY = line.y1 * canvasAspect
   const endX = line.x2
-  const endY = line.y2 * CREATOR_CANVAS_ASPECT
+  const endY = line.y2 * canvasAspect
   const dx = endX - startX
   const dy = endY - startY
   const lengthSquared = dx * dx + dy * dy || 1
@@ -3006,21 +3053,22 @@ function transformLineByTouch(
   currentCenterY: number,
   scale: number,
   rotationDegrees: number,
+  canvasAspect: number,
 ) {
   const centerX = (line.x1 + line.x2) / 2
-  const centerY = ((line.y1 + line.y2) / 2) * CREATOR_CANVAS_ASPECT
+  const centerY = ((line.y1 + line.y2) / 2) * canvasAspect
   const moveX = currentCenterX - startCenterX
-  const moveY = (currentCenterY - startCenterY) * CREATOR_CANVAS_ASPECT
+  const moveY = (currentCenterY - startCenterY) * canvasAspect
   const radians = (rotationDegrees * Math.PI) / 180
   const cos = Math.cos(radians)
   const sin = Math.sin(radians)
 
   function point(x: number, y: number) {
     const dx = x - centerX
-    const dy = y * CREATOR_CANVAS_ASPECT - centerY
+    const dy = y * canvasAspect - centerY
     return {
       x: centerX + (dx * cos - dy * sin) * scale + moveX,
-      y: (centerY + (dx * sin + dy * cos) * scale + moveY) / CREATOR_CANVAS_ASPECT,
+      y: (centerY + (dx * sin + dy * cos) * scale + moveY) / canvasAspect,
     }
   }
 
