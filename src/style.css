@@ -297,6 +297,25 @@ select:focus-visible,
   will-change: left, top, width, height;
 }
 
+.live-divider-gap {
+  position: absolute;
+  z-index: 3;
+  transform-origin: 0 50%;
+  pointer-events: none;
+}
+
+.live-divider-gap::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 100%;
+  height: var(--gutter);
+  border-radius: 999px;
+  background: var(--paper);
+  transform: translateY(-50%);
+}
+
 .live-frame {
   position: absolute;
   left: 0;

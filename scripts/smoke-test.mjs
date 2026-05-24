@@ -4,7 +4,6 @@ import { chromium } from 'playwright'
 
 const browser = await chromium.launch()
 const baseUrl = process.env.SMOKE_BASE_URL ?? 'http://127.0.0.1:4174'
-const squareCreatorFit = await checkSquareCreatorFit(browser, baseUrl)
 const page = await browser.newPage({
   viewport: { width: 390, height: 844 },
   isMobile: true,
@@ -18,6 +17,7 @@ await enableStandalone(page)
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
 const formatOptionCount = await page.locator('.format-option').count()
+const squareFormatOptionCount = await page.locator('.format-option', { hasText: '1:1' }).count()
 await page.getByRole('button', { name: /9:16/ }).tap()
 const selectedFormat = await page.locator('.format-option.active strong').textContent()
 await page.getByRole('button', { name: 'Start' }).tap()
@@ -176,7 +176,8 @@ const storedLayoutInfo = await page.evaluate(() => {
     name: latest?.name ?? '',
     activeLayoutId,
     dividerThickness: latest?.dividerThickness ?? null,
-    pageFormatId: latest?.pageFormatId ?? null,
+    dividers: latest?.dividers?.length ?? 0,
+    hasPageFormatId: Object.prototype.hasOwnProperty.call(latest ?? {}, 'pageFormatId'),
     panels: latest?.panels?.length ?? 0,
     snapJunction: latest?.panels?.some((panel) =>
       panel.points?.some(([x, y]) => Math.abs(x - 50) < 0.5 && Math.abs(y - 48) < 0.5),
@@ -243,6 +244,7 @@ await browser.close()
 const result = {
   title,
   formatOptionCount,
+  squareFormatOptionCount,
   selectedFormat,
   selectedPanel,
   uploadedPhoto,
@@ -250,7 +252,6 @@ const result = {
   photoPinched: photoAfterPinch.scale > photoAfterDrag.scale + 0.08,
   photosAfterSmallerTemplate,
   photosAfterRestoredTemplate,
-  squareCreatorFit,
   stickerCount,
   drawerHidden,
   stickerText,
@@ -290,7 +291,8 @@ const result = {
 console.log(JSON.stringify(result, null, 2))
 
 const failures = [
-  result.formatOptionCount === 4 ? null : 'start ratio selector does not expose four options',
+  result.formatOptionCount === 3 ? null : 'start ratio selector does not expose three options',
+  result.squareFormatOptionCount === 0 ? null : 'start ratio selector still exposes 1:1',
   result.selectedFormat === '9:16' ? null : 'start ratio selector did not select 9:16',
   result.selectedPanel === '2' ? null : 'panel selection did not land on panel 2',
   result.uploadedPhoto === 1 ? null : 'photo upload did not fill the active panel',
@@ -298,11 +300,6 @@ const failures = [
   result.photoPinched ? null : 'panel photo pinch did not update the image scale',
   result.photosAfterSmallerTemplate === 2 ? null : 'template switch to fewer panels did not preserve visible photos',
   result.photosAfterRestoredTemplate === 2 ? null : 'template switch back to more panels did not restore cached photos',
-  result.squareCreatorFit.selectedFormat === '1:1' ? null : 'square custom creator smoke did not select 1:1',
-  result.squareCreatorFit.creatorCanvasFormat === '1:1' ? null : 'square custom creator did not inherit 1:1',
-  Math.abs(result.squareCreatorFit.creatorCanvasAspect - 1) < 0.05 ? null : 'square custom creator canvas did not render as 1:1',
-  result.squareCreatorFit.canvasFitsViewport ? null : 'square custom creator canvas did not fit in the viewport',
-  result.squareCreatorFit.errors.length === 0 ? null : `square creator page errors: ${result.squareCreatorFit.errors.join('; ')}`,
   result.stickerCount === 1 ? null : 'speech sticker was not added',
   result.drawerHidden ? null : 'closed drawer is still visible',
   result.stickerText?.replace(/\s+/g, '').toLowerCase() === 'againwithwrappedstorytext' ? null : 'inline sticker text re-edit failed',
@@ -327,7 +324,8 @@ const failures = [
   result.storedLayoutInfo.name === 'Final Layout' ? null : 'custom layout name was not saved',
   result.storedLayoutInfo.activeLayoutId?.startsWith('custom-') ? null : 'active layout id was not persisted',
   result.storedLayoutInfo.dividerThickness === 16 ? null : 'custom layout did not persist divider thickness',
-  result.storedLayoutInfo.pageFormatId === '9:16' ? null : 'custom layout did not persist selected aspect ratio',
+  result.storedLayoutInfo.dividers > 0 ? null : 'custom layout did not persist divider lines',
+  result.storedLayoutInfo.hasPageFormatId === false ? null : 'custom layout still persists its own aspect ratio',
   result.liveGutterAfterLayoutSave === 16 ? null : 'saved custom layout did not apply divider thickness to the live layout',
   Math.abs(result.liveAspectAfterLayoutSave - 16 / 9) < 0.08 ? null : 'saved custom layout did not keep the live canvas at 9:16',
   result.customSharedFile === 'instacomic.png' ? null : 'custom layout share fallback did not produce instacomic.png',
@@ -335,7 +333,7 @@ const failures = [
   result.liveCustomDividerRun.width >= 12 ? null : 'custom layout live preview did not render the selected gap',
   result.customDividerRun.width >= 42 ? null : 'custom layout export did not render the selected divider thickness',
   result.restoredLayoutName === 'Final Layout' ? null : 'last custom layout was not restored on reload',
-  Math.abs(result.restoredLayoutAspect - 16 / 9) < 0.08 ? null : 'restored custom layout did not restore its saved aspect ratio',
+  Math.abs(result.restoredLayoutAspect - 16 / 9) < 0.08 ? null : 'restored custom layout did not use the persisted selected aspect ratio',
   result.drawerHiddenAfterLayoutSave ? null : 'drawer did not close after saving a custom layout',
   result.storedLayoutInfo.panels === 3 ? null : 'custom snapped layout did not create three panels',
   result.storedLayoutInfo.snapJunction ? null : 'custom layout did not snap divider endpoint to another divider',
@@ -359,39 +357,6 @@ async function enableStandalone(page) {
       get: () => true,
     })
   })
-}
-
-async function checkSquareCreatorFit(browser, baseUrl) {
-  const squarePage = await browser.newPage({
-    viewport: { width: 390, height: 844 },
-    isMobile: true,
-    hasTouch: true,
-  })
-  const errors = []
-  squarePage.on('pageerror', (error) => errors.push(error.message))
-  await enableStandalone(squarePage)
-  await squarePage.goto(baseUrl, { waitUntil: 'networkidle' })
-  await squarePage.getByRole('button', { name: /1:1/ }).tap()
-  const selectedFormat = await squarePage.locator('.format-option.active strong').textContent()
-  await squarePage.getByRole('button', { name: 'Start' }).tap()
-  await openDrawer(squarePage)
-  await squarePage.getByRole('button', { name: 'Create' }).tap()
-  await squarePage.locator('.creator-fullscreen').waitFor()
-  await waitForDrawerHidden(squarePage)
-  const creatorCanvasFormat = await squarePage.locator('.creator-canvas').getAttribute('data-page-format')
-  const canvas = await squarePage.locator('.creator-canvas').boundingBox()
-  const viewport = squarePage.viewportSize() ?? { width: 0, height: 0 }
-  await squarePage.close()
-
-  return {
-    selectedFormat,
-    creatorCanvasFormat,
-    creatorCanvasAspect: canvas ? canvas.height / canvas.width : 0,
-    canvasFitsViewport: !!canvas && canvas.y >= 0 && canvas.y + canvas.height <= viewport.height,
-    canvasBottom: canvas ? canvas.y + canvas.height : 0,
-    viewportHeight: viewport.height,
-    errors,
-  }
 }
 
 async function tapStrip(page, nx, ny) {

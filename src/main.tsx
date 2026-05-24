@@ -8,7 +8,7 @@ type PanelFit = 'cover' | 'contain'
 type StickerKind = 'speech' | 'thought' | 'burst' | 'caption' | 'arrow' | 'star'
 type DrawerTab = 'layout' | 'create' | 'stickers' | 'style'
 type CustomLinePreset = 'diagonal' | 'vertical' | 'horizontal'
-type PageFormatId = '4:5' | '3:4' | '9:16' | '1:1'
+type PageFormatId = '4:5' | '3:4' | '9:16'
 
 type Panel = {
   id: string
@@ -25,7 +25,7 @@ type Layout = {
   panels: Panel[]
   custom?: boolean
   dividerThickness?: number
-  pageFormatId?: PageFormatId
+  dividers?: CustomLine[]
 }
 
 type Shot = {
@@ -199,7 +199,6 @@ const pageFormats: PageFormat[] = [
   { id: '4:5', label: 'Post', detail: 'Instagram portrait', width: 4, height: 5 },
   { id: '3:4', label: 'Tall', detail: 'Classic portrait', width: 3, height: 4 },
   { id: '9:16', label: 'Story', detail: 'Stories/Reels', width: 9, height: 16 },
-  { id: '1:1', label: 'Square', detail: 'Grid post', width: 1, height: 1 },
 ]
 
 const defaultPageFormat = pageFormats[0]
@@ -210,10 +209,6 @@ function getPageFormat(id: string | null) {
 
 function pageFormatCanvasAspect(format: PageFormat) {
   return format.height / format.width
-}
-
-function pageFormatForLayout(layout: Layout, fallback: PageFormat) {
-  return pageFormats.find((format) => format.id === layout.pageFormatId) ?? fallback
 }
 
 function layoutDividerThickness(layout: Layout) {
@@ -502,7 +497,7 @@ function App() {
         }
       }
 
-      setPageFormat(restoredLayout ? pageFormatForLayout(restoredLayout, storedPageFormat) : storedPageFormat)
+      setPageFormat(storedPageFormat)
       const restoredDividerThickness = restoredLayout ? layoutDividerThickness(restoredLayout) : null
       if (restoredDividerThickness !== null) {
         setSettings((current) => ({ ...current, gutters: restoredDividerThickness }))
@@ -879,9 +874,6 @@ function App() {
     const restoredCount = Object.keys(nextShots).length
     const nextDividerThickness = layoutDividerThickness(nextLayout)
     setLayout(nextLayout)
-    if (nextLayout.pageFormatId) {
-      setPageFormat(pageFormatForLayout(nextLayout, pageFormat))
-    }
     if (nextDividerThickness !== null) {
       setSettings((current) => ({ ...current, gutters: nextDividerThickness }))
     }
@@ -1009,7 +1001,7 @@ function App() {
       name: draftName.trim() || `Custom ${customLayouts.length + 1}`,
       custom: true,
       dividerThickness: draftThickness,
-      pageFormatId: pageFormat.id,
+      dividers: draftLines.map((line) => ({ ...line })),
       panels,
     }
     setCustomLayouts((current) => [...current, customLayout])
@@ -1413,7 +1405,7 @@ function App() {
             <button
               key={panel.id}
               className={`live-panel ${panel.id === activePanelId ? 'is-live' : ''} ${shots[panel.id] ? 'is-shot' : ''}`}
-              style={panelStyle(panel, settings.gutters, pageFormat)}
+              style={panelStyle(panel)}
               type="button"
               data-panel-id={panel.id}
               onClick={() => selectPanel(panel.id)}
@@ -1434,6 +1426,15 @@ function App() {
               )}
               {panel.id === activePanelId && !shots[panel.id] && <span className="panel-chip">LIVE</span>}
             </button>
+          ))}
+
+          {layout.dividers?.map((divider, index) => (
+            <span
+              key={`${divider.id}-${index}`}
+              className="live-divider-gap"
+              style={lineSegmentStyle(divider, creatorCanvasAspect)}
+              aria-hidden="true"
+            />
           ))}
 
           {stickers.map((sticker) => (
@@ -2480,6 +2481,10 @@ async function renderToPng(
     drawPanel(context, panel, image, shot, width, panelHeight, outer, gutter, settings)
   }
 
+  for (const divider of layout.dividers ?? []) {
+    drawDividerGap(context, divider, width, panelHeight, outer, gutter, settings.background)
+  }
+
   for (const sticker of stickers) {
     drawSticker(context, sticker, width, panelHeight)
   }
@@ -2525,7 +2530,7 @@ function drawPanel(
 
   context.save()
   if (panel.points) {
-    drawPanelPolygon(context, panel, width, panelHeight, outer, gutter)
+    drawPanelPolygon(context, panel, width, panelHeight, outer)
   } else {
     drawRoundedRect(context, x, y, w, h, settings.radius * 3)
   }
@@ -2543,7 +2548,7 @@ function drawPanel(
     context.lineWidth = Math.max(2, settings.border * 2)
     context.strokeStyle = settings.borderColor
     if (panel.points) {
-      drawPanelPolygon(context, panel, width, panelHeight, outer, gutter)
+      drawPanelPolygon(context, panel, width, panelHeight, outer)
     } else {
       drawRoundedRect(context, x, y, w, h, settings.radius * 3)
     }
@@ -2557,19 +2562,44 @@ function drawPanelPolygon(
   width: number,
   panelHeight: number,
   outer: number,
-  gutter: number,
 ) {
   const points = panel.points ?? []
   const canvasPoints = points.map(([px, py]) => [
     outer + (px / 100) * (width - outer * 2),
     outer + (py / 100) * (panelHeight - outer * 2),
   ] as [number, number])
-  const insetPoints = insetPolygonPoints(canvasPoints, gutter / 2)
   context.beginPath()
-  insetPoints.forEach(([x, y], index) => {
+  canvasPoints.forEach(([x, y], index) => {
     index === 0 ? context.moveTo(x, y) : context.lineTo(x, y)
   })
   context.closePath()
+}
+
+function drawDividerGap(
+  context: CanvasRenderingContext2D,
+  line: CustomLine,
+  width: number,
+  panelHeight: number,
+  outer: number,
+  gutter: number,
+  color: string,
+) {
+  const innerWidth = width - outer * 2
+  const innerHeight = panelHeight - outer * 2
+  const x1 = outer + (line.x1 / 100) * innerWidth
+  const y1 = outer + (line.y1 / 100) * innerHeight
+  const x2 = outer + (line.x2 / 100) * innerWidth
+  const y2 = outer + (line.y2 / 100) * innerHeight
+
+  context.save()
+  context.strokeStyle = color
+  context.lineWidth = gutter
+  context.lineCap = 'round'
+  context.beginPath()
+  context.moveTo(x1, y1)
+  context.lineTo(x2, y2)
+  context.stroke()
+  context.restore()
 }
 
 function drawSticker(context: CanvasRenderingContext2D, sticker: Sticker, width: number, panelHeight: number) {
@@ -2611,14 +2641,14 @@ function drawSticker(context: CanvasRenderingContext2D, sticker: Sticker, width:
   context.restore()
 }
 
-function panelStyle(panel: Panel, gutter = 0, pageFormat = defaultPageFormat) {
+function panelStyle(panel: Panel) {
   const center = panelCentroid(panel)
   return {
     left: `${panel.x * 100}%`,
     top: `${panel.y * 100}%`,
     width: `${panel.w * 100}%`,
     height: `${panel.h * 100}%`,
-    clipPath: panel.points ? pointsToClipPath(panel.points, gutter / 2, pageFormatCanvasAspect(pageFormat)) : undefined,
+    clipPath: panel.points ? pointsToClipPath(panel.points) : undefined,
     '--chip-x': `${center.x * 100}%`,
     '--chip-y': `${center.y * 100}%`,
   }
@@ -2661,67 +2691,8 @@ function panelPhotoFrameSize(panel: Panel, stripRect: DOMRect) {
   }
 }
 
-function pointsToClipPath(points: Array<[number, number]>, insetPx = 0, yScale = 1) {
-  const offsets = polygonInsetOffsets(points, insetPx, yScale)
-  return `polygon(${points.map(([x, y], index) => `${cssLengthPercent(x, offsets[index][0])} ${cssLengthPercent(y, offsets[index][1])}`).join(', ')})`
-}
-
-function cssLengthPercent(percent: number, pxOffset: number) {
-  if (Math.abs(pxOffset) < 0.01) {
-    return `${percent}%`
-  }
-
-  const sign = pxOffset >= 0 ? '+' : '-'
-  return `calc(${percent}% ${sign} ${Math.abs(pxOffset).toFixed(2)}px)`
-}
-
-function insetPolygonPoints(points: Array<[number, number]>, insetPx: number) {
-  const offsets = polygonInsetOffsets(points, insetPx)
-  return points.map(([x, y], index) => [x + offsets[index][0], y + offsets[index][1]] as [number, number])
-}
-
-function polygonInsetOffsets(points: Array<[number, number]>, insetPx: number, yScale = 1) {
-  if (insetPx <= 0 || points.length < 3) {
-    return points.map(() => [0, 0] as [number, number])
-  }
-
-  const orientation = polygonArea(points) >= 0 ? 1 : -1
-  return points.map((point, index) => {
-    const previous = points[(index + points.length - 1) % points.length]
-    const next = points[(index + 1) % points.length]
-    const previousNormal = inwardEdgeNormal(previous, point, orientation, yScale)
-    const nextNormal = inwardEdgeNormal(point, next, orientation, yScale)
-    const determinant = previousNormal[0] * nextNormal[1] - previousNormal[1] * nextNormal[0]
-
-    if (Math.abs(determinant) < 0.0001) {
-      const normalX = previousNormal[0] + nextNormal[0]
-      const normalY = previousNormal[1] + nextNormal[1]
-      const normalLength = Math.hypot(normalX, normalY)
-      const fallbackNormal = normalLength > 0.0001 ? [normalX / normalLength, normalY / normalLength] : previousNormal
-      return [fallbackNormal[0] * insetPx, fallbackNormal[1] * insetPx] as [number, number]
-    }
-
-    const offsetX = (insetPx * nextNormal[1] - previousNormal[1] * insetPx) / determinant
-    const offsetY = (previousNormal[0] * insetPx - insetPx * nextNormal[0]) / determinant
-    return limitInsetOffset([offsetX, offsetY], insetPx)
-  })
-}
-
-function inwardEdgeNormal(start: [number, number], end: [number, number], orientation: number, yScale: number) {
-  const dx = end[0] - start[0]
-  const dy = (end[1] - start[1]) * yScale
-  const length = Math.hypot(dx, dy) || 1
-  return orientation >= 0 ? ([-dy / length, dx / length] as [number, number]) : ([dy / length, -dx / length] as [number, number])
-}
-
-function limitInsetOffset(offset: [number, number], insetPx: number) {
-  const length = Math.hypot(offset[0], offset[1])
-  const limit = Math.max(1, insetPx) * 4
-  if (length <= limit) {
-    return offset
-  }
-
-  return [(offset[0] / length) * limit, (offset[1] / length) * limit] as [number, number]
+function pointsToClipPath(points: Array<[number, number]>) {
+  return `polygon(${points.map(([x, y]) => `${x}% ${y}%`).join(', ')})`
 }
 
 function panelBounds(panel: Panel) {
