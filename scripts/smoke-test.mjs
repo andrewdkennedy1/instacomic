@@ -58,7 +58,7 @@ await page.setInputFiles('.photo-upload', {
 })
 await page.waitForFunction(() => document.querySelector('[data-panel-id="3"] img'))
 await openDrawer(page)
-await page.getByRole('button', { name: 'Layout' }).tap()
+await page.getByRole('button', { name: 'Layout', exact: true }).tap()
 await page.getByRole('button', { name: /Story/ }).tap()
 const photosAfterSmallerTemplate = await page.locator('.live-panel img').count()
 await page.getByRole('button', { name: /Shard/ }).tap()
@@ -66,76 +66,10 @@ const photosAfterRestoredTemplate = await page.locator('.live-panel img').count(
 await closeDrawer(page)
 
 await openDrawer(page)
-await page.getByRole('button', { name: 'Stickers' }).tap()
-await page.getByRole('button', { name: 'speech' }).tap()
-const stickerCount = await page.locator('[data-sticker-id]').count()
-await page.waitForFunction(() => {
-  const box = document.querySelector('.motion-drawer')?.getBoundingClientRect()
-  return !!box && box.top > window.innerHeight
-})
+const stickerTabCount = await page.getByRole('button', { name: 'Stickers' }).count()
+const stickerElementCount = await page.locator('[data-sticker-id], .sticker').count()
+await closeDrawer(page)
 const drawerHidden = await page.locator('.motion-drawer').boundingBox().then((box) => box && box.y > 830)
-await page.locator('.sticker-text').tap()
-await page.getByLabel('Edit sticker text').fill('hello from inside this bubble')
-await page.getByLabel('Edit sticker text').press('Enter')
-await tapStrip(page, 0.12, 0.9)
-await page.locator('.sticker-text').tap()
-await page.getByLabel('Edit sticker text').fill('again with wrapped story text')
-await page.getByLabel('Edit sticker text').press('Enter')
-const stickerText = await page.locator('.sticker-text').textContent()
-const stickerTextLines = await page.locator('.sticker-text-fit > span').count()
-await page.locator('[data-sticker-id]').scrollIntoViewIfNeeded()
-const before = await page.locator('[data-sticker-id]').boundingBox()
-if (before) {
-  const client = await page.context().newCDPSession(page)
-  const start = { x: before.x + Math.max(8, before.width * 0.08), y: before.y + before.height / 2 }
-  const end = { x: start.x + 70, y: start.y + 80 }
-  await client.send('Input.dispatchTouchEvent', {
-    type: 'touchStart',
-    touchPoints: [{ ...start, id: 1 }],
-  })
-  await client.send('Input.dispatchTouchEvent', {
-    type: 'touchMove',
-    touchPoints: [{ x: start.x + 35, y: start.y + 40, id: 1 }],
-  })
-  await client.send('Input.dispatchTouchEvent', {
-    type: 'touchMove',
-    touchPoints: [{ ...end, id: 1 }],
-  })
-  await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
-  await page.waitForTimeout(80)
-}
-const after = await page.locator('[data-sticker-id]').boundingBox()
-const pinchBefore = await page.locator('[data-sticker-id]').boundingBox()
-const rotationBefore = Number(await page.locator('[data-sticker-id]').getAttribute('data-rotation'))
-if (pinchBefore) {
-  const client = await page.context().newCDPSession(page)
-  const y = pinchBefore.y + pinchBefore.height / 2
-  const left = { x: pinchBefore.x + pinchBefore.width * 0.25, y }
-  const right = { x: pinchBefore.x + pinchBefore.width * 0.75, y }
-  await client.send('Input.dispatchTouchEvent', {
-    type: 'touchStart',
-    touchPoints: [
-      { ...left, id: 1 },
-      { ...right, id: 2 },
-    ],
-  })
-  await client.send('Input.dispatchTouchEvent', {
-    type: 'touchMove',
-    touchPoints: [
-      { x: left.x - 32, y: y + 30, id: 1 },
-      { x: right.x + 32, y: y - 30, id: 2 },
-    ],
-  })
-  await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
-  await page.waitForTimeout(80)
-}
-const pinchAfter = await page.locator('[data-sticker-id]').boundingBox()
-const rotationAfter = Number(await page.locator('[data-sticker-id]').getAttribute('data-rotation'))
-const beforeTrashCount = await page.locator('[data-sticker-id]').count()
-await page.locator('[data-sticker-id]').first().tap()
-await page.locator('.sticker.active').waitFor()
-await page.getByLabel('Delete sticker').evaluate((button) => button.click())
-const afterTrashCount = await page.locator('[data-sticker-id]').count()
 
 const download = await Promise.all([
   page.waitForEvent('download'),
@@ -146,7 +80,7 @@ const exportedSize = pngSize(downloadPath)
 const manifest = await (await page.request.get(new URL('/manifest.webmanifest', baseUrl).toString())).json()
 const bodyOverflow = await page.evaluate(() => getComputedStyle(document.body).overflow)
 await openDrawer(page)
-await page.getByRole('button', { name: 'Create' }).tap()
+await page.getByRole('button', { name: 'Create', exact: true }).tap()
 await page.locator('.creator-fullscreen').waitFor()
 await waitForDrawerHidden(page)
 const creatorFullscreenVisible = await page.locator('.creator-fullscreen').count()
@@ -233,7 +167,7 @@ const restoredLayoutName = await page.locator('.live-strip').getAttribute('data-
 const restoredLayoutAspect = await page.locator('.live-strip').boundingBox().then((box) => (box ? box.height / box.width : 0))
 await page.getByRole('button', { name: 'Start' }).tap()
 await openDrawer(page)
-await page.getByRole('button', { name: 'Layout' }).tap()
+await page.getByRole('button', { name: 'Layout', exact: true }).tap()
 const deleteLayoutButton = page.getByRole('button', { name: 'Delete Final Layout layout' })
 await deleteLayoutButton.scrollIntoViewIfNeeded()
 const deleteButtonVisible = await deleteLayoutButton.isVisible()
@@ -265,14 +199,9 @@ const result = {
   photoPinched: photoAfterPinch.scale > photoAfterDrag.scale + 0.08,
   photosAfterSmallerTemplate,
   photosAfterRestoredTemplate,
-  stickerCount,
+  stickerTabCount,
+  stickerElementCount,
   drawerHidden,
-  stickerText,
-  stickerTextLines,
-  moved: !!before && !!after && Math.abs(before.x - after.x) > 5,
-  pinched: !!pinchBefore && !!pinchAfter && pinchAfter.width > pinchBefore.width + 8,
-  rotated: Math.abs(rotationAfter - rotationBefore) > 5,
-  trashed: beforeTrashCount === 1 && afterTrashCount === 0,
   sharedFile: download.suggestedFilename(),
   exportedSize,
   manifestName: manifest.name,
@@ -316,14 +245,9 @@ const failures = [
   result.photoPinched ? null : 'panel photo pinch did not update the image scale',
   result.photosAfterSmallerTemplate === 2 ? null : 'template switch to fewer panels did not preserve visible photos',
   result.photosAfterRestoredTemplate === 2 ? null : 'template switch back to more panels did not restore cached photos',
-  result.stickerCount === 1 ? null : 'speech sticker was not added',
+  result.stickerTabCount === 0 ? null : 'sticker drawer tab is still visible',
+  result.stickerElementCount === 0 ? null : 'sticker elements are still present',
   result.drawerHidden ? null : 'closed drawer is still visible',
-  result.stickerText?.replace(/\s+/g, '').toLowerCase() === 'againwithwrappedstorytext' ? null : 'inline sticker text re-edit failed',
-  result.stickerTextLines > 1 ? null : 'sticker text did not wrap into fitted lines',
-  result.moved ? null : 'sticker drag failed',
-  result.pinched ? null : 'sticker pinch resize failed',
-  result.rotated ? null : 'two-finger sticker rotation failed',
-  result.trashed ? null : 'drag-to-trash failed',
   result.sharedFile === 'instacomic.png' ? null : 'share fallback did not produce instacomic.png',
   result.exportedSize.width === 1440 && result.exportedSize.height === 2560 ? null : '9:16 export dimensions are incorrect',
   result.manifestName === 'Instacomic' ? null : 'manifest did not load',

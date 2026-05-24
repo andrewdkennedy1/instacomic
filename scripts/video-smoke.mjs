@@ -37,6 +37,8 @@ await page.waitForFunction(() => document.querySelector('[data-panel-id="2"] img
 
 await openDrawer(page)
 await page.getByRole('button', { name: 'Save', exact: true }).tap()
+await page.getByText('Story video').waitFor({ state: 'visible' })
+const videoConfigVisible = await page.getByText('Story video').isVisible()
 await setRangeValue(page, 'Video duration', '3')
 await setRangeValue(page, 'Video speed', '1.8')
 await closeDrawer(page)
@@ -47,17 +49,27 @@ const captureBarFits = await page.locator('.capture-bar').evaluate((bar) => {
   return buttons.every((button) => button.left >= barBox.left - 1 && button.right <= barBox.right + 1)
 })
 
-const [download] = await Promise.all([
-  page.waitForEvent('download', { timeout: 45000 }),
-  page.getByRole('button', { name: 'Export story video' }).tap(),
-])
+const downloadPromise = page.waitForEvent('download', { timeout: 45000 })
+await page.getByRole('button', { name: 'Export story video' }).tap()
+await page.locator('.video-render-progress').waitFor({ state: 'visible', timeout: 5000 })
+await page.waitForFunction(
+  () => Number(document.querySelector('.video-render-progress')?.getAttribute('aria-valuenow') ?? '0') > 0,
+  undefined,
+  { timeout: 15000 },
+)
+const progressBarValue = Number(await page.locator('.video-render-progress').getAttribute('aria-valuenow'))
+const progressText = await page.locator('.video-render-progress em').textContent()
+const download = await downloadPromise
 const downloadPath = await download.path()
 const fileSize = downloadPath ? statSync(downloadPath).size : 0
 const status = await page.locator('.sr-status').textContent()
 const result = {
   suggestedFilename: download.suggestedFilename(),
   fileSize,
+  videoConfigVisible,
   captureBarFits,
+  progressBarValue,
+  progressText,
   status,
   errors,
 }
@@ -68,7 +80,12 @@ console.log(JSON.stringify(result, null, 2))
 const failures = [
   /\.(mp4|webm)$/.test(result.suggestedFilename) ? null : 'story video export did not produce an MP4/WebM file',
   result.fileSize > 2048 ? null : 'story video export produced an empty or tiny file',
+  result.videoConfigVisible ? null : 'story video configuration is not visible in the save drawer',
   result.captureBarFits ? null : 'capture bar buttons do not fit after adding video export',
+  Number.isFinite(result.progressBarValue) && result.progressBarValue > 0 && result.progressBarValue <= 100
+    ? null
+    : 'story video progress bar did not expose advancing render progress',
+  /Rendering/i.test(result.progressText ?? '') ? null : 'story video progress bar did not show render text',
   /story video/i.test(result.status ?? '') ? null : 'story video status was not surfaced',
   result.errors.length === 0 ? null : `page errors: ${result.errors.join('; ')}`,
 ].filter(Boolean)

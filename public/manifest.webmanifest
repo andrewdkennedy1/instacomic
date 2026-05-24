@@ -1,7 +1,7 @@
 {
   "name": "Instacomic",
   "short_name": "Instacomic",
-  "description": "Snap live camera photos into customizable comic strip layouts, stickers, speech bubbles, and text.",
+  "description": "Snap live camera photos into customizable comic strip layouts with PNG and story video export.",
   "start_url": "/",
   "scope": "/",
   "display": "fullscreen",

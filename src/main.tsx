@@ -5,8 +5,7 @@ import { createRoot } from 'react-dom/client'
 import './style.css'
 
 type PanelFit = 'cover' | 'contain'
-type StickerKind = 'speech' | 'thought' | 'burst' | 'caption' | 'arrow' | 'star'
-type DrawerTab = 'layout' | 'create' | 'stickers' | 'style'
+type DrawerTab = 'layout' | 'create' | 'style'
 type CustomLinePreset = 'diagonal' | 'vertical' | 'horizontal'
 type PageFormatId = '4:5' | '3:4' | '9:16'
 
@@ -54,26 +53,6 @@ type StoryVideoFormat = {
   extension: 'mp4' | 'webm'
 }
 
-type Sticker = {
-  id: string
-  kind: StickerKind
-  x: number
-  y: number
-  w: number
-  h: number
-  rotation: number
-  text: string
-  fill: string
-  ink: string
-  fontSize: number
-}
-
-type StickerTextMetrics = {
-  fontSize: number
-  lineHeight: number
-  lines: string[]
-}
-
 type Settings = {
   gutters: number
   radius: number
@@ -109,23 +88,6 @@ type TouchPoints = {
     readonly clientX: number
     readonly clientY: number
   }
-}
-
-type DragState = {
-  id: string
-  mode: 'move' | 'resize' | 'pinch'
-  startX: number
-  startY: number
-  stickerX: number
-  stickerY: number
-  stickerW: number
-  stickerH: number
-  stickerRotation: number
-  rect: DOMRect
-  startDistance?: number
-  startAngle?: number
-  centerX?: number
-  centerY?: number
 }
 
 type PhotoDragState = {
@@ -318,15 +280,6 @@ const layouts: Layout[] = [
   },
 ]
 
-const stickerDefaults: Record<StickerKind, Omit<Sticker, 'id' | 'kind' | 'x' | 'y'>> = {
-  speech: { w: 0.36, h: 0.12, rotation: -2, text: 'say it', fill: '#ffffff', ink: '#111111', fontSize: 22 },
-  thought: { w: 0.32, h: 0.12, rotation: 2, text: 'hmm', fill: '#ffffff', ink: '#111111', fontSize: 22 },
-  burst: { w: 0.32, h: 0.14, rotation: -5, text: 'WOW', fill: '#ffd84d', ink: '#111111', fontSize: 25 },
-  caption: { w: 0.44, h: 0.1, rotation: 0, text: 'meanwhile', fill: '#fff0a8', ink: '#111111', fontSize: 19 },
-  arrow: { w: 0.28, h: 0.1, rotation: -9, text: 'look', fill: '#ff6b55', ink: '#111111', fontSize: 18 },
-  star: { w: 0.25, h: 0.12, rotation: 8, text: 'snap', fill: '#48d3c5', ink: '#111111', fontSize: 19 },
-}
-
 const defaultSettings: Settings = {
   gutters: 4,
   radius: 0,
@@ -428,19 +381,16 @@ function App() {
   const [layout, setLayout] = useState(layouts[0])
   const [activePanelId, setActivePanelId] = useState<string | null>(layouts[0].panels[0].id)
   const [shots, setShots] = useState<Record<string, Shot>>({})
-  const [stickers, setStickers] = useState<Sticker[]>([])
-  const [activeStickerId, setActiveStickerId] = useState<string | null>(null)
-  const [editingStickerId, setEditingStickerId] = useState<string | null>(null)
   const [settings, setSettings] = useState(defaultSettings)
   const [pageFormat, setPageFormat] = useState<PageFormat>(defaultPageFormat)
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [facing, setFacing] = useState<'environment' | 'user'>('environment')
   const [drawerOpen, setDrawerOpen] = useState(false)
-  const [drawerTab, setDrawerTab] = useState<DrawerTab>('stickers')
+  const [drawerTab, setDrawerTab] = useState<DrawerTab>('layout')
   const [status, setStatus] = useState('Tap a panel. Shoot. Repeat.')
   const [exportUrl, setExportUrl] = useState<string | null>(null)
   const [videoRendering, setVideoRendering] = useState(false)
-  const [dragState, setDragState] = useState<DragState | null>(null)
+  const [videoProgress, setVideoProgress] = useState(0)
   const [photoDragState, setPhotoDragState] = useState<PhotoDragState | null>(null)
   const [customLayouts, setCustomLayouts] = useState<Layout[]>([])
   const [draftLines, setDraftLines] = useState<CustomLine[]>(() => createDefaultDraftLines())
@@ -454,19 +404,11 @@ function App() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
-  const trashRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const lastDragPointRef = useRef<{ x: number; y: number } | null>(null)
-  const dragStateRef = useRef<DragState | null>(null)
   const shotCacheRef = useRef<Shot[]>([])
   const startRequestedRef = useRef(false)
   const dragControls = useDragControls()
-  const [trashArmed, setTrashArmed] = useState(false)
 
-  const activeSticker = useMemo(
-    () => stickers.find((sticker) => sticker.id === activeStickerId) ?? null,
-    [activeStickerId, stickers],
-  )
   const allLayouts = useMemo(() => [...layouts, ...customLayouts], [customLayouts])
   const activePanelIndex = activePanelId ? layout.panels.findIndex((panel) => panel.id === activePanelId) : -1
   const capturedCount = layout.panels.filter((panel) => shots[panel.id]).length
@@ -627,11 +569,6 @@ function App() {
     }
   }
 
-  function setActiveDragState(next: DragState | null) {
-    dragStateRef.current = next
-    setDragState(next)
-  }
-
   async function requestAppFullscreen() {
     const fullscreenDocument = document as FullscreenDocument
     const existingFullscreenElement =
@@ -720,24 +657,6 @@ function App() {
     }
   }
 
-  useEffect(() => {
-    if (!dragState) {
-      return
-    }
-
-    const finish = () => finishStickerDrag()
-    window.addEventListener('pointerup', finish)
-    window.addEventListener('pointercancel', finish)
-    window.addEventListener('touchend', finish)
-    window.addEventListener('touchcancel', finish)
-    return () => {
-      window.removeEventListener('pointerup', finish)
-      window.removeEventListener('pointercancel', finish)
-      window.removeEventListener('touchend', finish)
-      window.removeEventListener('touchcancel', finish)
-    }
-  }, [dragState])
-
   async function startCamera(nextFacing = facing) {
     if (!navigator.mediaDevices?.getUserMedia) {
       setStatus('Camera is not available in this browser.')
@@ -771,8 +690,6 @@ function App() {
 
   function selectPanel(panelId: string) {
     setActivePanelId(panelId)
-    setActiveStickerId(null)
-    setEditingStickerId(null)
     if (shots[panelId]) {
       setStatus(`Panel ${layout.panels.findIndex((panel) => panel.id === panelId) + 1} photo selected. Drag or pinch to adjust.`)
       return
@@ -926,60 +843,6 @@ function App() {
     }
   }
 
-  function addSticker(kind: StickerKind) {
-    const panel = layout.panels.find((item) => item.id === activePanelId) ?? layout.panels[0]
-    const bounds = panelBounds(panel)
-    const defaults = stickerDefaults[kind]
-    const sticker: Sticker = {
-      id: crypto.randomUUID(),
-      kind,
-      x: clamp(bounds.x + bounds.w / 2 - defaults.w / 2, 0.02, 0.98 - defaults.w),
-      y: clamp(bounds.y + bounds.h / 2 - defaults.h / 2, 0.02, 0.98 - defaults.h),
-      ...defaults,
-    }
-    setStickers((current) => [...current, sticker])
-    setActiveStickerId(sticker.id)
-    setDrawerTab('stickers')
-    setDrawerOpen(false)
-    setStatus('Sticker added. Drag it, or open Controls to edit text.')
-    clearExport()
-  }
-
-  function updateSticker(update: Partial<Sticker>) {
-    if (!activeStickerId) {
-      return
-    }
-
-    updateStickerById(activeStickerId, update)
-  }
-
-  function updateStickerById(stickerId: string, update: Partial<Sticker>) {
-    setStickers((current) =>
-      current.map((sticker) => (sticker.id === stickerId ? { ...sticker, ...update } : sticker)),
-    )
-    clearExport()
-  }
-
-  function deleteSticker() {
-    if (!activeStickerId) {
-      return
-    }
-
-    removeSticker(activeStickerId)
-  }
-
-  function removeSticker(stickerId: string) {
-    setStickers((current) => current.filter((sticker) => sticker.id !== stickerId))
-    setEditingStickerId((current) => (current === stickerId ? null : current))
-    setActiveStickerId((current) => (current === stickerId ? null : current))
-    if (dragStateRef.current?.id === stickerId) {
-      setActiveDragState(null)
-    }
-    setTrashArmed(false)
-    lastDragPointRef.current = null
-    clearExport()
-  }
-
   function addDraftLine(preset: CustomLinePreset) {
     setDraftLines((current) => [...current, createDraftLine(preset, current.length)])
   }
@@ -1036,135 +899,6 @@ function App() {
     setStatus('Custom layout saved on this phone.')
   }
 
-  function beginStickerDrag(event: PointerEvent<HTMLElement> | TouchEvent<HTMLElement>, sticker: Sticker, mode: 'move' | 'resize') {
-    const rect = stripRef.current?.getBoundingClientRect()
-    const point = 'touches' in event ? event.touches[0] : event
-    if (!rect || !point) {
-      return
-    }
-
-    event.preventDefault()
-    setActiveStickerId(sticker.id)
-    setActiveDragState({
-      id: sticker.id,
-      mode,
-      startX: point.clientX,
-      startY: point.clientY,
-      stickerX: sticker.x,
-      stickerY: sticker.y,
-      stickerW: sticker.w,
-      stickerH: sticker.h,
-      stickerRotation: sticker.rotation,
-      rect,
-    })
-    if (mode === 'move') {
-      lastDragPointRef.current = { x: point.clientX, y: point.clientY }
-      setTrashArmed(pointInTrash(point.clientX, point.clientY))
-    }
-  }
-
-  function beginStickerPinch(event: TouchEvent<HTMLElement>, sticker: Sticker) {
-    const rect = stripRef.current?.getBoundingClientRect()
-    if (!rect || event.touches.length < 2) {
-      return
-    }
-
-    event.preventDefault()
-    setActiveStickerId(sticker.id)
-    setEditingStickerId(null)
-    setActiveDragState({
-      id: sticker.id,
-      mode: 'pinch',
-      startX: 0,
-      startY: 0,
-      stickerX: sticker.x,
-      stickerY: sticker.y,
-      stickerW: sticker.w,
-      stickerH: sticker.h,
-      stickerRotation: sticker.rotation,
-      rect,
-      startDistance: touchDistance(event.touches),
-      startAngle: touchAngle(event.touches),
-      centerX: sticker.x + sticker.w / 2,
-      centerY: sticker.y + sticker.h / 2,
-    })
-  }
-
-  function moveSticker(clientX: number, clientY: number) {
-    const activeDrag = dragStateRef.current
-    if (!activeDrag || activeDrag.mode === 'pinch') {
-      return
-    }
-
-    const dx = (clientX - activeDrag.startX) / activeDrag.rect.width
-    const dy = (clientY - activeDrag.startY) / activeDrag.rect.height
-    lastDragPointRef.current = { x: clientX, y: clientY }
-    if (activeDrag.mode === 'move') {
-      const overTrash = pointInTrash(clientX, clientY)
-      setTrashArmed(overTrash)
-      if (overTrash) {
-        removeSticker(activeDrag.id)
-        return
-      }
-    }
-    setStickers((current) =>
-      current.map((sticker) => {
-        if (sticker.id !== activeDrag.id) {
-          return sticker
-        }
-        if (activeDrag.mode === 'resize') {
-          const w = clamp(activeDrag.stickerW + dx, 0.14, 0.85)
-          const h = clamp(activeDrag.stickerH + dy, 0.07, 0.5)
-          return {
-            ...sticker,
-            w,
-            h,
-            x: clamp(sticker.x, 0, 1 - w),
-            y: clamp(sticker.y, 0, 1 - h),
-          }
-        }
-        return {
-          ...sticker,
-          x: clamp(activeDrag.stickerX + dx, 0, 1 - sticker.w),
-          y: clamp(activeDrag.stickerY + dy, 0, 1 - sticker.h),
-        }
-      }),
-    )
-    clearExport()
-  }
-
-  function moveStickerPinch(touches: TouchPoints) {
-    const activeDrag = dragStateRef.current
-    if (!activeDrag || activeDrag.mode !== 'pinch' || touches.length < 2 || !activeDrag.startDistance) {
-      return
-    }
-
-    const scale = clamp(touchDistance(touches) / activeDrag.startDistance, 0.45, 2.4)
-    const rotation = activeDrag.stickerRotation + angleDelta(activeDrag.startAngle ?? touchAngle(touches), touchAngle(touches))
-    const centerX = activeDrag.centerX ?? activeDrag.stickerX + activeDrag.stickerW / 2
-    const centerY = activeDrag.centerY ?? activeDrag.stickerY + activeDrag.stickerH / 2
-
-    setStickers((current) =>
-      current.map((sticker) => {
-        if (sticker.id !== activeDrag.id) {
-          return sticker
-        }
-
-        const w = clamp(activeDrag.stickerW * scale, 0.14, 0.85)
-        const h = clamp(activeDrag.stickerH * scale, 0.07, 0.5)
-        return {
-          ...sticker,
-          w,
-          h,
-          rotation,
-          x: clamp(centerX - w / 2, 0, 1 - w),
-          y: clamp(centerY - h / 2, 0, 1 - h),
-        }
-      }),
-    )
-    clearExport()
-  }
-
   function beginPhotoMove(event: PointerEvent<HTMLElement>) {
     const rect = stripRef.current?.getBoundingClientRect()
     const panel = panelFromPoint(event.clientX, event.clientY)
@@ -1176,8 +910,6 @@ function App() {
 
     event.preventDefault()
     setActivePanelId(panel.id)
-    setActiveStickerId(null)
-    setEditingStickerId(null)
     setPhotoDragState({
       panelId: panel.id,
       mode: 'move',
@@ -1206,8 +938,6 @@ function App() {
     event.preventDefault()
     const shot = shots[firstPanel.id]
     setActivePanelId(firstPanel.id)
-    setActiveStickerId(null)
-    setEditingStickerId(null)
     setPhotoDragState({
       panelId: firstPanel.id,
       mode: 'pinch',
@@ -1261,39 +991,18 @@ function App() {
     clearExport()
   }
 
-  function pointInTrash(clientX: number, clientY: number) {
-    const rect = trashRef.current?.getBoundingClientRect()
-    return !!rect && clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom
-  }
-
-  function finishStickerDrag(clientX?: number, clientY?: number) {
-    const activeDrag = dragStateRef.current
-    if (activeDrag?.mode === 'move') {
-      const point = clientX === undefined || clientY === undefined ? lastDragPointRef.current : { x: clientX, y: clientY }
-      if (point && pointInTrash(point.x, point.y)) {
-        removeSticker(activeDrag.id)
-        return
-      }
-    }
-
-    setActiveDragState(null)
-    setTrashArmed(false)
-    lastDragPointRef.current = null
-  }
-
-  function finishGestures(clientX?: number, clientY?: number) {
-    finishStickerDrag(clientX, clientY)
+  function finishGestures() {
     setPhotoDragState(null)
   }
 
   function openDrawer(tab?: DrawerTab) {
-    setDrawerTab(tab ?? (activeStickerId ? 'stickers' : drawerTab))
+    setDrawerTab(tab ?? drawerTab)
     setDrawerOpen(true)
   }
 
   async function renderComicBlob() {
     setStatus('Rendering...')
-    const blob = await renderToPng(layout, shots, stickers, settings, pageFormat)
+    const blob = await renderToPng(layout, shots, settings, pageFormat)
     clearExport()
     const url = URL.createObjectURL(blob)
     setExportUrl(url)
@@ -1328,9 +1037,11 @@ function App() {
     }
 
     setVideoRendering(true)
+    setVideoProgress(0)
     try {
       setStatus('Rendering story video...')
-      const video = await renderStoryVideo(layout, shots, stickers, settings, pageFormat, (progress) => {
+      const video = await renderStoryVideo(layout, shots, settings, pageFormat, (progress) => {
+        setVideoProgress(progress)
         setStatus(`Rendering story video ${Math.round(progress * 100)}%...`)
       })
       const fileName = `instacomic-story.${video.extension}`
@@ -1353,6 +1064,7 @@ function App() {
       setStatus(error instanceof Error ? error.message : 'Story video export failed.')
     } finally {
       setVideoRendering(false)
+      setVideoProgress(0)
     }
   }
 
@@ -1362,18 +1074,14 @@ function App() {
       className={`native-shell ${appContext.isInstalled ? 'is-app' : 'is-installer'}`}
       style={pageStyle}
       onPointerMove={(event) => {
-        moveSticker(event.clientX, event.clientY)
         movePhoto(event.clientX, event.clientY)
       }}
-      onPointerUp={(event) => finishGestures(event.clientX, event.clientY)}
+      onPointerUp={() => finishGestures()}
       onPointerCancel={() => finishGestures()}
       onTouchMove={(event) => {
-        if (dragStateRef.current?.mode === 'pinch') {
-          moveStickerPinch(event.touches)
-        } else if (photoDragState?.mode === 'pinch') {
+        if (photoDragState?.mode === 'pinch') {
           movePhotoPinch(event.touches)
         } else if (event.touches[0]) {
-          moveSticker(event.touches[0].clientX, event.touches[0].clientY)
           movePhoto(event.touches[0].clientX, event.touches[0].clientY)
         }
       }}
@@ -1437,9 +1145,6 @@ function App() {
           data-layout-id={layout.id}
           data-layout-name={layout.name}
           onPointerDown={(event) => {
-            if ((event.target as HTMLElement).closest('[data-sticker-id]')) {
-              return
-            }
             beginPhotoMove(event)
           }}
           onTouchStart={(event) => {
@@ -1493,36 +1198,9 @@ function App() {
             />
           ))}
 
-          {stickers.map((sticker) => (
-            <StickerView
-              key={sticker.id}
-              sticker={sticker}
-              active={sticker.id === activeStickerId}
-              editing={sticker.id === editingStickerId}
-              onSelect={() => setActiveStickerId(sticker.id)}
-              onEditStart={() => {
-                setActiveStickerId(sticker.id)
-                setEditingStickerId(sticker.id)
-              }}
-              onEditEnd={() => setEditingStickerId((current) => (current === sticker.id ? null : current))}
-              onText={(text) => updateStickerById(sticker.id, { text })}
-              onDelete={() => removeSticker(sticker.id)}
-              onDragStart={(event, mode) => beginStickerDrag(event, sticker, mode)}
-              onPinchStart={(event) => beginStickerPinch(event, sticker)}
-            />
-          ))}
-
           {settings.caption.trim() && <div className="strip-caption">{settings.caption}</div>}
         </div>
       </section>
-
-      <div
-        ref={trashRef}
-        className={`sticker-trash ${dragState?.mode === 'move' ? 'is-visible' : ''} ${trashArmed ? 'is-armed' : ''}`}
-        aria-hidden={dragState?.mode !== 'move'}
-      >
-        <span>⌫</span>
-      </div>
 
       <nav className="capture-bar" aria-label="Capture controls">
         <button className="round-action" type="button" onClick={() => void flipCamera()} aria-label="Flip camera">
@@ -1551,6 +1229,20 @@ function App() {
         </button>
       </nav>
 
+      {videoRendering && (
+        <div
+          className="video-render-progress"
+          role="progressbar"
+          aria-label="Rendering story video"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(videoProgress * 100)}
+        >
+          <span style={{ width: `${Math.round(videoProgress * 100)}%` }} />
+          <em>{`Rendering ${Math.round(videoProgress * 100)}%`}</em>
+        </div>
+      )}
+
       <div className="progress-pills" aria-label={`${capturedCount} of ${layout.panels.length} panels captured`}>
         {layout.panels.map((panel) => (
           <span key={panel.id} className={shots[panel.id] ? 'done' : panel.id === activePanelId ? 'live' : ''} />
@@ -1578,14 +1270,6 @@ function App() {
             onLayout={changeLayout}
             onCreate={openCreator}
             onDeleteCustomLayout={deleteCustomLayout}
-          />
-        )}
-        {drawerTab === 'stickers' && (
-          <StickerPanel
-            activeSticker={activeSticker}
-            onAdd={addSticker}
-            onUpdate={updateSticker}
-            onDelete={deleteSticker}
           />
         )}
         {drawerTab === 'style' && (
@@ -1692,9 +1376,6 @@ function Drawer({
         <strong>Controls</strong>
       </button>
       <div className="drawer-tabs" role="tablist">
-        <button className={tab === 'stickers' ? 'active' : ''} type="button" onClick={() => onTab('stickers')}>
-          Stickers
-        </button>
         <button className={tab === 'layout' ? 'active' : ''} type="button" onClick={() => onTab('layout')}>
           Layout
         </button>
@@ -2166,64 +1847,6 @@ function CreatorPanel({
   )
 }
 
-function StickerPanel({
-  activeSticker,
-  onAdd,
-  onUpdate,
-  onDelete,
-}: {
-  activeSticker: Sticker | null
-  onAdd: (kind: StickerKind) => void
-  onUpdate: (update: Partial<Sticker>) => void
-  onDelete: () => void
-}) {
-  return (
-    <div className="drawer-stack">
-      <div className="sticker-actions">
-        {(['speech', 'thought', 'burst', 'caption', 'arrow', 'star'] as StickerKind[]).map((kind) => (
-          <button key={kind} type="button" onClick={() => onAdd(kind)}>
-            {kind}
-          </button>
-        ))}
-      </div>
-      <div className="triple-fields">
-        <label className="field">
-          <span>Bubble</span>
-          <input
-            type="color"
-            value={activeSticker?.fill ?? '#ffffff'}
-            disabled={!activeSticker}
-            onChange={(event) => onUpdate({ fill: event.target.value })}
-          />
-        </label>
-        <label className="field">
-          <span>Ink</span>
-          <input
-            type="color"
-            value={activeSticker?.ink ?? '#111111'}
-            disabled={!activeSticker}
-            onChange={(event) => onUpdate({ ink: event.target.value })}
-          />
-        </label>
-        <label className="field">
-          <span>Size</span>
-          <input
-            type="range"
-            min="14"
-            max="42"
-            value={activeSticker?.fontSize ?? 22}
-            disabled={!activeSticker}
-            onChange={(event) => onUpdate({ fontSize: Number(event.target.value) })}
-          />
-        </label>
-      </div>
-      <button className="subtle-danger" type="button" disabled={!activeSticker} onClick={onDelete}>
-        Delete selected sticker
-      </button>
-    </div>
-  )
-}
-
 function StylePanel({
   settings,
   onSettings,
@@ -2359,193 +1982,9 @@ function InstallerScreen({
   )
 }
 
-function StickerView({
-  sticker,
-  active,
-  editing,
-  onSelect,
-  onEditStart,
-  onEditEnd,
-  onText,
-  onDelete,
-  onDragStart,
-  onPinchStart,
-}: {
-  sticker: Sticker
-  active: boolean
-  editing: boolean
-  onSelect: () => void
-  onEditStart: () => void
-  onEditEnd: () => void
-  onText: (text: string) => void
-  onDelete: () => void
-  onDragStart: (event: PointerEvent<HTMLElement> | TouchEvent<HTMLElement>, mode: 'move' | 'resize') => void
-  onPinchStart: (event: TouchEvent<HTMLElement>) => void
-}) {
-  const textStartRef = useRef<{ x: number; y: number } | null>(null)
-  const suppressTextClickRef = useRef(false)
-  const style = {
-    left: `${sticker.x * 100}%`,
-    top: `${sticker.y * 100}%`,
-    width: `${sticker.w * 100}%`,
-    height: `${sticker.h * 100}%`,
-    '--sticker-fill': sticker.fill,
-    '--sticker-ink': sticker.ink,
-    '--sticker-size': `${sticker.fontSize}px`,
-    transform: `rotate(${sticker.rotation}deg)`,
-  } as React.CSSProperties
-
-  function rememberTextPointer(event: PointerEvent<HTMLButtonElement>) {
-    textStartRef.current = { x: event.clientX, y: event.clientY }
-  }
-
-  function finishTextPointer(event: PointerEvent<HTMLButtonElement>) {
-    const start = textStartRef.current
-    textStartRef.current = null
-    if (!start) {
-      return
-    }
-
-    const isTap = Math.hypot(event.clientX - start.x, event.clientY - start.y) < 8
-    suppressTextClickRef.current = !isTap
-    if (isTap) {
-      onEditStart()
-    }
-  }
-
-  function rememberTextTouch(event: TouchEvent<HTMLButtonElement>) {
-    const point = event.touches[0]
-    textStartRef.current = point ? { x: point.clientX, y: point.clientY } : null
-  }
-
-  function finishTextTouch(event: TouchEvent<HTMLButtonElement>) {
-    const point = event.changedTouches[0]
-    const start = textStartRef.current
-    textStartRef.current = null
-    if (!point || !start) {
-      return
-    }
-
-    const isTap = Math.hypot(point.clientX - start.x, point.clientY - start.y) < 8
-    suppressTextClickRef.current = !isTap
-    if (isTap) {
-      onEditStart()
-    }
-  }
-
-  return (
-    <div
-      className={`sticker sticker-${sticker.kind} ${active ? 'active' : ''}`}
-      style={style}
-      data-sticker-id={sticker.id}
-      data-rotation={Math.round(sticker.rotation)}
-      role="button"
-      tabIndex={0}
-      onClick={(event) => {
-        event.stopPropagation()
-        onSelect()
-      }}
-      onPointerDown={(event) => onDragStart(event, 'move')}
-      onTouchStart={(event) => {
-        if (event.touches.length > 1) {
-          onPinchStart(event)
-        } else {
-          onDragStart(event, 'move')
-        }
-      }}
-    >
-      {editing ? (
-        <textarea
-          className="sticker-text-input"
-          value={sticker.text}
-          aria-label="Edit sticker text"
-          autoFocus
-          onFocus={(event) => event.currentTarget.select()}
-          onPointerDown={(event) => event.stopPropagation()}
-          onTouchStart={(event) => {
-            if (event.touches.length < 2) {
-              event.stopPropagation()
-            }
-          }}
-          onChange={(event) => onText(event.target.value)}
-          onBlur={onEditEnd}
-          onKeyDown={(event) => {
-            if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Escape') {
-              event.preventDefault()
-              event.currentTarget.blur()
-            }
-          }}
-        />
-      ) : (
-        <button
-            className="sticker-text"
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation()
-              if (suppressTextClickRef.current) {
-                suppressTextClickRef.current = false
-                return
-              }
-              onEditStart()
-            }}
-            onPointerDown={rememberTextPointer}
-            onPointerUp={finishTextPointer}
-            onTouchStart={rememberTextTouch}
-            onTouchEnd={finishTextTouch}
-          >
-          <StickerText sticker={sticker} />
-        </button>
-      )}
-      <i
-        aria-hidden="true"
-        onPointerDown={(event) => {
-          event.stopPropagation()
-          onDragStart(event, 'resize')
-        }}
-        onTouchStart={(event) => {
-          event.stopPropagation()
-          if (event.touches.length > 1) {
-            onPinchStart(event)
-          } else {
-            onDragStart(event, 'resize')
-          }
-        }}
-      />
-      <button
-        className="sticker-delete"
-        type="button"
-        aria-label="Delete sticker"
-        onClick={(event) => {
-          event.stopPropagation()
-          onDelete()
-        }}
-        onPointerDown={(event) => event.stopPropagation()}
-        onTouchStart={(event) => event.stopPropagation()}
-      >
-        ⌫
-      </button>
-    </div>
-  )
-}
-
-function StickerText({ sticker }: { sticker: Sticker }) {
-  const metrics = fitStickerText(sticker.text, sticker)
-  return (
-    <span
-      className="sticker-text-fit"
-      style={{ fontSize: `${metrics.fontSize}px`, lineHeight: metrics.lineHeight }}
-    >
-      {metrics.lines.map((line, index) => (
-        <span key={`${line}-${index}`}>{line}</span>
-      ))}
-    </span>
-  )
-}
-
 async function renderToPng(
   layout: Layout,
   shots: Record<string, Shot>,
-  stickers: Sticker[],
   settings: Settings,
   pageFormat: PageFormat,
 ) {
@@ -2580,10 +2019,6 @@ async function renderToPng(
     drawDividerGap(context, divider, width, panelHeight, outer, gutter, settings.background)
   }
 
-  for (const sticker of stickers) {
-    drawSticker(context, sticker, width, panelHeight, 3)
-  }
-
   if (settings.caption.trim()) {
     const captionHeight = Math.min(130, panelHeight * 0.22)
     const captionY = panelHeight - captionHeight - outer - gutter / 2
@@ -2611,7 +2046,6 @@ async function renderToPng(
 async function renderStoryVideo(
   layout: Layout,
   shots: Record<string, Shot>,
-  stickers: Sticker[],
   settings: Settings,
   pageFormat: PageFormat,
   onProgress?: (progress: number) => void,
@@ -2657,7 +2091,7 @@ async function renderStoryVideo(
   recorder.start(250)
   for (let frame = 0; frame < totalFrames; frame += 1) {
     const progress = totalFrames <= 1 ? 1 : frame / (totalFrames - 1)
-    drawStoryVideoFrame(context, layout, images, stickers, settings, width, panelHeight, progress)
+    drawStoryVideoFrame(context, layout, images, settings, width, panelHeight, progress)
     if (frame % 6 === 0 || frame === totalFrames - 1) {
       onProgress?.((frame + 1) / totalFrames)
     }
@@ -2693,7 +2127,6 @@ function drawStoryVideoFrame(
   context: CanvasRenderingContext2D,
   layout: Layout,
   images: LoadedPanelFrame[],
-  stickers: Sticker[],
   settings: Settings,
   width: number,
   panelHeight: number,
@@ -2721,16 +2154,6 @@ function drawStoryVideoFrame(
     context.globalAlpha = decorationAlpha
     for (const divider of layout.dividers ?? []) {
       drawDividerGap(context, divider, width, panelHeight, outer, gutter, settings.background)
-    }
-    context.restore()
-  }
-
-  const stickerAlpha = easeOutCubic(clamp((progress - 0.7) / 0.24, 0, 1))
-  if (stickerAlpha > 0) {
-    context.save()
-    context.globalAlpha = stickerAlpha
-    for (const sticker of stickers) {
-      drawSticker(context, sticker, width, panelHeight, styleScale)
     }
     context.restore()
   }
@@ -2926,45 +2349,6 @@ function drawDividerGap(
   context.restore()
 }
 
-function drawSticker(context: CanvasRenderingContext2D, sticker: Sticker, width: number, panelHeight: number, styleScale = 3) {
-  const x = sticker.x * width
-  const y = sticker.y * panelHeight
-  const w = sticker.w * width
-  const h = sticker.h * panelHeight
-  context.save()
-  context.translate(x + w / 2, y + h / 2)
-  context.rotate((sticker.rotation * Math.PI) / 180)
-  context.translate(-w / 2, -h / 2)
-  context.fillStyle = sticker.fill
-  context.strokeStyle = sticker.ink
-  context.lineWidth = Math.max(6, Math.min(w, h) * 0.06)
-  if (sticker.kind === 'burst') {
-    drawBurst(context, w, h)
-  } else if (sticker.kind === 'thought') {
-    drawOval(context, 0, 0, w, h)
-  } else if (sticker.kind === 'star') {
-    drawStar(context, w / 2, h / 2, Math.min(w, h) * 0.48, Math.min(w, h) * 0.23)
-  } else if (sticker.kind === 'arrow') {
-    drawArrow(context, w, h)
-  } else {
-    drawRoundedRect(context, 0, 0, w, h * 0.86, sticker.kind === 'caption' ? 12 : h * 0.25)
-  }
-  if (sticker.kind !== 'arrow') {
-    context.fill()
-    context.stroke()
-  }
-  const textMetrics = fitStickerText(sticker.text, sticker)
-  context.fillStyle = sticker.ink
-  context.font = `900 ${textMetrics.fontSize * styleScale}px ui-rounded, "Avenir Next", "Segoe UI", sans-serif`
-  context.textAlign = 'center'
-  context.textBaseline = 'middle'
-  textMetrics.lines.forEach((line, index) => {
-    const y = h * 0.43 + (index - (textMetrics.lines.length - 1) / 2) * textMetrics.fontSize * textMetrics.lineHeight * styleScale
-    context.fillText(line, w / 2, y, w * 0.84)
-  })
-  context.restore()
-}
-
 function panelStyle(panel: Panel) {
   const center = panelCentroid(panel)
   return {
@@ -3115,51 +2499,6 @@ function drawEmptyPanel(context: CanvasRenderingContext2D, x: number, y: number,
   }
 }
 
-function drawOval(context: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
-  context.beginPath()
-  context.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2)
-  context.closePath()
-}
-
-function drawBurst(context: CanvasRenderingContext2D, w: number, h: number) {
-  context.beginPath()
-  for (let index = 0; index < 18; index += 1) {
-    const angle = (Math.PI * 2 * index) / 18 - Math.PI / 2
-    const radius = index % 2 === 0 ? 0.52 : 0.36
-    const x = w / 2 + Math.cos(angle) * w * radius
-    const y = h / 2 + Math.sin(angle) * h * radius
-    index === 0 ? context.moveTo(x, y) : context.lineTo(x, y)
-  }
-  context.closePath()
-}
-
-function drawStar(context: CanvasRenderingContext2D, cx: number, cy: number, outer: number, inner: number) {
-  context.beginPath()
-  for (let index = 0; index < 10; index += 1) {
-    const radius = index % 2 === 0 ? outer : inner
-    const angle = (Math.PI * index) / 5 - Math.PI / 2
-    const x = cx + Math.cos(angle) * radius
-    const y = cy + Math.sin(angle) * radius
-    index === 0 ? context.moveTo(x, y) : context.lineTo(x, y)
-  }
-  context.closePath()
-}
-
-function drawArrow(context: CanvasRenderingContext2D, w: number, h: number) {
-  context.lineCap = 'round'
-  context.lineJoin = 'round'
-  context.lineWidth = Math.max(14, h * 0.24)
-  context.beginPath()
-  context.moveTo(w * 0.08, h * 0.55)
-  context.lineTo(w * 0.72, h * 0.55)
-  context.stroke()
-  context.beginPath()
-  context.moveTo(w * 0.64, h * 0.22)
-  context.lineTo(w * 0.93, h * 0.55)
-  context.lineTo(w * 0.64, h * 0.88)
-  context.stroke()
-}
-
 function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image()
@@ -3233,52 +2572,6 @@ function readBlobAsDataUrl(blob: Blob, failureMessage: string): Promise<string> 
     reader.onerror = () => reject(new Error(failureMessage))
     reader.readAsDataURL(blob)
   })
-}
-
-function fitStickerText(text: string, sticker: Sticker): StickerTextMetrics {
-  const raw = (text.trim() || 'TEXT').toUpperCase()
-  const maxChars = Math.max(4, Math.round(sticker.w * 42))
-  const lines = wrapText(raw, maxChars).slice(0, 4)
-  const longest = Math.max(...lines.map((line) => line.length), 1)
-  const widthFactor = (sticker.w * 120) / longest
-  const heightFactor = (sticker.h * 120) / Math.max(lines.length, 1)
-  const fontSize = clamp(Math.min(sticker.fontSize, widthFactor, heightFactor), 11, sticker.fontSize)
-  return {
-    fontSize,
-    lineHeight: lines.length > 2 ? 0.9 : 0.96,
-    lines,
-  }
-}
-
-function wrapText(text: string, maxChars: number) {
-  const explicitLines = text.split(/\n+/)
-  const lines: string[] = []
-
-  for (const explicitLine of explicitLines) {
-    const words = explicitLine.split(/\s+/).filter(Boolean)
-    let line = ''
-    for (const word of words) {
-      if (!line) {
-        line = word
-      } else if (`${line} ${word}`.length <= maxChars) {
-        line = `${line} ${word}`
-      } else {
-        lines.push(line)
-        line = word
-      }
-
-      while (line.length > maxChars) {
-        lines.push(line.slice(0, maxChars))
-        line = line.slice(maxChars)
-      }
-    }
-
-    if (line) {
-      lines.push(line)
-    }
-  }
-
-  return lines.length > 0 ? lines : ['TEXT']
 }
 
 function clamp(value: number, min: number, max: number) {
