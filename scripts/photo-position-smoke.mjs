@@ -31,6 +31,7 @@ await page.addInitScript(() => {
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
 await page.getByRole('button', { name: 'Start' }).tap()
+await setFitMode(page, 'cover')
 await tapStrip(page, 0.75, 0.31)
 
 const selectedPanel = await page.locator('.live-panel.is-live').getAttribute('data-panel-id')
@@ -47,6 +48,7 @@ const frame = await page.locator('[data-panel-id="2"] img').evaluate((image) => 
   return {
     w: panel ? box.width / panel.width : 0,
     h: panel ? box.height / panel.height : 0,
+    renderedRatio: box.height > 0 ? box.width / box.height : 0,
     sourceRatio: image instanceof HTMLImageElement ? image.naturalWidth / image.naturalHeight : 0,
   }
 })
@@ -76,7 +78,10 @@ console.log(JSON.stringify(result, null, 2))
 const failures = [
   result.selectedPanel === '2' ? null : 'panel selection did not land on polygon panel 2',
   result.frame.sourceRatio > 2.95 && result.frame.sourceRatio < 3.05 ? null : 'uploaded landscape source dimensions were not preserved',
-  result.frame.w > 1.45 && result.frame.w < 1.55 ? null : 'uploaded landscape photo is still cropped to the panel width',
+  Math.abs(result.frame.renderedRatio - result.frame.sourceRatio) / result.frame.sourceRatio < 0.08
+    ? null
+    : 'uploaded landscape photo is rendered with the canvas aspect ratio instead of the source photo ratio',
+  result.frame.w > 1.8 && result.frame.w < 1.95 ? null : 'uploaded landscape fill mode did not account for the canvas aspect ratio',
   result.frame.h > 0.45 && result.frame.h < 0.55 ? null : 'uploaded landscape photo is not fitted to the polygon panel height',
   result.afterTransform.x > result.beforeTransform.x + 0.2 ? null : 'manual photo drag did not update the shot offset',
   result.beforePixel.width === 1440 && result.beforePixel.height === 1800 ? null : 'default 4:5 export dimensions are incorrect',
@@ -93,6 +98,34 @@ if (failures.length > 0) {
 async function tapStrip(page, nx, ny) {
   const box = await page.locator('.live-strip').boundingBox()
   await page.mouse.click(box.x + box.width * nx, box.y + box.height * ny)
+}
+
+async function setFitMode(page, value) {
+  await openDrawer(page)
+  await page.getByRole('button', { name: 'Save', exact: true }).tap()
+  await page.locator('.motion-drawer-style select').selectOption(value)
+  await closeDrawer(page)
+}
+
+async function openDrawer(page) {
+  await page.locator('.capture-bar button[aria-label="Controls"]').tap()
+  try {
+    await page.locator('.motion-drawer.is-open').waitFor({ timeout: 1200 })
+  } catch {
+    await page.locator('.capture-bar button[aria-label="Controls"]').evaluate((button) => button.click())
+    await page.locator('.motion-drawer.is-open').waitFor()
+  }
+}
+
+async function closeDrawer(page) {
+  const open = await page.locator('.motion-drawer.is-open').count()
+  if (open > 0) {
+    await page.locator('.motion-drawer.is-open .drawer-grabber').evaluate((button) => button.click())
+  }
+  await page.waitForFunction(() => {
+    const box = document.querySelector('.motion-drawer')?.getBoundingClientRect()
+    return !!box && box.top > window.innerHeight
+  })
 }
 
 async function dragPanelPhoto(page, nx, ny, dx, dy) {

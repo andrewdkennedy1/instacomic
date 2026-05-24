@@ -30,6 +30,18 @@ await page.waitForFunction(() => document.querySelector('.live-camera')?.readySt
 const liveFrameBefore = await page.locator('[data-panel-id="2"] .live-frame').count()
 await page.locator('.shutter').tap()
 await page.waitForFunction(() => document.querySelector('[data-panel-id="2"] img'))
+const capturedFrame = await page.locator('[data-panel-id="2"] img').evaluate((image) => {
+  const panel = image.closest('.live-panel')?.getBoundingClientRect()
+  const box = image.getBoundingClientRect()
+  const sourceRatio = image instanceof HTMLImageElement && image.naturalHeight > 0 ? image.naturalWidth / image.naturalHeight : 0
+  return {
+    naturalWidth: image instanceof HTMLImageElement ? image.naturalWidth : 0,
+    naturalHeight: image instanceof HTMLImageElement ? image.naturalHeight : 0,
+    sourceRatio,
+    renderedRatio: box.height > 0 ? box.width / box.height : 0,
+    fitsPanel: !!panel && box.left >= panel.left - 1 && box.right <= panel.right + 1 && box.top >= panel.top - 1 && box.bottom <= panel.bottom + 1,
+  }
+})
 await page.locator('.shutter').tap()
 await page.waitForFunction(() => document.querySelector('[data-panel-id="3"] img'))
 await page.locator('.shutter').tap()
@@ -40,6 +52,7 @@ await page.waitForFunction(() => document.querySelector('[data-panel-id="5"] img
 const result = {
   title: await page.title(),
   liveFrameBefore,
+  capturedFrame,
   panel2HasImage: await page.locator('[data-panel-id="2"] img').count(),
   panel5HasImage: await page.locator('[data-panel-id="5"] img').count(),
   activePanelAfterFinalCapture: await page.locator('.live-panel.is-live').count(),
@@ -52,6 +65,11 @@ console.log(JSON.stringify(result, null, 2))
 
 const failures = [
   result.liveFrameBefore === 1 ? null : 'panel 2 did not become live before capture',
+  result.capturedFrame.naturalWidth > 0 && result.capturedFrame.naturalHeight > 0 ? null : 'captured photo did not preserve source dimensions',
+  Math.abs(result.capturedFrame.renderedRatio - result.capturedFrame.sourceRatio) / result.capturedFrame.sourceRatio < 0.08
+    ? null
+    : 'captured photo is rendered with the panel/canvas aspect ratio instead of the source photo aspect ratio',
+  result.capturedFrame.fitsPanel ? null : 'captured photo is still overflowing instead of fitting the full photo into the panel',
   result.panel2HasImage === 1 ? null : 'panel 2 did not keep the captured image',
   result.panel5HasImage === 1 ? null : 'last panel did not keep the captured image',
   result.activePanelAfterFinalCapture === 0 ? null : 'a panel stayed live after the final forward capture',

@@ -37,6 +37,12 @@ type Shot = {
   scale: number
 }
 
+type CapturedPhoto = {
+  dataUrl: string
+  width: number
+  height: number
+}
+
 type Sticker = {
   id: string
   kind: StickerKind
@@ -316,7 +322,7 @@ const defaultSettings: Settings = {
   borderColor: '#ffffff',
   caption: '',
   captionColor: '#111111',
-  fit: 'cover',
+  fit: 'contain',
 }
 
 const CUSTOM_LAYOUT_KEY = 'instacomic.customLayouts.v1'
@@ -730,8 +736,8 @@ function App() {
         video: {
           facingMode: { ideal: nextFacing },
           width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
+          resizeMode: { ideal: 'none' },
+        } as MediaTrackConstraints & { resizeMode: { ideal: string } },
       })
       setStream(nextStream)
       setStatus(activePanelIndex >= 0 ? `Live in panel ${activePanelIndex + 1}.` : 'Camera ready. Tap a panel to retake it.')
@@ -782,9 +788,10 @@ function App() {
     }
   }
 
-  function capturePanel() {
+  async function capturePanel() {
     const video = videoRef.current
-    if (!activePanelId) {
+    const targetPanelId = activePanelId
+    if (!targetPanelId) {
       setStatus('Tap a panel to retake it, or share the comic.')
       return
     }
@@ -795,23 +802,22 @@ function App() {
       return
     }
 
-    const canvas = document.createElement('canvas')
-    canvas.width = video.videoWidth || 1280
-    canvas.height = video.videoHeight || 720
-    const context = canvas.getContext('2d')
-    if (!context) {
-      setStatus('Canvas is unavailable.')
+    setStatus('Capturing full photo...')
+    let photo: CapturedPhoto
+    try {
+      photo = await captureFullPhoto(stream, video)
+    } catch (error) {
+      setStatus(error instanceof Error ? `Photo capture failed: ${error.message}` : 'Photo capture failed.')
       return
     }
 
-    context.drawImage(video, 0, 0, canvas.width, canvas.height)
-    const nextShot = createShot(canvas.toDataURL('image/jpeg', 0.92), canvas.width, canvas.height)
-    const nextCache = putShotInCache(layout, shots, shotCacheRef.current, activePanelId, nextShot)
+    const nextShot = createShot(photo.dataUrl, photo.width, photo.height)
+    const nextCache = putShotInCache(layout, shots, shotCacheRef.current, targetPanelId, nextShot)
     shotCacheRef.current = nextCache
     const nextShots = shotsForLayout(layout, nextCache)
     setShots(nextShots)
 
-    const currentIndex = layout.panels.findIndex((panel) => panel.id === activePanelId)
+    const currentIndex = layout.panels.findIndex((panel) => panel.id === targetPanelId)
     const nextPanel = layout.panels.slice(currentIndex + 1).find((panel) => !nextShots[panel.id])
     if (nextPanel) {
       setActivePanelId(nextPanel.id)
@@ -1415,7 +1421,7 @@ function App() {
                 <img
                   src={shots[panel.id].dataUrl}
                   alt={`Panel ${index + 1}`}
-                  style={shotImageStyle(panel, shots[panel.id], settings.fit)}
+                  style={shotImageStyle(panel, shots[panel.id], settings.fit, pageFormat)}
                   data-shot-scale={shots[panel.id].scale.toFixed(2)}
                   data-shot-x={shots[panel.id].offsetX.toFixed(2)}
                   data-shot-y={shots[panel.id].offsetY.toFixed(2)}
@@ -2654,10 +2660,10 @@ function panelStyle(panel: Panel) {
   }
 }
 
-function shotImageStyle(panel: Panel, shot: Shot, fit: PanelFit) {
+function shotImageStyle(panel: Panel, shot: Shot, fit: PanelFit, pageFormat: PageFormat) {
   const bounds = panelPhotoFrameBounds(panel)
   const imageRatio = shot.width && shot.height ? shot.width / shot.height : bounds.w / bounds.h
-  const size = imageFitSize(imageRatio, bounds.w, bounds.h, fit)
+  const size = imageFitSize(imageRatio, bounds.w, bounds.h, fit, pageFormatCanvasAspect(pageFormat))
 
   return {
     left: `${(bounds.x + (bounds.w - size.width * shot.scale) / 2 + shot.offsetX * bounds.w) * 100}%`,
@@ -2748,13 +2754,13 @@ function drawImageFit(
   context.drawImage(image, x + (w - drawW) / 2 + offsetX, y + (h - drawH) / 2 + offsetY, drawW, drawH)
 }
 
-function imageFitSize(imageRatio: number, w: number, h: number, fit: PanelFit) {
-  const rectRatio = w / h
+function imageFitSize(imageRatio: number, w: number, h: number, fit: PanelFit, yScale = 1) {
+  const rectRatio = w / (h * yScale)
   const cover = fit === 'cover'
   const useWidth = cover ? imageRatio < rectRatio : imageRatio > rectRatio
   return {
-    width: useWidth ? w : h * imageRatio,
-    height: useWidth ? w / imageRatio : h,
+    width: useWidth ? w : h * yScale * imageRatio,
+    height: useWidth ? w / imageRatio / yScale : h,
   }
 }
 
@@ -2840,18 +2846,69 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   })
 }
 
+async function captureFullPhoto(stream: MediaStream, video: HTMLVideoElement): Promise<CapturedPhoto> {
+  const stillPhoto = await takePhotoFromTrack(stream).catch(() => null)
+  return stillPhoto ?? captureVideoFrame(video)
+}
+
+async function takePhotoFromTrack(stream: MediaStream): Promise<CapturedPhoto | null> {
+  const track = stream.getVideoTracks()[0]
+  const ImageCaptureConstructor = (window as typeof window & {
+    ImageCapture?: new (track: MediaStreamTrack) => { takePhoto: () => Promise<Blob> }
+  }).ImageCapture
+  if (!track || !ImageCaptureConstructor) {
+    return null
+  }
+
+  const blob = await new ImageCaptureConstructor(track).takePhoto()
+  const dataUrl = await readBlobAsDataUrl(blob, 'Photo capture failed.')
+  const image = await loadImage(dataUrl)
+  return {
+    dataUrl,
+    width: image.naturalWidth || image.width,
+    height: image.naturalHeight || image.height,
+  }
+}
+
+function captureVideoFrame(video: HTMLVideoElement): CapturedPhoto {
+  const width = video.videoWidth
+  const height = video.videoHeight
+  if (width <= 0 || height <= 0) {
+    throw new Error('Camera frame is not ready.')
+  }
+
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d')
+  if (!context) {
+    throw new Error('Canvas is unavailable.')
+  }
+
+  context.drawImage(video, 0, 0, width, height)
+  return {
+    dataUrl: canvas.toDataURL('image/jpeg', 0.92),
+    width,
+    height,
+  }
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
+  return readBlobAsDataUrl(file, 'Photo upload failed.')
+}
+
+function readBlobAsDataUrl(blob: Blob, failureMessage: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => {
       if (typeof reader.result === 'string') {
         resolve(reader.result)
       } else {
-        reject(new Error('Photo upload failed.'))
+        reject(new Error(failureMessage))
       }
     }
-    reader.onerror = () => reject(new Error('Photo upload failed.'))
-    reader.readAsDataURL(file)
+    reader.onerror = () => reject(new Error(failureMessage))
+    reader.readAsDataURL(blob)
   })
 }
 
