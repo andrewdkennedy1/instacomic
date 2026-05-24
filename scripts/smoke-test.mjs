@@ -141,11 +141,27 @@ const manifest = await (await page.request.get(new URL('/manifest.webmanifest', 
 const bodyOverflow = await page.evaluate(() => getComputedStyle(document.body).overflow)
 await openDrawer(page)
 await page.getByRole('button', { name: 'Create' }).tap()
+await page.locator('.creator-fullscreen').waitFor()
+await waitForDrawerHidden(page)
+const creatorFullscreenVisible = await page.locator('.creator-fullscreen').count()
+const drawerHiddenAfterCreate = await page.locator('.motion-drawer').boundingBox().then((box) => box && box.y > 830)
 await page.getByPlaceholder('My manga layout').fill('Final Layout')
 await page.getByPlaceholder('My manga layout').blur()
+await page.getByLabel('Divider thickness').evaluate((input) => {
+  const range = input
+  const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  valueSetter?.call(range, '16')
+  range.dispatchEvent(new Event('input', { bubbles: true }))
+})
+const creatorThickness = Number(await page.locator('.creator-stack').getAttribute('data-divider-thickness'))
+const dividerVisualThickness = await page.locator('.creator-free-line').first().evaluate((line) => {
+  return Number.parseFloat(getComputedStyle(line, '::before').height)
+})
 const creatorTextHasRay = (await page.locator('.creator-stack').innerText()).toLowerCase().includes('ray')
 await dragCreatorHandleToPercent(page, '[data-divider-index="1"][data-handle="start"]', 0.5, 0.48)
 await page.getByRole('button', { name: 'Save layout' }).tap()
+await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
+const creatorClosedAfterLayoutSave = await page.locator('.creator-fullscreen').count() === 0
 await waitForDrawerHidden(page)
 const drawerHiddenAfterLayoutSave = await page.locator('.motion-drawer').boundingBox().then((box) => box && box.y > 830)
 const storedLayoutInfo = await page.evaluate(() => {
@@ -217,7 +233,12 @@ const result = {
   exportedSize,
   manifestName: manifest.name,
   bodyOverflow,
+  creatorFullscreenVisible,
+  drawerHiddenAfterCreate,
+  creatorThickness,
+  dividerVisualThickness,
   creatorTextHasRay,
+  creatorClosedAfterLayoutSave,
   drawerHiddenAfterLayoutSave,
   storedLayoutInfo,
   restoredLayoutName,
@@ -250,7 +271,12 @@ const failures = [
   result.exportedSize.width === 1440 && result.exportedSize.height === 2560 ? null : '9:16 export dimensions are incorrect',
   result.manifestName === 'Instacomic' ? null : 'manifest did not load',
   result.bodyOverflow === 'hidden' ? null : 'body is scrollable',
+  result.creatorFullscreenVisible === 1 ? null : 'custom layout creator did not open fullscreen',
+  result.drawerHiddenAfterCreate ? null : 'drawer stayed visible behind the fullscreen creator',
+  result.creatorThickness === 16 ? null : 'custom layout thickness control did not update state',
+  result.dividerVisualThickness >= 15 ? null : 'custom layout thickness control did not update divider styling',
   result.creatorTextHasRay === false ? null : 'custom layout maker still exposes ray copy',
+  result.creatorClosedAfterLayoutSave ? null : 'fullscreen creator did not close after saving a layout',
   result.storedLayoutInfo.count > 0 ? null : 'custom layout was not saved',
   result.storedLayoutInfo.name === 'Final Layout' ? null : 'custom layout name was not saved',
   result.storedLayoutInfo.activeLayoutId?.startsWith('custom-') ? null : 'active layout id was not persisted',

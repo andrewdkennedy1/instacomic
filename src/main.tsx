@@ -411,6 +411,8 @@ function App() {
   const [customLayouts, setCustomLayouts] = useState<Layout[]>([])
   const [draftLines, setDraftLines] = useState<CustomLine[]>(() => createDefaultDraftLines())
   const [draftName, setDraftName] = useState('')
+  const [draftThickness, setDraftThickness] = useState(9)
+  const [creatorOpen, setCreatorOpen] = useState(false)
   const [appContext, setAppContext] = useState<AppContext>(() => getAppContext())
   const [storageReady, setStorageReady] = useState(false)
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
@@ -947,6 +949,17 @@ function App() {
     setStatus('Creator reset.')
   }
 
+  function openCreator() {
+    setCreatorOpen(true)
+    setDrawerOpen(false)
+    setDrawerTab('layout')
+  }
+
+  function closeCreator() {
+    setCreatorOpen(false)
+    setDrawerTab('layout')
+  }
+
   function saveDraftLayout() {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur()
@@ -969,6 +982,7 @@ function App() {
     changeLayout(customLayout)
     setDraftName('')
     setDraftLines(createDefaultDraftLines())
+    setCreatorOpen(false)
     setDrawerTab('layout')
     setDrawerOpen(false)
     setStatus('Custom layout saved on this phone.')
@@ -1449,26 +1463,21 @@ function App() {
         dragControls={dragControls}
         onOpen={() => setDrawerOpen(true)}
         onClose={() => setDrawerOpen(false)}
-        onTab={setDrawerTab}
+        onTab={(tab) => {
+          if (tab === 'create') {
+            openCreator()
+          } else {
+            setDrawerTab(tab)
+          }
+        }}
       >
         {drawerTab === 'layout' && (
           <LayoutPanel
             layout={layout}
             layouts={allLayouts}
             onLayout={changeLayout}
-            onCreate={() => setDrawerTab('create')}
+            onCreate={openCreator}
             onDeleteCustomLayout={deleteCustomLayout}
-          />
-        )}
-        {drawerTab === 'create' && (
-          <CreatorPanel
-            draftName={draftName}
-            draftLines={draftLines}
-            onName={setDraftName}
-            onAddLine={addDraftLine}
-            onMoveLine={updateDraftLine}
-            onReset={resetDraftLayout}
-            onSave={saveDraftLayout}
           />
         )}
         {drawerTab === 'stickers' && (
@@ -1489,6 +1498,31 @@ function App() {
           />
         )}
       </Drawer>
+      <AnimatePresence>
+        {creatorOpen && (
+          <motion.section
+            className="creator-fullscreen"
+            aria-label="Create custom layout"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+            transition={{ duration: 0.18 }}
+          >
+            <CreatorPanel
+              draftName={draftName}
+              draftLines={draftLines}
+              dividerThickness={draftThickness}
+              onName={setDraftName}
+              onAddLine={addDraftLine}
+              onMoveLine={updateDraftLine}
+              onThickness={setDraftThickness}
+              onReset={resetDraftLayout}
+              onSave={saveDraftLayout}
+              onCancel={closeCreator}
+            />
+          </motion.section>
+        )}
+      </AnimatePresence>
         </>
       )}
     </main>
@@ -1644,19 +1678,25 @@ function LayoutPanel({
 function CreatorPanel({
   draftName,
   draftLines,
+  dividerThickness,
   onName,
   onAddLine,
   onMoveLine,
+  onThickness,
   onReset,
   onSave,
+  onCancel,
 }: {
   draftName: string
   draftLines: CustomLine[]
+  dividerThickness: number
   onName: (name: string) => void
   onAddLine: (preset: CustomLinePreset) => void
   onMoveLine: (lineId: string, update: Partial<CustomLine>) => void
+  onThickness: (thickness: number) => void
   onReset: () => void
   onSave: () => void
+  onCancel: () => void
 }) {
   const canvasRef = useRef<HTMLDivElement>(null)
   const [lineDrag, setLineDrag] = useState<{
@@ -1670,6 +1710,10 @@ function CreatorPanel({
   const lineTouchRef = useRef<LineTouchState | null>(null)
   const linePointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(new Map())
   const previewPanels = useMemo(() => panelsFromLines(draftLines), [draftLines])
+  const creatorStyle = {
+    '--creator-divider-thickness': `${dividerThickness}px`,
+    '--creator-handle-size': `${Math.max(40, dividerThickness * 4)}px`,
+  } as React.CSSProperties
 
   function beginLineDrag(event: PointerEvent<HTMLElement>, line: CustomLine, mode: 'line' | 'start' | 'end') {
     event.preventDefault()
@@ -1873,112 +1917,137 @@ function CreatorPanel({
   }
 
   return (
-    <form className="creator-stack" onSubmit={submitLayout}>
-      <div
-        ref={canvasRef}
-        className="creator-canvas"
-        aria-label="Drag layout divider handles"
-        onTouchStart={beginLineTouch}
-        onTouchMove={moveLineFromTouch}
-        onTouchEnd={(event) => {
-          if (event.touches.length < 2) {
-            clearLineTouch()
-          }
-        }}
-        onTouchCancel={clearLineTouch}
-      >
-        {previewPanels.map((panel) => (
-          <div key={panel.id} className="creator-panel" style={panelStyle(panel)} />
-        ))}
-        {draftLines.map((line, index) => (
-          <React.Fragment key={line.id}>
-            <span
-              className={`creator-free-line ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
-              style={lineSegmentStyle(line)}
-              aria-hidden="true"
-              data-divider-id={line.id}
-              data-divider-index={index}
-              data-divider-x1={line.x1.toFixed(2)}
-              data-divider-y1={line.y1.toFixed(2)}
-              data-divider-x2={line.x2.toFixed(2)}
-              data-divider-y2={line.y2.toFixed(2)}
-            />
-            <button
-              className={`creator-handle creator-handle-start ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
-              style={lineHandleStyle(line.x1, line.y1)}
-              type="button"
-              aria-label={`Move divider ${index + 1} start`}
-              data-divider-id={line.id}
-              data-divider-index={index}
-              data-handle="start"
-              onPointerDown={(event) => beginLinePointer(event, line, 'start')}
-              onPointerMove={moveLinePointer}
-              onPointerUp={endLinePointer}
-              onPointerCancel={endLinePointer}
-              onTouchStart={(event) => {
-                if (event.touches.length > 1) {
-                  beginLineTouch(event)
-                }
-              }}
-              onTouchMove={moveLineFromTouch}
-              onTouchEnd={(event) => {
-                if (event.touches.length < 2) {
-                  clearLineTouch()
-                }
-              }}
-              onTouchCancel={clearLineTouch}
-            />
-            <button
-              className={`creator-handle creator-handle-end ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
-              style={lineHandleStyle(line.x2, line.y2)}
-              type="button"
-              aria-label={`Move divider ${index + 1} end`}
-              data-divider-id={line.id}
-              data-divider-index={index}
-              data-handle="end"
-              onPointerDown={(event) => beginLinePointer(event, line, 'end')}
-              onPointerMove={moveLinePointer}
-              onPointerUp={endLinePointer}
-              onPointerCancel={endLinePointer}
-              onTouchStart={(event) => {
-                if (event.touches.length > 1) {
-                  beginLineTouch(event)
-                }
-              }}
-              onTouchMove={moveLineFromTouch}
-              onTouchEnd={(event) => {
-                if (event.touches.length < 2) {
-                  clearLineTouch()
-                }
-              }}
-              onTouchCancel={clearLineTouch}
-            />
-          </React.Fragment>
-        ))}
-      </div>
-      <label className="field">
-        <span>Name</span>
-        <input
-          value={draftName}
-          placeholder="My manga layout"
-          autoComplete="off"
-          enterKeyHint="done"
-          onChange={(event) => onName(event.target.value)}
-        />
-      </label>
-      <div className="creator-actions">
-        <button type="button" onClick={() => onAddLine('diagonal')}>
-          Add diagonal divider
+    <form className="creator-stack" style={creatorStyle} data-divider-thickness={dividerThickness} onSubmit={submitLayout}>
+      <div className="creator-topbar">
+        <button type="button" onClick={onCancel} aria-label="Close creator">
+          Close
         </button>
-        <button type="button" onClick={() => onAddLine('vertical')}>
-          Add straight divider
-        </button>
-        <button type="button" onClick={onReset}>
-          Reset
-        </button>
+        <strong>Create Layout</strong>
         <button type="submit" className="primary">
-          Save layout
+          Save
         </button>
+      </div>
+      <div className="creator-workbench">
+        <div
+          ref={canvasRef}
+          className="creator-canvas"
+          aria-label="Drag layout divider handles"
+          onTouchStart={beginLineTouch}
+          onTouchMove={moveLineFromTouch}
+          onTouchEnd={(event) => {
+            if (event.touches.length < 2) {
+              clearLineTouch()
+            }
+          }}
+          onTouchCancel={clearLineTouch}
+        >
+          {previewPanels.map((panel) => (
+            <div key={panel.id} className="creator-panel" style={panelStyle(panel)} />
+          ))}
+          {draftLines.map((line, index) => (
+            <React.Fragment key={line.id}>
+              <span
+                className={`creator-free-line ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
+                style={lineSegmentStyle(line)}
+                aria-hidden="true"
+                data-divider-id={line.id}
+                data-divider-index={index}
+                data-divider-x1={line.x1.toFixed(2)}
+                data-divider-y1={line.y1.toFixed(2)}
+                data-divider-x2={line.x2.toFixed(2)}
+                data-divider-y2={line.y2.toFixed(2)}
+              />
+              <button
+                className={`creator-handle creator-handle-start ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
+                style={lineHandleStyle(line.x1, line.y1)}
+                type="button"
+                aria-label={`Move divider ${index + 1} start`}
+                data-divider-id={line.id}
+                data-divider-index={index}
+                data-handle="start"
+                onPointerDown={(event) => beginLinePointer(event, line, 'start')}
+                onPointerMove={moveLinePointer}
+                onPointerUp={endLinePointer}
+                onPointerCancel={endLinePointer}
+                onTouchStart={(event) => {
+                  if (event.touches.length > 1) {
+                    beginLineTouch(event)
+                  }
+                }}
+                onTouchMove={moveLineFromTouch}
+                onTouchEnd={(event) => {
+                  if (event.touches.length < 2) {
+                    clearLineTouch()
+                  }
+                }}
+                onTouchCancel={clearLineTouch}
+              />
+              <button
+                className={`creator-handle creator-handle-end ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
+                style={lineHandleStyle(line.x2, line.y2)}
+                type="button"
+                aria-label={`Move divider ${index + 1} end`}
+                data-divider-id={line.id}
+                data-divider-index={index}
+                data-handle="end"
+                onPointerDown={(event) => beginLinePointer(event, line, 'end')}
+                onPointerMove={moveLinePointer}
+                onPointerUp={endLinePointer}
+                onPointerCancel={endLinePointer}
+                onTouchStart={(event) => {
+                  if (event.touches.length > 1) {
+                    beginLineTouch(event)
+                  }
+                }}
+                onTouchMove={moveLineFromTouch}
+                onTouchEnd={(event) => {
+                  if (event.touches.length < 2) {
+                    clearLineTouch()
+                  }
+                }}
+                onTouchCancel={clearLineTouch}
+              />
+            </React.Fragment>
+          ))}
+        </div>
+        <div className="creator-side">
+          <label className="field">
+            <span>Name</span>
+            <input
+              value={draftName}
+              placeholder="My manga layout"
+              autoComplete="off"
+              enterKeyHint="done"
+              onChange={(event) => onName(event.target.value)}
+            />
+          </label>
+          <label className="field creator-thickness">
+            <span>Divider thickness</span>
+            <input
+              type="range"
+              min="6"
+              max="20"
+              value={dividerThickness}
+              aria-label="Divider thickness"
+              onChange={(event) => onThickness(Number(event.target.value))}
+            />
+            <output>{dividerThickness}px</output>
+          </label>
+          <div className="creator-actions">
+            <button type="button" onClick={() => onAddLine('diagonal')}>
+              Add diagonal divider
+            </button>
+            <button type="button" onClick={() => onAddLine('vertical')}>
+              Add straight divider
+            </button>
+            <button type="button" onClick={onReset}>
+              Reset
+            </button>
+            <button type="submit" className="primary">
+              Save layout
+            </button>
+          </div>
+        </div>
       </div>
     </form>
   )

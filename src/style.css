@@ -644,15 +644,86 @@ select:focus-visible,
 }
 
 .creator-stack {
+  --creator-divider-thickness: 9px;
+  --creator-handle-size: 44px;
   display: grid;
-  gap: 12px;
+  gap: 14px;
+  width: 100%;
+  min-height: 0;
+}
+
+.creator-fullscreen {
+  position: absolute;
+  inset: 0;
+  z-index: 95;
+  overflow-y: auto;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(18px, env(safe-area-inset-bottom));
+  color: #111;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.55) 1px, transparent 1px) 0 0 / 100% 72px,
+    linear-gradient(90deg, rgba(255, 255, 255, 0.42) 1px, transparent 1px) 0 0 / 72px 100%,
+    #f4ead3;
+  touch-action: pan-y;
+}
+
+.creator-fullscreen .creator-stack {
+  max-width: 980px;
+  min-height: calc(var(--app-height, 100dvh) - max(16px, env(safe-area-inset-top)) - max(18px, env(safe-area-inset-bottom)) - 32px);
+  margin: 0 auto;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.creator-topbar {
+  display: grid;
+  grid-template-columns: minmax(74px, auto) 1fr minmax(74px, auto);
+  gap: 10px;
+  align-items: center;
+}
+
+.creator-topbar strong {
+  min-width: 0;
+  text-align: center;
+  font-size: 20px;
+  font-weight: 1000;
+}
+
+.creator-topbar button,
+.creator-actions button {
+  min-height: 48px;
+  border: 0;
+  border-radius: 16px;
+  background: rgba(17, 17, 17, 0.08);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 1000;
+}
+
+.creator-topbar .primary,
+.creator-actions .primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.creator-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(230px, 300px);
+  gap: 16px;
+  align-items: stretch;
+  min-height: 0;
+}
+
+.creator-side {
+  align-self: center;
+  display: grid;
+  gap: 13px;
 }
 
 .creator-canvas {
   position: relative;
-  width: min(100%, 310px);
+  width: min(100%, 480px);
   aspect-ratio: 1 / 1.45;
   justify-self: center;
+  align-self: center;
   overflow: hidden;
   border: 3px solid #111;
   border-radius: 12px;
@@ -710,7 +781,7 @@ select:focus-visible,
   top: 50%;
   right: 0;
   left: 0;
-  height: 9px;
+  height: var(--creator-divider-thickness);
   border-radius: 999px;
   background: linear-gradient(90deg, var(--yellow), var(--accent));
   box-shadow:
@@ -721,8 +792,8 @@ select:focus-visible,
 
 .creator-handle {
   position: absolute;
-  width: 44px;
-  height: 44px;
+  width: var(--creator-handle-size);
+  height: var(--creator-handle-size);
   border: 3px solid #111;
   border-radius: 999px;
   background: #fff8ec;
@@ -754,29 +825,27 @@ select:focus-visible,
 }
 
 .creator-actions {
-  position: sticky;
-  bottom: -4px;
   z-index: 12;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 9px;
-  padding-top: 8px;
-  background: linear-gradient(rgba(255, 248, 236, 0), rgba(255, 248, 236, 0.96) 26%);
 }
 
-.creator-actions button {
-  min-height: 48px;
-  border: 0;
-  border-radius: 16px;
-  background: rgba(17, 17, 17, 0.08);
-  color: var(--ink);
+.creator-thickness {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
+.creator-thickness span,
+.creator-thickness input {
+  grid-column: 1 / -1;
+}
+
+.creator-thickness output {
+  justify-self: end;
+  color: var(--accent);
   font-size: 13px;
   font-weight: 1000;
-}
-
-.creator-actions .primary {
-  background: var(--accent);
-  color: #fff;
 }
 
 .sticker-actions {
@@ -1128,6 +1197,21 @@ input:disabled {
     left: max(20px, calc((100vw - 520px) / 2));
     border-radius: 28px;
     bottom: 12px;
+  }
+}
+
+@media (max-width: 759px) {
+  .creator-workbench {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .creator-side {
+    align-self: stretch;
+  }
+
+  .creator-fullscreen .creator-canvas {
+    width: min(100%, 420px);
   }
 }
 
