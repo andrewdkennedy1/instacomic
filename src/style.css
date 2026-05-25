@@ -521,7 +521,6 @@ select:focus-visible {
 .video-render-progress span {
   position: absolute;
   inset: 0 auto 0 0;
-  min-width: 8%;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--teal), var(--yellow));
   transition: width 120ms linear;
@@ -537,6 +536,81 @@ select:focus-visible {
   font-style: normal;
   font-weight: 1000;
   text-transform: uppercase;
+}
+
+.video-ready-card {
+  position: absolute;
+  right: max(14px, env(safe-area-inset-right));
+  bottom: calc(max(16px, env(safe-area-inset-bottom)) + 90px);
+  left: max(14px, env(safe-area-inset-left));
+  z-index: 83;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 2px solid rgba(17, 17, 17, 0.72);
+  border-radius: 18px;
+  color: #111;
+  background: rgba(255, 248, 236, 0.96);
+  box-shadow:
+    0 16px 38px rgba(0, 0, 0, 0.32),
+    3px 4px 0 #111;
+}
+
+.video-ready-card > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.video-ready-card strong,
+.video-ready-card em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.video-ready-card strong {
+  font-size: 14px;
+  font-weight: 1000;
+}
+
+.video-ready-card em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.video-ready-actions {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+
+.video-ready-actions button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 12px;
+  color: #111;
+  background: var(--yellow);
+  font-size: 12px;
+  font-weight: 1000;
+  white-space: nowrap;
+}
+
+.video-ready-actions button:nth-child(2) {
+  background: var(--teal);
+}
+
+.video-ready-actions button:last-child {
+  width: 38px;
+  padding: 0;
+  color: #fff8ec;
+  background: #111;
 }
 
 .motion-drawer {

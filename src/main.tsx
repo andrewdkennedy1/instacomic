@@ -53,6 +53,18 @@ type StoryVideoFormat = {
   extension: 'mp4' | 'webm'
 }
 
+type StoryVideoRenderPhase = 'rendering' | 'finalizing'
+
+type ReadyStoryVideo = {
+  blob: Blob
+  url: string
+  fileName: string
+  mimeType: string
+  extension: StoryVideoFormat['extension']
+  width: number
+  height: number
+}
+
 type Settings = {
   gutters: number
   radius: number
@@ -391,6 +403,8 @@ function App() {
   const [exportUrl, setExportUrl] = useState<string | null>(null)
   const [videoRendering, setVideoRendering] = useState(false)
   const [videoProgress, setVideoProgress] = useState(0)
+  const [videoProgressPhase, setVideoProgressPhase] = useState<StoryVideoRenderPhase>('rendering')
+  const [readyVideo, setReadyVideo] = useState<ReadyStoryVideo | null>(null)
   const [photoDragState, setPhotoDragState] = useState<PhotoDragState | null>(null)
   const [customLayouts, setCustomLayouts] = useState<Layout[]>([])
   const [draftLines, setDraftLines] = useState<CustomLine[]>(() => createDefaultDraftLines())
@@ -406,6 +420,7 @@ function App() {
   const stripRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const shotCacheRef = useRef<Shot[]>([])
+  const readyVideoUrlRef = useRef<string | null>(null)
   const startRequestedRef = useRef(false)
   const dragControls = useDragControls()
 
@@ -562,11 +577,28 @@ function App() {
     }
   }, [exportUrl])
 
+  useEffect(() => {
+    return () => {
+      if (readyVideoUrlRef.current) {
+        URL.revokeObjectURL(readyVideoUrlRef.current)
+      }
+    }
+  }, [])
+
+  function clearReadyVideo() {
+    if (readyVideoUrlRef.current) {
+      URL.revokeObjectURL(readyVideoUrlRef.current)
+      readyVideoUrlRef.current = null
+    }
+    setReadyVideo(null)
+  }
+
   function clearExport() {
     if (exportUrl) {
       URL.revokeObjectURL(exportUrl)
       setExportUrl(null)
     }
+    clearReadyVideo()
   }
 
   async function requestAppFullscreen() {
@@ -1036,35 +1068,81 @@ function App() {
       return
     }
 
+    clearReadyVideo()
     setVideoRendering(true)
     setVideoProgress(0)
+    setVideoProgressPhase('rendering')
     try {
       setStatus('Rendering story video...')
-      const video = await renderStoryVideo(layout, shots, settings, pageFormat, (progress) => {
+      const video = await renderStoryVideo(layout, shots, settings, pageFormat, (progress, phase) => {
         setVideoProgress(progress)
-        setStatus(`Rendering story video ${Math.round(progress * 100)}%...`)
+        setVideoProgressPhase(phase)
+        setStatus(
+          phase === 'finalizing'
+            ? `Finalizing story video ${Math.round(progress * 100)}%...`
+            : `Rendering story video ${Math.round(progress * 100)}%...`,
+        )
       })
       const fileName = `instacomic-story.${video.extension}`
-      const file = new File([video.blob], fileName, { type: video.mimeType })
-      if ('canShare' in navigator && navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ files: [file], title: 'Instacomic story video' })
-        setStatus(`Shared ${video.width}x${video.height} story video.`)
-      } else {
-        const url = URL.createObjectURL(video.blob)
-        const link = document.createElement('a')
-        link.href = url
-        link.download = fileName
-        document.body.append(link)
-        link.click()
-        link.remove()
-        window.setTimeout(() => URL.revokeObjectURL(url), 30000)
-        setStatus(`Downloaded ${video.width}x${video.height} ${video.extension.toUpperCase()} story video.`)
-      }
+      const ready = setReadyStoryVideo(video, fileName)
+      downloadReadyVideo(ready)
+      setStatus(`Video ready. If it did not download, tap Download video.`)
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Story video export failed.')
     } finally {
       setVideoRendering(false)
       setVideoProgress(0)
+      setVideoProgressPhase('rendering')
+    }
+  }
+
+  function setReadyStoryVideo(
+    video: Awaited<ReturnType<typeof renderStoryVideo>>,
+    fileName: string,
+  ) {
+    clearReadyVideo()
+    const url = URL.createObjectURL(video.blob)
+    const ready: ReadyStoryVideo = {
+      blob: video.blob,
+      url,
+      fileName,
+      mimeType: video.mimeType,
+      extension: video.extension,
+      width: video.width,
+      height: video.height,
+    }
+    readyVideoUrlRef.current = url
+    setReadyVideo(ready)
+    return ready
+  }
+
+  function downloadReadyVideo(video: ReadyStoryVideo) {
+    const link = document.createElement('a')
+    link.href = video.url
+    link.download = video.fileName
+    document.body.append(link)
+    link.click()
+    link.remove()
+  }
+
+  async function shareReadyVideo(video: ReadyStoryVideo) {
+    const file = new File([video.blob], video.fileName, { type: video.mimeType })
+    try {
+      if ('canShare' in navigator && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'Instacomic story video' })
+        setStatus(`Shared ${video.width}x${video.height} story video.`)
+        return
+      }
+
+      downloadReadyVideo(video)
+      setStatus(`Sharing is unavailable here, so the ${video.extension.toUpperCase()} downloaded.`)
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        setStatus('Video ready.')
+        return
+      }
+
+      setStatus(error instanceof Error ? error.message : 'Story video share failed.')
     }
   }
 
@@ -1237,9 +1315,30 @@ function App() {
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={Math.round(videoProgress * 100)}
+          aria-valuetext={`${videoProgressPhase === 'finalizing' ? 'Finalizing' : 'Rendering'} ${Math.round(videoProgress * 100)}%`}
         >
           <span style={{ width: `${Math.round(videoProgress * 100)}%` }} />
-          <em>{`Rendering ${Math.round(videoProgress * 100)}%`}</em>
+          <em>{`${videoProgressPhase === 'finalizing' ? 'Finalizing' : 'Rendering'} ${Math.round(videoProgress * 100)}%`}</em>
+        </div>
+      )}
+
+      {readyVideo && !videoRendering && (
+        <div className="video-ready-card" role="status" aria-live="polite">
+          <div>
+            <strong>Story video ready</strong>
+            <em>{`${readyVideo.width}x${readyVideo.height} ${readyVideo.extension.toUpperCase()}`}</em>
+          </div>
+          <div className="video-ready-actions">
+            <button type="button" onClick={() => downloadReadyVideo(readyVideo)}>
+              Download video
+            </button>
+            <button type="button" onClick={() => void shareReadyVideo(readyVideo)}>
+              Share
+            </button>
+            <button type="button" aria-label="Dismiss video ready" onClick={clearReadyVideo}>
+              ×
+            </button>
+          </div>
         </div>
       )}
 
@@ -2048,7 +2147,7 @@ async function renderStoryVideo(
   shots: Record<string, Shot>,
   settings: Settings,
   pageFormat: PageFormat,
-  onProgress?: (progress: number) => void,
+  onProgress?: (progress: number, phase: StoryVideoRenderPhase) => void,
 ) {
   if (typeof MediaRecorder === 'undefined') {
     throw new Error('Story video export is unavailable in this browser.')
@@ -2088,21 +2187,44 @@ async function renderStoryVideo(
     recorder.onstop = () => resolve(new Blob(chunks, { type: videoFormat.mimeType }))
   })
 
-  recorder.start(250)
-  for (let frame = 0; frame < totalFrames; frame += 1) {
-    const progress = totalFrames <= 1 ? 1 : frame / (totalFrames - 1)
-    drawStoryVideoFrame(context, layout, images, settings, width, panelHeight, progress)
-    if (frame % 6 === 0 || frame === totalFrames - 1) {
-      onProgress?.((frame + 1) / totalFrames)
+  let blob: Blob
+  try {
+    recorder.start(250)
+    for (let frame = 0; frame < totalFrames; frame += 1) {
+      const progress = totalFrames <= 1 ? 1 : frame / (totalFrames - 1)
+      drawStoryVideoFrame(context, layout, images, settings, width, panelHeight, progress)
+      if (frame % 6 === 0 || frame === totalFrames - 1) {
+        onProgress?.(clamp(((frame + 1) / totalFrames) * 0.94, 0, 0.94), 'rendering')
+      }
+      await wait(1000 / fps)
     }
-    await wait(1000 / fps)
+
+    onProgress?.(0.97, 'finalizing')
+    await wait(120)
+    if (recorder.state !== 'inactive') {
+      try {
+        recorder.requestData()
+      } catch {
+        // Some browsers do not allow an explicit final data request; stop still flushes.
+      }
+      recorder.stop()
+    }
+    blob = await withTimeout(done, 10000, 'Story video recording did not finish. Try a shorter video or another browser.')
+  } finally {
+    if (recorder.state !== 'inactive') {
+      try {
+        recorder.stop()
+      } catch {
+        // The recorder may already be stopping after an error or timeout.
+      }
+    }
+    stream.getTracks().forEach((track) => track.stop())
   }
-  recorder.stop()
-  stream.getTracks().forEach((track) => track.stop())
-  const blob = await done
+
   if (blob.size <= 0) {
     throw new Error('Story video export produced an empty file.')
   }
+  onProgress?.(1, 'finalizing')
 
   return {
     blob,
@@ -2255,6 +2377,22 @@ function easeOutBack(value: number) {
 
 function wait(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => reject(new Error(message)), ms)
+    promise.then(
+      (value) => {
+        window.clearTimeout(timeoutId)
+        resolve(value)
+      },
+      (error) => {
+        window.clearTimeout(timeoutId)
+        reject(error)
+      },
+    )
+  })
 }
 
 function drawPanel(
