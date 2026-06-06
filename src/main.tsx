@@ -7,7 +7,7 @@ import './style.css'
 type PanelFit = 'cover' | 'contain'
 type DrawerTab = 'layout' | 'create' | 'style'
 type CustomLinePreset = 'diagonal' | 'vertical' | 'horizontal'
-type PageFormatId = '4:5' | '3:4' | '9:16'
+type PageFormatId = '4:5' | '3:4' | '4:3' | '9:16'
 
 type Panel = {
   id: string
@@ -50,7 +50,7 @@ type LoadedPanelFrame = {
 
 type StoryVideoFormat = {
   mimeType: string
-  extension: 'mp4' | 'webm'
+  extension: 'mp4'
 }
 
 type StoryVideoRenderPhase = 'rendering' | 'finalizing'
@@ -191,6 +191,7 @@ const CREATOR_SNAP_DISTANCE = 4.5
 const pageFormats: PageFormat[] = [
   { id: '4:5', label: 'Post', detail: 'Instagram portrait', width: 4, height: 5 },
   { id: '3:4', label: 'Tall', detail: 'Classic portrait', width: 3, height: 4 },
+  { id: '4:3', label: 'Wide', detail: 'Landscape canvas', width: 4, height: 3 },
   { id: '9:16', label: 'Story', detail: 'Stories/Reels', width: 9, height: 16 },
 ]
 
@@ -1220,6 +1221,7 @@ function App() {
         <div
           ref={stripRef}
           className={`live-strip layout-${layout.id} ${layout.custom ? 'is-custom' : ''} ${layout.panels.some((panel) => panel.points) ? 'is-manga' : ''}`}
+          data-page-format={pageFormat.id}
           data-layout-id={layout.id}
           data-layout-name={layout.name}
           onPointerDown={(event) => {
@@ -2326,17 +2328,18 @@ function panelRevealMotion(
 
 function bestStoryVideoFormat(): StoryVideoFormat {
   const formats: StoryVideoFormat[] = [
+    { mimeType: 'video/mp4;codecs=avc1.42E01E', extension: 'mp4' },
+    { mimeType: 'video/mp4;codecs=avc1.4D401E', extension: 'mp4' },
+    { mimeType: 'video/mp4;codecs=avc1.640028', extension: 'mp4' },
     { mimeType: 'video/mp4;codecs=h264', extension: 'mp4' },
-    { mimeType: 'video/webm;codecs=vp9', extension: 'webm' },
-    { mimeType: 'video/webm;codecs=vp8', extension: 'webm' },
-    { mimeType: 'video/webm', extension: 'webm' },
+    { mimeType: 'video/mp4', extension: 'mp4' },
   ]
   const supported = formats.find((format) => MediaRecorder.isTypeSupported(format.mimeType))
   if (supported) {
     return supported
   }
 
-  return { mimeType: 'video/webm', extension: 'webm' }
+  throw new Error('MP4 story video export is unavailable in this browser.')
 }
 
 function drawOuterBezel(

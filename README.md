@@ -30,7 +30,7 @@ Instacomic turns a phone camera into a live comic strip editor. Pick a panel, sh
 - Filled panels support direct photo repositioning: drag to pan and pinch to resize.
 - Custom layouts open in a full-screen maker with divider handles, endpoint snapping, and thickness controls.
 - Style controls cover paper, ink, gutters, borders, corners, captions, and image fit.
-- Story video export renders a sliding panel reveal with duration and speed controls, downloading MP4 when supported or WebM as a fallback.
+- Story video export renders a sliding panel reveal with duration and speed controls, downloading MP4 output.
 - Share renders automatically and falls back to downloading the PNG when native share is unavailable.
 - Installable PWA shell with manifest icons and offline app caching.
 

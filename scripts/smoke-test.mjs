@@ -25,6 +25,19 @@ const formatPickerCentered = await page.locator('.format-options').evaluate((pic
   const last = optionBoxes.at(-1)
   return !!first && !!last && Math.abs((first.left - pickerBox.left) - (pickerBox.right - last.right)) < 1
 })
+await page.getByRole('button', { name: /4:3/ }).tap()
+const landscapeSelectedFormat = await page.locator('.format-option.active strong').textContent()
+await page.getByRole('button', { name: 'Start' }).tap()
+await page.locator('.start-screen').waitFor({ state: 'detached' })
+const landscapeLiveFormat = await page.locator('.live-strip').getAttribute('data-page-format')
+const landscapeLiveAspect = await page.locator('.live-strip').boundingBox().then((box) => (box ? box.height / box.width : 0))
+const landscapeDownload = await Promise.all([
+  page.waitForEvent('download'),
+  page.getByRole('button', { name: 'Share' }).tap(),
+]).then(([download]) => download)
+const landscapeDownloadPath = await landscapeDownload.path()
+const landscapeExportedSize = pngSize(landscapeDownloadPath)
+await page.reload({ waitUntil: 'networkidle' })
 await page.getByRole('button', { name: /9:16/ }).tap()
 const selectedFormat = await page.locator('.format-option.active strong').textContent()
 await page.getByRole('button', { name: 'Start' }).tap()
@@ -192,6 +205,10 @@ const result = {
   formatOptionCount,
   squareFormatOptionCount,
   formatPickerCentered,
+  landscapeSelectedFormat,
+  landscapeLiveFormat,
+  landscapeLiveAspect,
+  landscapeExportedSize,
   selectedFormat,
   selectedPanel,
   uploadedPhoto,
@@ -235,9 +252,13 @@ const result = {
 console.log(JSON.stringify(result, null, 2))
 
 const failures = [
-  result.formatOptionCount === 3 ? null : 'start ratio selector does not expose three options',
+  result.formatOptionCount === 4 ? null : 'start ratio selector does not expose four options',
   result.squareFormatOptionCount === 0 ? null : 'start ratio selector still exposes 1:1',
   result.formatPickerCentered ? null : 'start ratio selector options are not centered',
+  result.landscapeSelectedFormat === '4:3' ? null : 'start ratio selector did not select 4:3',
+  result.landscapeLiveFormat === '4:3' ? null : 'live canvas did not use the selected 4:3 format',
+  Math.abs(result.landscapeLiveAspect - 3 / 4) < 0.08 ? null : 'live canvas did not render as 4:3',
+  result.landscapeExportedSize.width === 1440 && result.landscapeExportedSize.height === 1080 ? null : '4:3 export dimensions are incorrect',
   result.selectedFormat === '9:16' ? null : 'start ratio selector did not select 9:16',
   result.selectedPanel === '2' ? null : 'panel selection did not land on panel 2',
   result.uploadedPhoto === 1 ? null : 'photo upload did not fill the active panel',

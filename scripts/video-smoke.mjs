@@ -1,4 +1,4 @@
-import { statSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { chromium } from 'playwright'
 
 const baseUrl = process.env.SMOKE_BASE_URL ?? 'http://127.0.0.1:4174'
@@ -76,6 +76,7 @@ const progressText = await page.locator('.video-render-progress em').textContent
 const download = await downloadPromise
 const downloadPath = await download.path()
 const fileSize = downloadPath ? statSync(downloadPath).size : 0
+const fileIsMp4 = downloadPath ? isMp4File(downloadPath) : false
 await page.locator('.video-ready-card').waitFor({ state: 'visible', timeout: 5000 })
 const readyCardVisible = await page.locator('.video-ready-card').isVisible()
 const readyActionCount = await page.locator('.video-ready-actions button').count()
@@ -84,6 +85,7 @@ await page.getByRole('button', { name: 'Download video' }).tap()
 const manualDownload = await manualDownloadPromise
 const manualDownloadPath = await manualDownload.path()
 const manualFileSize = manualDownloadPath ? statSync(manualDownloadPath).size : 0
+const manualFileIsMp4 = manualDownloadPath ? isMp4File(manualDownloadPath) : false
 const progressSamples = await page.evaluate(() => {
   window.clearInterval(window.__instacomicVideoProgressTimer)
   return window.__instacomicVideoProgressSamples
@@ -92,8 +94,10 @@ const status = await page.locator('.sr-status').textContent()
 const result = {
   suggestedFilename: download.suggestedFilename(),
   fileSize,
+  fileIsMp4,
   manualSuggestedFilename: manualDownload.suggestedFilename(),
   manualFileSize,
+  manualFileIsMp4,
   videoConfigVisible,
   captureBarFits,
   progressBarValue,
@@ -110,10 +114,12 @@ await browser.close()
 console.log(JSON.stringify(result, null, 2))
 
 const failures = [
-  /\.(mp4|webm)$/.test(result.suggestedFilename) ? null : 'story video export did not produce an MP4/WebM file',
+  /\.mp4$/.test(result.suggestedFilename) ? null : 'story video export did not produce an MP4 file',
   result.fileSize > 2048 ? null : 'story video export produced an empty or tiny file',
+  result.fileIsMp4 ? null : 'story video export did not produce MP4 bytes',
   result.manualSuggestedFilename === result.suggestedFilename ? null : 'manual video download used a different filename',
   result.manualFileSize > 2048 ? null : 'manual video download fallback produced an empty or tiny file',
+  result.manualFileIsMp4 ? null : 'manual video download fallback did not produce MP4 bytes',
   result.videoConfigVisible ? null : 'story video configuration is not visible in the save drawer',
   result.captureBarFits ? null : 'capture bar buttons do not fit after adding video export',
   Number.isFinite(result.progressBarValue) && result.progressBarValue > 0 && result.progressBarValue <= 100
@@ -130,6 +136,11 @@ const failures = [
 
 if (failures.length > 0) {
   throw new Error(failures.join('\n'))
+}
+
+function isMp4File(path) {
+  const buffer = readFileSync(path)
+  return buffer.length >= 12 && buffer.subarray(4, 8).toString('ascii') === 'ftyp'
 }
 
 async function tapStrip(page, nx, ny) {
