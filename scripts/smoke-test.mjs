@@ -58,8 +58,8 @@ const uploadedPhoto = await page.locator('[data-panel-id="2"] img').count()
 const photoBefore = await photoTransform(page, '2')
 await dragPanelPhoto(page, 0.75, 0.31, 42, -28)
 const photoAfterDrag = await photoTransform(page, '2')
-await rotatePanelPhoto(page, 0.75, 0.31)
-const photoAfterRotation = await photoTransform(page, '2')
+await pinchRotatePanelPhoto(page, 0.75, 0.31)
+const photoAfterPinch = await photoTransform(page, '2')
 await page.locator('[data-panel-id="3"]').evaluate((button) => button.click())
 await page.setInputFiles('.photo-upload', {
   name: 'panel-2.png',
@@ -218,9 +218,11 @@ const result = {
   selectedPanel,
   uploadedPhoto,
   photoMoved: Math.abs(photoAfterDrag.x - photoBefore.x) > 0.03 || Math.abs(photoAfterDrag.y - photoBefore.y) > 0.03,
-  photoRotated: Math.abs(photoAfterRotation.rotation - photoAfterDrag.rotation) > 70,
-  photoScaleUnchanged: Math.abs(photoAfterRotation.scale - photoAfterDrag.scale) < 0.01,
-  photoRotationPreserved: Math.abs(photoAfterRestoredTemplate.rotation - photoAfterRotation.rotation) < 0.01,
+  photoRotated: Math.abs(photoAfterPinch.rotation - photoAfterDrag.rotation) > 70,
+  photoZoomed: photoAfterPinch.scale > photoAfterDrag.scale + 0.4,
+  photoTransformPreserved:
+    Math.abs(photoAfterRestoredTemplate.rotation - photoAfterPinch.rotation) < 0.01 &&
+    Math.abs(photoAfterRestoredTemplate.scale - photoAfterPinch.scale) < 0.01,
   photosAfterSmallerTemplate,
   photosAfterRestoredTemplate,
   stickerTabCount,
@@ -272,8 +274,8 @@ const failures = [
   result.uploadedPhoto === 1 ? null : 'photo upload did not fill the active panel',
   result.photoMoved ? null : 'panel photo drag did not update the image offset',
   result.photoRotated ? null : 'two-finger photo twist did not update the image rotation',
-  result.photoScaleUnchanged ? null : 'two-finger photo twist unexpectedly changed the image scale',
-  result.photoRotationPreserved ? null : 'photo rotation was not preserved across layout changes',
+  result.photoZoomed ? null : 'two-finger photo pinch did not update the image scale',
+  result.photoTransformPreserved ? null : 'photo zoom and rotation were not preserved across layout changes',
   result.photosAfterSmallerTemplate === 2 ? null : 'template switch to fewer panels did not preserve visible photos',
   result.photosAfterRestoredTemplate === 2 ? null : 'template switch back to more panels did not restore cached photos',
   result.stickerTabCount === 0 ? null : 'sticker drawer tab is still visible',
@@ -517,7 +519,7 @@ function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, value))
 }
 
-async function rotatePanelPhoto(page, nx, ny) {
+async function pinchRotatePanelPhoto(page, nx, ny) {
   const box = await page.locator('.live-strip').boundingBox()
   const client = await page.context().newCDPSession(page)
   const center = { x: box.x + box.width * nx, y: box.y + box.height * ny }
@@ -533,8 +535,8 @@ async function rotatePanelPhoto(page, nx, ny) {
   await client.send('Input.dispatchTouchEvent', {
     type: 'touchMove',
     touchPoints: [
-      { x: center.x, y: center.y - 36, id: 1 },
-      { x: center.x, y: center.y + 36, id: 2 },
+      { x: center.x, y: center.y - 54, id: 1 },
+      { x: center.x, y: center.y + 54, id: 2 },
     ],
   })
   await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })

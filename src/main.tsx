@@ -105,14 +105,16 @@ type TouchPoints = {
 
 type PhotoDragState = {
   panelId: string
-  mode: 'move' | 'rotate'
+  mode: 'move' | 'pinch'
   startX: number
   startY: number
   offsetX: number
   offsetY: number
+  scale: number
   rotation: number
   frameWidth: number
   frameHeight: number
+  startDistance?: number
   startAngle?: number
 }
 
@@ -727,7 +729,7 @@ function App() {
   function selectPanel(panelId: string) {
     setActivePanelId(panelId)
     if (shots[panelId]) {
-      setStatus(`Panel ${layout.panels.findIndex((panel) => panel.id === panelId) + 1} photo selected. Drag to move or twist to rotate.`)
+      setStatus(`Panel ${layout.panels.findIndex((panel) => panel.id === panelId) + 1} photo selected. Drag to move, pinch to zoom, or twist to rotate.`)
       return
     }
 
@@ -953,13 +955,14 @@ function App() {
       startY: event.clientY,
       offsetX: shot.offsetX,
       offsetY: shot.offsetY,
+      scale: shot.scale,
       rotation: shot.rotation,
       ...panelPhotoFrameSize(panel, rect),
     })
-    setStatus(`Panel ${layout.panels.findIndex((item) => item.id === panel.id) + 1} photo selected. Drag to move or twist to rotate.`)
+    setStatus(`Panel ${layout.panels.findIndex((item) => item.id === panel.id) + 1} photo selected. Drag to move, pinch to zoom, or twist to rotate.`)
   }
 
-  function beginPhotoRotation(event: TouchEvent<HTMLElement>) {
+  function beginPhotoPinch(event: TouchEvent<HTMLElement>) {
     if (event.touches.length < 2) {
       return
     }
@@ -976,13 +979,15 @@ function App() {
     setActivePanelId(firstPanel.id)
     setPhotoDragState({
       panelId: firstPanel.id,
-      mode: 'rotate',
+      mode: 'pinch',
       startX: 0,
       startY: 0,
       offsetX: shot.offsetX,
       offsetY: shot.offsetY,
+      scale: shot.scale,
       rotation: shot.rotation,
       ...panelPhotoFrameSize(firstPanel, rect),
+      startDistance: touchDistance(event.touches),
       startAngle: touchAngle(event.touches),
     })
   }
@@ -1000,13 +1005,20 @@ function App() {
     })
   }
 
-  function movePhotoRotation(touches: TouchPoints) {
-    if (!photoDragState || photoDragState.mode !== 'rotate' || touches.length < 2 || photoDragState.startAngle === undefined) {
+  function movePhotoPinch(touches: TouchPoints) {
+    if (
+      !photoDragState ||
+      photoDragState.mode !== 'pinch' ||
+      touches.length < 2 ||
+      !photoDragState.startDistance ||
+      photoDragState.startAngle === undefined
+    ) {
       return
     }
 
+    const scale = photoDragState.scale * clamp(touchDistance(touches) / photoDragState.startDistance, 0.35, 3)
     const rotation = photoDragState.rotation + angleDelta(photoDragState.startAngle, touchAngle(touches))
-    updateShotTransform(photoDragState.panelId, { rotation })
+    updateShotTransform(photoDragState.panelId, { scale, rotation })
   }
 
   function updateShotTransform(panelId: string, update: Partial<Pick<Shot, 'offsetX' | 'offsetY' | 'scale' | 'rotation'>>) {
@@ -1161,8 +1173,8 @@ function App() {
       onPointerUp={() => finishGestures()}
       onPointerCancel={() => finishGestures()}
       onTouchMove={(event) => {
-        if (photoDragState?.mode === 'rotate') {
-          movePhotoRotation(event.touches)
+        if (photoDragState?.mode === 'pinch') {
+          movePhotoPinch(event.touches)
         } else if (event.touches[0]) {
           movePhoto(event.touches[0].clientX, event.touches[0].clientY)
         }
@@ -1232,7 +1244,7 @@ function App() {
           }}
           onTouchStart={(event) => {
             if (event.touches.length > 1) {
-              beginPhotoRotation(event)
+              beginPhotoPinch(event)
             }
           }}
           style={
