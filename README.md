@@ -27,7 +27,8 @@ Instacomic turns a phone camera into a live comic strip editor. Pick a panel, sh
 - A Start button enters the editor and requests fullscreen when the browser allows it.
 - Capture advances forward through the layout, then freezes the final photo instead of covering it with the live preview.
 - Upload an existing image into the active panel when the camera is not the right source.
-- Filled panels support direct photo repositioning: drag to pan, pinch to zoom, and twist with two fingers to rotate.
+- Filled panels support direct photo editing with contextual Replace, Fit, Reset, and Remove controls; drag to pan, then pinch and twist together to zoom and rotate with snap feedback.
+- Action-level Undo/Redo and automatic on-device draft recovery protect edits between sessions.
 - Custom layouts open in a full-screen maker with divider handles, endpoint snapping, and thickness controls.
 - The grid library renders faithful panel-and-divider previews for both templates and locally saved custom grids.
 - Style controls cover paper, ink, gutters, borders, corners, captions, and image fit.
@@ -47,12 +48,14 @@ npm run dev
 ```bash
 npm run build
 npm run smoke
+npm run smoke:installer
+npm run smoke:editing
 npm run smoke:photos
 npm run smoke:camera
 npm run smoke:video
 ```
 
-The smoke checks exercise the mobile editor flow, centered start aspect choices, uploaded photo positioning with simultaneous two-finger zoom and rotation, uniform editor control borders, full-screen snapping custom layouts with thickness controls, persisted custom-grid preview geometry and visibility, custom layout deletion, share fallback, manifest loading, fake-camera capture through the final panel, story video configuration, and story video render progress.
+The smoke checks exercise the mobile editor and installer flows, centered start aspect choices, contextual photo actions, coalesced Undo/Redo history, simultaneous pinch zoom and snap rotation, background autosave, Continue/New draft recovery, short-screen control geometry, uniform editor borders, full-screen snapping custom layouts with thickness controls, persisted custom-grid previews, custom layout deletion, share fallback, manifest loading, fake-camera capture through the final panel, and story video rendering.
 
 ## Deploy
 

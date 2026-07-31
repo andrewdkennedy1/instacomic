@@ -90,7 +90,7 @@ const progressSamples = await page.evaluate(() => {
   window.clearInterval(window.__instacomicVideoProgressTimer)
   return window.__instacomicVideoProgressSamples
 })
-const status = await page.locator('.sr-status').textContent()
+const status = await page.locator('#app-status').textContent()
 const result = {
   suggestedFilename: download.suggestedFilename(),
   fileSize,

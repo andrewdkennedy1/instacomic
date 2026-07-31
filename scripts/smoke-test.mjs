@@ -160,6 +160,7 @@ await page.screenshot({ path: 'test-results/instacomic-mobile.png', fullPage: tr
 await page.screenshot({ path: 'docs/instacomic-mobile.png', fullPage: true })
 await openDrawer(page)
 await page.getByRole('button', { name: 'Style', exact: true }).tap()
+const draftRevisionBeforeFinalStyle = await readDraftRevision(page)
 await page
   .locator('.motion-drawer-style label')
   .filter({ hasText: 'Paper' })
@@ -184,10 +185,16 @@ const customExportedSize = pngSize(customDownloadPath)
 const customExportedImage = decodePng(customDownloadPath)
 const customDividerRun = paperRunFromImage(customExportedImage, Math.round(customExportedSize.width * 0.5), Math.round(customExportedSize.height * 0.24), '#ffed5a')
 const customBezelPixel = pixelAt(customExportedImage, Math.round(customExportedSize.width * 0.5), 3)
+await waitForDraftRevision(page, draftRevisionBeforeFinalStyle + 1)
+await page.locator('.native-shell[data-autosave-state="saved"]').waitFor()
 await page.reload({ waitUntil: 'networkidle' })
 const restoredLayoutName = await page.locator('.live-strip').getAttribute('data-layout-name')
 const restoredLayoutAspect = await page.locator('.live-strip').boundingBox().then((box) => (box ? box.height / box.width : 0))
-await page.getByRole('button', { name: 'Start' }).tap()
+const draftRecoveryVisible = await page.getByRole('button', { name: 'Continue editing' }).count()
+const draftRecoverySummary = await page.locator('.draft-recovery-card').innerText()
+await page.getByRole('button', { name: 'Continue editing' }).tap()
+await page.locator('.start-screen').waitFor({ state: 'detached' })
+const continuedDraftPhotoCount = await page.locator('.live-panel img').count()
 await openDrawer(page)
 await page.getByRole('button', { name: 'Layout', exact: true }).tap()
 const savedLayoutCard = page.locator(`[data-layout-option-id="${storedLayoutInfo.activeLayoutId}"]`)
@@ -282,6 +289,9 @@ const result = {
   customBezelPixel,
   restoredLayoutName,
   restoredLayoutAspect,
+  draftRecoveryVisible,
+  draftRecoverySummary,
+  continuedDraftPhotoCount,
   savedPreviewPanelCount,
   savedPreviewDividerCount,
   savedPreviewBox,
@@ -349,6 +359,9 @@ const failures = [
   isDarkPixel(result.customBezelPixel) ? null : 'custom layout export did not render the outer bezel',
   result.restoredLayoutName === 'Final Layout' ? null : 'last custom layout was not restored on reload',
   Math.abs(result.restoredLayoutAspect - 16 / 9) < 0.08 ? null : 'restored custom layout did not use the persisted selected aspect ratio',
+  result.draftRecoveryVisible === 1 ? null : 'saved comic recovery was not offered after reload',
+  result.draftRecoverySummary.includes('Final Layout') && result.draftRecoverySummary.includes('2 photos') ? null : 'saved comic recovery summary is incomplete',
+  result.continuedDraftPhotoCount === 2 ? null : 'continuing a saved comic did not restore its photos',
   result.savedPreviewPanelCount === result.storedLayoutInfo.panels ? null : 'saved grid preview did not render its stored panels',
   result.savedPreviewDividerCount === result.storedLayoutInfo.dividers ? null : 'saved grid preview did not render its stored dividers',
   result.savedPreviewBox?.width >= 80 && result.savedPreviewBox?.height >= 80 ? null : 'saved grid preview is too small to scan',
@@ -613,6 +626,43 @@ async function waitForDrawerHidden(page) {
     const box = document.querySelector('.motion-drawer')?.getBoundingClientRect()
     return !!box && box.top > window.innerHeight
   })
+}
+
+async function readDraftRevision(page) {
+  return page.evaluate(() =>
+    new Promise((resolve, reject) => {
+      const request = indexedDB.open('instacomic', 1)
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => {
+        const database = request.result
+        const transaction = database.transaction('drafts', 'readonly')
+        const get = transaction.objectStore('drafts').get('current')
+        get.onsuccess = () => resolve(get.result?.revision ?? 0)
+        get.onerror = () => reject(get.error)
+        transaction.oncomplete = () => database.close()
+      }
+    }),
+  )
+}
+
+async function waitForDraftRevision(page, minimumRevision) {
+  await page.waitForFunction(
+    (minimum) =>
+      new Promise((resolve) => {
+        const request = indexedDB.open('instacomic', 1)
+        request.onerror = () => resolve(false)
+        request.onsuccess = () => {
+          const database = request.result
+          const transaction = database.transaction('drafts', 'readonly')
+          const get = transaction.objectStore('drafts').get('current')
+          get.onsuccess = () => resolve((get.result?.revision ?? 0) >= minimum)
+          get.onerror = () => resolve(false)
+          transaction.oncomplete = () => database.close()
+        }
+      }),
+    minimumRevision,
+    { timeout: 10000 },
+  )
 }
 
 async function dragCreatorHandleToPercent(page, selector, targetX, targetY) {

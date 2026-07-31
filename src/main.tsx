@@ -2,6 +2,14 @@ import { AnimatePresence, motion, useDragControls } from 'framer-motion'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent, TouchEvent } from 'react'
 import { createRoot } from 'react-dom/client'
+import {
+  clearDraftData,
+  loadDraftAssets,
+  loadDraftRecord,
+  saveDraftRecord,
+  type DraftAssetRecord,
+  type DraftRecord,
+} from './draft-store'
 import './style.css'
 
 type PanelFit = 'cover' | 'contain'
@@ -28,6 +36,7 @@ type Layout = {
 }
 
 type Shot = {
+  assetId: string
   dataUrl: string
   width?: number
   height?: number
@@ -35,10 +44,11 @@ type Shot = {
   offsetY: number
   scale: number
   rotation: number
+  fit?: PanelFit
 }
 
 type CapturedPhoto = {
-  dataUrl: string
+  blob: Blob
   width: number
   height: number
 }
@@ -118,6 +128,34 @@ type PhotoDragState = {
   startAngle?: number
 }
 
+type ProjectSnapshot = {
+  layout: Layout
+  pageFormatId: PageFormatId
+  settings: Settings
+  shotCache: Array<Shot | null>
+  activePanelId: string | null
+}
+
+type StoredShot = Omit<Shot, 'dataUrl'>
+
+type StoredProjectDocument = Omit<ProjectSnapshot, 'shotCache'> & {
+  shotCache: Array<StoredShot | null>
+}
+
+type StoredProjectDraft = DraftRecord<StoredProjectDocument>
+
+type HistoryEntry = {
+  label: string
+  snapshot: ProjectSnapshot
+}
+
+type DraftPhase = 'checking' | 'available' | 'none' | 'saving' | 'saved' | 'error'
+
+type RotationSnap = {
+  panelId: string
+  angle: number
+}
+
 type LineTouchState = {
   id: string
   line: CustomLine
@@ -133,8 +171,9 @@ type CustomPoint = {
   y: number
 }
 
-function createShot(dataUrl: string, width?: number, height?: number): Shot {
+function createShot(assetId: string, dataUrl: string, width?: number, height?: number): Shot {
   return {
+    assetId,
     dataUrl,
     width,
     height,
@@ -156,7 +195,32 @@ function normalizeShot(shot: Shot): Shot {
   }
 }
 
-function mergeLayoutShotsIntoCache(layout: Layout, shots: Record<string, Shot>, cache: Shot[]) {
+function cloneShot(shot: Shot): Shot {
+  return { ...shot }
+}
+
+function cloneLayout(layout: Layout): Layout {
+  return {
+    ...layout,
+    panels: layout.panels.map((panel) => ({
+      ...panel,
+      points: panel.points?.map(([x, y]) => [x, y] as [number, number]),
+    })),
+    dividers: layout.dividers?.map((divider) => ({ ...divider })),
+  }
+}
+
+function cloneProjectSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
+  return {
+    layout: cloneLayout(snapshot.layout),
+    pageFormatId: snapshot.pageFormatId,
+    settings: { ...snapshot.settings },
+    shotCache: snapshot.shotCache.map((shot) => (shot ? cloneShot(shot) : null)),
+    activePanelId: snapshot.activePanelId,
+  }
+}
+
+function mergeLayoutShotsIntoCache(layout: Layout, shots: Record<string, Shot>, cache: Array<Shot | undefined>) {
   const next = [...cache]
   layout.panels.forEach((panel, index) => {
     const shot = shots[panel.id]
@@ -167,7 +231,7 @@ function mergeLayoutShotsIntoCache(layout: Layout, shots: Record<string, Shot>, 
   return next
 }
 
-function putShotInCache(layout: Layout, shots: Record<string, Shot>, cache: Shot[], panelId: string, shot: Shot) {
+function putShotInCache(layout: Layout, shots: Record<string, Shot>, cache: Array<Shot | undefined>, panelId: string, shot: Shot) {
   const next = mergeLayoutShotsIntoCache(layout, shots, cache)
   const index = layout.panels.findIndex((panel) => panel.id === panelId)
   if (index >= 0) {
@@ -176,7 +240,7 @@ function putShotInCache(layout: Layout, shots: Record<string, Shot>, cache: Shot
   return next
 }
 
-function shotsForLayout(layout: Layout, cache: Shot[]) {
+function shotsForLayout(layout: Layout, cache: Array<Shot | undefined>) {
   return Object.fromEntries(
     layout.panels
       .map((panel, index) => {
@@ -314,6 +378,104 @@ const defaultSettings: Settings = {
 const CUSTOM_LAYOUT_KEY = 'instacomic.customLayouts.v1'
 const ACTIVE_LAYOUT_KEY = 'instacomic.activeLayout.v1'
 const PAGE_FORMAT_KEY = 'instacomic.pageFormat.v1'
+const HISTORY_LIMIT = 24
+const AUTOSAVE_DELAY_MS = 420
+const ROTATION_SNAP_ENTER_DEGREES = 4
+const ROTATION_SNAP_RELEASE_DEGREES = 8
+
+function isValidStoredProjectDraft(value: DraftRecord<StoredProjectDocument>): value is StoredProjectDraft {
+  const document = value?.document
+  const validNumber = (candidate: unknown) => typeof candidate === 'number' && Number.isFinite(candidate)
+  const validPoint = (candidate: unknown) =>
+    Array.isArray(candidate) && candidate.length === 2 && candidate.every((coordinate) => validNumber(coordinate))
+  const validLine = (candidate: unknown) => {
+    const line = candidate as Partial<CustomLine> | null
+    return (
+      !!line &&
+      typeof line.id === 'string' &&
+      line.id.length > 0 &&
+      validNumber(line.x1) &&
+      validNumber(line.y1) &&
+      validNumber(line.x2) &&
+      validNumber(line.y2)
+    )
+  }
+  const validPanel = (candidate: unknown) => {
+    const panel = candidate as Partial<Panel> | null
+    return (
+      !!panel &&
+      typeof panel.id === 'string' &&
+      panel.id.length > 0 &&
+      validNumber(panel.x) &&
+      validNumber(panel.y) &&
+      validNumber(panel.w) &&
+      validNumber(panel.h) &&
+      Number(panel.w) > 0 &&
+      Number(panel.h) > 0 &&
+      (panel.points === undefined || (Array.isArray(panel.points) && panel.points.length >= 3 && panel.points.every(validPoint)))
+    )
+  }
+  const validShot = (candidate: unknown) => {
+    if (candidate === null) {
+      return true
+    }
+    const shot = candidate as Partial<StoredShot> | null
+    return (
+      !!shot &&
+      typeof shot.assetId === 'string' &&
+      shot.assetId.length > 0 &&
+      (shot.width === undefined || (validNumber(shot.width) && Number(shot.width) > 0)) &&
+      (shot.height === undefined || (validNumber(shot.height) && Number(shot.height) > 0)) &&
+      validNumber(shot.offsetX) &&
+      validNumber(shot.offsetY) &&
+      validNumber(shot.scale) &&
+      Number(shot.scale) > 0 &&
+      validNumber(shot.rotation) &&
+      (shot.fit === undefined || shot.fit === 'cover' || shot.fit === 'contain')
+    )
+  }
+  const settings = document?.settings as Partial<Settings> | undefined
+  const panelIds = Array.isArray(document?.layout?.panels)
+    ? document.layout.panels.map((panel) => panel?.id)
+    : []
+  return (
+    value.schemaVersion === 1 &&
+    Number.isFinite(value.revision) &&
+    Number.isFinite(value.updatedAt) &&
+    !!document &&
+    typeof document.layout?.id === 'string' &&
+    document.layout.id.length > 0 &&
+    typeof document.layout?.name === 'string' &&
+    document.layout.name.length > 0 &&
+    Array.isArray(document.layout?.panels) &&
+    document.layout.panels.length > 0 &&
+    document.layout.panels.every(validPanel) &&
+    new Set(panelIds).size === panelIds.length &&
+    (document.layout.dividerThickness === undefined || validNumber(document.layout.dividerThickness)) &&
+    (document.layout.dividers === undefined || (Array.isArray(document.layout.dividers) && document.layout.dividers.every(validLine))) &&
+    Array.isArray(document.shotCache) &&
+    document.shotCache.every(validShot) &&
+    !!settings &&
+    validNumber(settings.gutters) &&
+    validNumber(settings.radius) &&
+    validNumber(settings.border) &&
+    typeof settings.background === 'string' &&
+    typeof settings.borderColor === 'string' &&
+    typeof settings.caption === 'string' &&
+    typeof settings.captionColor === 'string' &&
+    (settings.fit === 'cover' || settings.fit === 'contain') &&
+    validNumber(settings.videoDuration) &&
+    validNumber(settings.videoSpeed) &&
+    (document.activePanelId === null || typeof document.activePanelId === 'string') &&
+    pageFormats.some((format) => format.id === document.pageFormatId)
+  )
+}
+
+function createAssetId() {
+  return typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `asset-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
 
 type FullscreenHost = HTMLElement & {
   webkitRequestFullscreen?: () => Promise<void> | void
@@ -419,13 +581,37 @@ function App() {
   const [creatorOpen, setCreatorOpen] = useState(false)
   const [appContext, setAppContext] = useState<AppContext>(() => getAppContext())
   const [storageReady, setStorageReady] = useState(false)
+  const [savedDraft, setSavedDraft] = useState<StoredProjectDraft | null>(null)
+  const [draftPhase, setDraftPhase] = useState<DraftPhase>('checking')
+  const [newProjectRequested, setNewProjectRequested] = useState(false)
+  const [historyCounts, setHistoryCounts] = useState({ undo: 0, redo: 0 })
+  const [rotationSnap, setRotationSnap] = useState<RotationSnap | null>(null)
+  const [photoActionsDeferred, setPhotoActionsDeferred] = useState(false)
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const shellRef = useRef<HTMLElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const shotCacheRef = useRef<Shot[]>([])
+  const shotCacheRef = useRef<Array<Shot | undefined>>([])
+  const assetBlobsRef = useRef<Map<string, DraftAssetRecord>>(new Map())
+  const assetUrlsRef = useRef<Map<string, string>>(new Map())
+  const assetPruneScheduledRef = useRef(false)
+  const undoStackRef = useRef<HistoryEntry[]>([])
+  const redoStackRef = useRef<HistoryEntry[]>([])
+  const gestureHistoryRef = useRef<HistoryEntry | null>(null)
+  const pendingSettingsHistoryRef = useRef<HistoryEntry | null>(null)
+  const settingsHistoryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const draftSaveQueueRef = useRef<Promise<void>>(Promise.resolve())
+  const draftRevisionRef = useRef(0)
+  const draftEpochRef = useRef(0)
+  const draftSessionReadyRef = useRef(false)
+  const emptyDraftClearedRef = useRef(false)
+  const lastSavedDocumentSignatureRef = useRef<string | null>(null)
+  const editorVersionRef = useRef(0)
+  const replacePanelIdRef = useRef<string | null>(null)
+  const lastSnapAngleRef = useRef<number | null>(null)
   const readyVideoUrlRef = useRef<string | null>(null)
   const startRequestedRef = useRef(false)
   const dragControls = useDragControls()
@@ -433,11 +619,319 @@ function App() {
   const allLayouts = useMemo(() => [...layouts, ...customLayouts], [customLayouts])
   const activePanelIndex = activePanelId ? layout.panels.findIndex((panel) => panel.id === activePanelId) : -1
   const capturedCount = layout.panels.filter((panel) => shots[panel.id]).length
+  const selectedShot = activePanelId ? shots[activePanelId] ?? null : null
+  const selectedShotFit = selectedShot?.fit ?? settings.fit
+  const showPhotoActions = !!selectedShot && !photoActionsDeferred && !drawerOpen && !creatorOpen && !videoRendering && !readyVideo
+  const savedDraftPhotoCount = savedDraft?.document.shotCache.filter(Boolean).length ?? 0
   const pageStyle = {
     '--page-width': pageFormat.width,
     '--page-height': pageFormat.height,
   } as React.CSSProperties
   const creatorCanvasAspect = pageFormatCanvasAspect(pageFormat)
+
+  useEffect(() => {
+    editorVersionRef.current += 1
+  }, [activePanelId, layout, pageFormat.id, settings, shots])
+
+  function captureProjectSnapshot(): ProjectSnapshot {
+    return {
+      layout: cloneLayout(layout),
+      pageFormatId: pageFormat.id,
+      settings: { ...settings },
+      shotCache: shotCacheRef.current.map((shot) => (shot ? cloneShot(shot) : null)),
+      activePanelId,
+    }
+  }
+
+  function syncHistoryCounts() {
+    setHistoryCounts({
+      undo: undoStackRef.current.length,
+      redo: redoStackRef.current.length,
+    })
+  }
+
+  function commitHistoryEntry(entry: HistoryEntry | null) {
+    if (!entry) {
+      return
+    }
+
+    undoStackRef.current = [...undoStackRef.current.slice(-(HISTORY_LIMIT - 1)), entry]
+    redoStackRef.current = []
+    syncHistoryCounts()
+    scheduleRuntimeAssetPrune()
+  }
+
+  function beginHistoryEntry(label: string) {
+    return {
+      label,
+      snapshot: captureProjectSnapshot(),
+    }
+  }
+
+  function flushPendingSettingsHistory() {
+    if (settingsHistoryTimerRef.current) {
+      clearTimeout(settingsHistoryTimerRef.current)
+      settingsHistoryTimerRef.current = null
+    }
+    if (pendingSettingsHistoryRef.current) {
+      commitHistoryEntry(pendingSettingsHistoryRef.current)
+      pendingSettingsHistoryRef.current = null
+    }
+  }
+
+  function resetHistory() {
+    undoStackRef.current = []
+    redoStackRef.current = []
+    gestureHistoryRef.current = null
+    pendingSettingsHistoryRef.current = null
+    if (settingsHistoryTimerRef.current) {
+      clearTimeout(settingsHistoryTimerRef.current)
+      settingsHistoryTimerRef.current = null
+    }
+    syncHistoryCounts()
+    scheduleRuntimeAssetPrune()
+  }
+
+  function restoreProjectSnapshot(snapshot: ProjectSnapshot) {
+    const nextSnapshot = cloneProjectSnapshot(snapshot)
+    const nextCache = nextSnapshot.shotCache.map((shot) => shot ?? undefined)
+    shotCacheRef.current = nextCache
+    setLayout(nextSnapshot.layout)
+    setPageFormat(getPageFormat(nextSnapshot.pageFormatId))
+    setSettings(nextSnapshot.settings)
+    setShots(shotsForLayout(nextSnapshot.layout, nextCache))
+    setActivePanelId(
+      nextSnapshot.activePanelId && nextSnapshot.layout.panels.some((panel) => panel.id === nextSnapshot.activePanelId)
+        ? nextSnapshot.activePanelId
+        : nextOpenPanelId(nextSnapshot.layout, shotsForLayout(nextSnapshot.layout, nextCache)),
+    )
+    clearExport()
+  }
+
+  function undoEditorAction() {
+    flushPendingSettingsHistory()
+    const entry = undoStackRef.current.at(-1)
+    if (!entry) {
+      return
+    }
+
+    undoStackRef.current = undoStackRef.current.slice(0, -1)
+    redoStackRef.current = [
+      ...redoStackRef.current.slice(-(HISTORY_LIMIT - 1)),
+      { label: entry.label, snapshot: captureProjectSnapshot() },
+    ]
+    restoreProjectSnapshot(entry.snapshot)
+    setStatus(`Undid ${entry.label.toLowerCase()}.`)
+    syncHistoryCounts()
+    scheduleRuntimeAssetPrune()
+  }
+
+  function redoEditorAction() {
+    flushPendingSettingsHistory()
+    const entry = redoStackRef.current.at(-1)
+    if (!entry) {
+      return
+    }
+
+    redoStackRef.current = redoStackRef.current.slice(0, -1)
+    undoStackRef.current = [
+      ...undoStackRef.current.slice(-(HISTORY_LIMIT - 1)),
+      { label: entry.label, snapshot: captureProjectSnapshot() },
+    ]
+    restoreProjectSnapshot(entry.snapshot)
+    setStatus(`Redid ${entry.label.toLowerCase()}.`)
+    syncHistoryCounts()
+    scheduleRuntimeAssetPrune()
+  }
+
+  function registerDraftAsset(asset: DraftAssetRecord) {
+    const existingUrl = assetUrlsRef.current.get(asset.id)
+    if (existingUrl) {
+      URL.revokeObjectURL(existingUrl)
+    }
+    const dataUrl = URL.createObjectURL(asset.blob)
+    assetBlobsRef.current.set(asset.id, asset)
+    assetUrlsRef.current.set(asset.id, dataUrl)
+    return dataUrl
+  }
+
+  function createAssetShot(blob: Blob, width: number, height: number) {
+    const asset: DraftAssetRecord = {
+      id: createAssetId(),
+      blob,
+      width,
+      height,
+      createdAt: Date.now(),
+    }
+    return createShot(asset.id, registerDraftAsset(asset), width, height)
+  }
+
+  function referencedRuntimeAssetIds() {
+    const assetIds = new Set(
+      shotCacheRef.current.flatMap((shot) => (shot ? [shot.assetId] : [])),
+    )
+    const historyEntries = [
+      ...undoStackRef.current,
+      ...redoStackRef.current,
+      ...(gestureHistoryRef.current ? [gestureHistoryRef.current] : []),
+      ...(pendingSettingsHistoryRef.current ? [pendingSettingsHistoryRef.current] : []),
+    ]
+    historyEntries.forEach((entry) => {
+      entry.snapshot.shotCache.forEach((shot) => {
+        if (shot) {
+          assetIds.add(shot.assetId)
+        }
+      })
+    })
+    return assetIds
+  }
+
+  function pruneRuntimeAssets() {
+    const referencedAssetIds = referencedRuntimeAssetIds()
+    assetBlobsRef.current.forEach((_asset, assetId) => {
+      if (referencedAssetIds.has(assetId)) {
+        return
+      }
+      const dataUrl = assetUrlsRef.current.get(assetId)
+      if (dataUrl) {
+        URL.revokeObjectURL(dataUrl)
+      }
+      assetUrlsRef.current.delete(assetId)
+      assetBlobsRef.current.delete(assetId)
+    })
+  }
+
+  function scheduleRuntimeAssetPrune() {
+    if (assetPruneScheduledRef.current) {
+      return
+    }
+    assetPruneScheduledRef.current = true
+    queueMicrotask(() => {
+      assetPruneScheduledRef.current = false
+      pruneRuntimeAssets()
+    })
+  }
+
+  function serializeProjectSnapshot(snapshot: ProjectSnapshot): StoredProjectDocument {
+    return {
+      layout: cloneLayout(snapshot.layout),
+      pageFormatId: snapshot.pageFormatId,
+      settings: { ...snapshot.settings },
+      activePanelId: snapshot.activePanelId,
+      shotCache: snapshot.shotCache.map((shot) => {
+        if (!shot) {
+          return null
+        }
+        const { dataUrl: _dataUrl, ...storedShot } = shot
+        return storedShot
+      }),
+    }
+  }
+
+  async function hydrateStoredDraft(draft: StoredProjectDraft) {
+    const assetIds = draft.document.shotCache.flatMap((shot) => (shot ? [shot.assetId] : []))
+    const assets = await loadDraftAssets(assetIds)
+    const missingAsset = assetIds.find((assetId) => !assets.has(assetId))
+    if (missingAsset) {
+      throw new Error('A saved draft photo is unavailable.')
+    }
+
+    assets.forEach((asset) => {
+      registerDraftAsset(asset)
+    })
+
+    const snapshot: ProjectSnapshot = {
+      layout: cloneLayout(draft.document.layout),
+      pageFormatId: draft.document.pageFormatId,
+      settings: { ...draft.document.settings },
+      activePanelId: draft.document.activePanelId,
+      shotCache: draft.document.shotCache.map((shot) => {
+        if (!shot) {
+          return null
+        }
+        const dataUrl = assetUrlsRef.current.get(shot.assetId)
+        return dataUrl ? { ...shot, dataUrl } : null
+      }),
+    }
+    return snapshot
+  }
+
+  function queueDraftSave(snapshot: ProjectSnapshot) {
+    const epoch = draftEpochRef.current
+    const document = serializeProjectSnapshot(snapshot)
+    const documentSignature = JSON.stringify(document)
+    if (documentSignature === lastSavedDocumentSignatureRef.current) {
+      return
+    }
+    const revision = draftRevisionRef.current + 1
+    draftRevisionRef.current = revision
+    const record: StoredProjectDraft = {
+      id: 'current',
+      schemaVersion: 1,
+      revision,
+      updatedAt: Date.now(),
+      document,
+    }
+    const assetIds = new Set(record.document.shotCache.flatMap((shot) => (shot ? [shot.assetId] : [])))
+    const assets = [...assetIds]
+      .map((assetId) => assetBlobsRef.current.get(assetId))
+      .filter((asset): asset is DraftAssetRecord => !!asset)
+
+    if (assets.length !== assetIds.size) {
+      setDraftPhase('error')
+      setStatus('Draft not saved because a photo is unavailable. Editing still works on this device.')
+      return
+    }
+
+    setDraftPhase('saving')
+    draftSaveQueueRef.current = draftSaveQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (epoch !== draftEpochRef.current || revision < draftRevisionRef.current) {
+          return
+        }
+        await saveDraftRecord(record, assets)
+        if (epoch !== draftEpochRef.current || revision < draftRevisionRef.current) {
+          return
+        }
+        setSavedDraft(record)
+        lastSavedDocumentSignatureRef.current = documentSignature
+        setDraftPhase('saved')
+      })
+      .catch((error) => {
+        console.error('Draft autosave failed:', error)
+        setDraftPhase('error')
+        setStatus('Draft not saved. Editing still works on this device.')
+      })
+  }
+
+  function queueDraftClear() {
+    const epoch = draftEpochRef.current + 1
+    draftEpochRef.current = epoch
+    draftRevisionRef.current += 1
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current)
+      autosaveTimerRef.current = null
+    }
+
+    const clearJob = draftSaveQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (epoch !== draftEpochRef.current) {
+          return false
+        }
+        await clearDraftData()
+        if (epoch !== draftEpochRef.current) {
+          return false
+        }
+        setSavedDraft(null)
+        lastSavedDocumentSignatureRef.current = null
+        setDraftPhase('none')
+        return true
+      })
+    draftSaveQueueRef.current = clearJob.then(() => undefined)
+    return clearJob
+  }
 
   useEffect(() => {
     const handleBeforeInstallPrompt = (event: Event) => {
@@ -493,6 +987,45 @@ function App() {
       localStorage.removeItem(PAGE_FORMAT_KEY)
     } finally {
       setStorageReady(true)
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+
+    void loadDraftRecord<StoredProjectDocument>()
+      .then(async (draft) => {
+        if (!active) {
+          return
+        }
+        if (draft && isValidStoredProjectDraft(draft) && draft.document.shotCache.some(Boolean)) {
+          draftRevisionRef.current = draft.revision
+          lastSavedDocumentSignatureRef.current = JSON.stringify(draft.document)
+          setSavedDraft(draft)
+          setDraftPhase('available')
+          return
+        }
+
+        if (draft) {
+          await clearDraftData()
+          if (!active) {
+            return
+          }
+        }
+
+        draftSessionReadyRef.current = true
+        setDraftPhase('none')
+      })
+      .catch((error) => {
+        console.error('Draft recovery check failed:', error)
+        if (active) {
+          draftSessionReadyRef.current = true
+          setDraftPhase('error')
+        }
+      })
+
+    return () => {
+      active = false
     }
   }, [])
 
@@ -558,6 +1091,121 @@ function App() {
 
     localStorage.setItem(PAGE_FORMAT_KEY, pageFormat.id)
   }, [pageFormat.id, storageReady])
+
+  useEffect(() => {
+    if (!started || !draftSessionReadyRef.current || draftPhase === 'checking' || draftPhase === 'available') {
+      return
+    }
+
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current)
+    }
+
+    const snapshot = captureProjectSnapshot()
+    if (!snapshot.shotCache.some(Boolean)) {
+      if (emptyDraftClearedRef.current) {
+        return
+      }
+      emptyDraftClearedRef.current = true
+      void queueDraftClear().catch((error) => {
+        console.error('Draft clear failed:', error)
+        emptyDraftClearedRef.current = false
+        setDraftPhase('error')
+        setStatus('Draft could not be cleared. Your previous saved work is still available.')
+      })
+      return
+    }
+    emptyDraftClearedRef.current = false
+
+    autosaveTimerRef.current = setTimeout(() => {
+      queueDraftSave(snapshot)
+    }, AUTOSAVE_DELAY_MS)
+
+    return () => {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current)
+        autosaveTimerRef.current = null
+      }
+    }
+  }, [activePanelId, layout, pageFormat.id, settings, shots, started])
+
+  useEffect(() => {
+    if (!started) {
+      return
+    }
+
+    const flushPendingDraft = () => {
+      if (!draftSessionReadyRef.current) {
+        return
+      }
+      const snapshot = captureProjectSnapshot()
+      if (!snapshot.shotCache.some(Boolean)) {
+        return
+      }
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current)
+        autosaveTimerRef.current = null
+      }
+      queueDraftSave(snapshot)
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushPendingDraft()
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('pagehide', flushPendingDraft)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('pagehide', flushPendingDraft)
+    }
+  }, [activePanelId, layout, pageFormat.id, settings, shots, started])
+
+  useEffect(() => {
+    const handleHistoryShortcut = (event: KeyboardEvent) => {
+      if (!started || creatorOpen || (!event.ctrlKey && !event.metaKey)) {
+        return
+      }
+      const target = event.target
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLSelectElement ||
+        target instanceof HTMLTextAreaElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return
+      }
+
+      const key = event.key.toLowerCase()
+      if (key === 'z' && event.shiftKey) {
+        event.preventDefault()
+        redoEditorAction()
+      } else if (key === 'z') {
+        event.preventDefault()
+        undoEditorAction()
+      } else if (key === 'y') {
+        event.preventDefault()
+        redoEditorAction()
+      }
+    }
+
+    window.addEventListener('keydown', handleHistoryShortcut)
+    return () => window.removeEventListener('keydown', handleHistoryShortcut)
+  }, [creatorOpen, historyCounts, started])
+
+  useEffect(() => {
+    return () => {
+      if (settingsHistoryTimerRef.current) {
+        clearTimeout(settingsHistoryTimerRef.current)
+      }
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current)
+      }
+      assetUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+      assetUrlsRef.current.clear()
+    }
+  }, [])
 
   useEffect(() => {
     const video = videoRef.current
@@ -678,6 +1326,76 @@ function App() {
     void enterApp()
   }
 
+  function continueDraftFromGesture() {
+    if (startRequestedRef.current || !savedDraft) {
+      return
+    }
+
+    startRequestedRef.current = true
+    void (async () => {
+      await requestAppFullscreen()
+      await lockPortraitOrientation()
+      setDraftPhase('checking')
+      try {
+        const snapshot = await hydrateStoredDraft(savedDraft)
+        restoreProjectSnapshot(snapshot)
+        resetHistory()
+        draftSessionReadyRef.current = true
+        setDraftPhase('saved')
+        setStarted(true)
+        setStatus(`Continued ${snapshot.layout.name} with ${snapshot.shotCache.filter(Boolean).length} saved photo${snapshot.shotCache.filter(Boolean).length === 1 ? '' : 's'}.`)
+      } catch (error) {
+        console.error('Draft recovery failed:', error)
+        setDraftPhase('error')
+        setStatus(error instanceof Error ? error.message : 'Draft recovery failed.')
+        startRequestedRef.current = false
+      }
+    })()
+  }
+
+  function startNewProjectFromGesture() {
+    if (startRequestedRef.current) {
+      return
+    }
+
+    startRequestedRef.current = true
+    void (async () => {
+      await requestAppFullscreen()
+      await lockPortraitOrientation()
+      try {
+        const cleared = await queueDraftClear()
+        if (!cleared) {
+          throw new Error('A newer draft operation interrupted the reset.')
+        }
+      } catch (error) {
+        console.error('Draft reset failed:', error)
+        setDraftPhase('error')
+        setStatus('Could not discard the saved comic. Try Start new again so no work is lost.')
+        startRequestedRef.current = false
+        return
+      }
+
+      assetBlobsRef.current.clear()
+      assetUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
+      assetUrlsRef.current.clear()
+      shotCacheRef.current = []
+      setShots({})
+      setSettings({
+        ...defaultSettings,
+        gutters: layoutDividerThickness(layout) ?? defaultSettings.gutters,
+      })
+      setActivePanelId(layout.panels[0]?.id ?? null)
+      setSavedDraft(null)
+      setDraftPhase('none')
+      draftSessionReadyRef.current = true
+      emptyDraftClearedRef.current = true
+      resetHistory()
+      clearExport()
+      setStarted(true)
+      setStatus(`${layout.name} layout. Panel 1 is live.`)
+    })()
+  }
+
   async function triggerNativeInstall() {
     if (!deferredPrompt) {
       return
@@ -762,6 +1480,7 @@ function App() {
   async function capturePanel() {
     const video = videoRef.current
     const targetPanelId = activePanelId
+    const editorVersion = editorVersionRef.current
     if (!targetPanelId) {
       setStatus('Tap a panel to retake it, or share the comic.')
       return
@@ -782,7 +1501,13 @@ function App() {
       return
     }
 
-    const nextShot = createShot(photo.dataUrl, photo.width, photo.height)
+    if (editorVersion !== editorVersionRef.current) {
+      setStatus('The comic changed while capturing. Tap the shutter again for this panel.')
+      return
+    }
+
+    const nextShot = createAssetShot(photo.blob, photo.width, photo.height)
+    commitHistoryEntry(beginHistoryEntry(shots[targetPanelId] ? 'Replace photo' : 'Capture photo'))
     const nextCache = putShotInCache(layout, shots, shotCacheRef.current, targetPanelId, nextShot)
     shotCacheRef.current = nextCache
     const nextShots = shotsForLayout(layout, nextCache)
@@ -804,35 +1529,53 @@ function App() {
     const file = event.target.files?.[0]
     event.target.value = ''
     if (!file) {
+      replacePanelIdRef.current = null
       return
     }
 
     if (!file.type.startsWith('image/')) {
+      replacePanelIdRef.current = null
       setStatus('Choose an image file.')
       return
     }
 
     const targetPanelId = activePanelId ?? layout.panels.find((panel) => !shots[panel.id])?.id
+    const editorVersion = editorVersionRef.current
     if (!targetPanelId) {
       setStatus('Tap a panel before replacing a finished photo.')
       return
     }
 
-    const dataUrl = await readFileAsDataUrl(file)
-    let image: HTMLImageElement
+    let dimensions: { width: number; height: number }
     try {
-      image = await loadImage(dataUrl)
+      dimensions = await loadBlobDimensions(file)
     } catch {
+      replacePanelIdRef.current = null
       setStatus('Photo upload failed.')
       return
     }
-    const nextShot = createShot(dataUrl, image.naturalWidth || image.width, image.naturalHeight || image.height)
+    if (editorVersion !== editorVersionRef.current) {
+      replacePanelIdRef.current = null
+      setStatus('The comic changed while loading that photo. Choose it again for the current panel.')
+      return
+    }
+    const replacing = !!shots[targetPanelId] || replacePanelIdRef.current === targetPanelId
+    const nextShot = createAssetShot(file, dimensions.width, dimensions.height)
+    commitHistoryEntry(beginHistoryEntry(replacing ? 'Replace photo' : 'Add photo'))
     const nextCache = putShotInCache(layout, shots, shotCacheRef.current, targetPanelId, nextShot)
     shotCacheRef.current = nextCache
     const nextShots = shotsForLayout(layout, nextCache)
     setShots(nextShots)
 
     const currentIndex = layout.panels.findIndex((panel) => panel.id === targetPanelId)
+    if (replacing) {
+      replacePanelIdRef.current = null
+      setActivePanelId(targetPanelId)
+      setStatus(`Replaced panel ${currentIndex + 1} photo.`)
+      clearExport()
+      return
+    }
+
     const nextPanel = layout.panels.slice(currentIndex + 1).find((panel) => !nextShots[panel.id])
     if (nextPanel) {
       setActivePanelId(nextPanel.id)
@@ -844,7 +1587,14 @@ function App() {
     clearExport()
   }
 
-  function changeLayout(nextLayout: Layout) {
+  function changeLayout(nextLayout: Layout, recordHistory = true) {
+    if (nextLayout.id === layout.id) {
+      return
+    }
+    if (recordHistory) {
+      flushPendingSettingsHistory()
+      commitHistoryEntry(beginHistoryEntry('Change layout'))
+    }
     const nextCache = mergeLayoutShotsIntoCache(layout, shots, shotCacheRef.current)
     shotCacheRef.current = nextCache
     const nextShots = shotsForLayout(nextLayout, nextCache)
@@ -873,7 +1623,7 @@ function App() {
     setCustomLayouts((current) => current.filter((item) => item.id !== layoutId))
     if (layout.id === layoutId) {
       const fallbackLayout = layouts[0]
-      changeLayout(fallbackLayout)
+      changeLayout(fallbackLayout, false)
       setStatus(`${targetLayout.name} layout deleted. ${fallbackLayout.name} layout is active.`)
     } else {
       setStatus(`${targetLayout.name} layout deleted.`)
@@ -947,6 +1697,14 @@ function App() {
     }
 
     event.preventDefault()
+    if (!showPhotoActions) {
+      setPhotoActionsDeferred(true)
+    }
+    if (!gestureHistoryRef.current) {
+      gestureHistoryRef.current = beginHistoryEntry('Move photo')
+    }
+    lastSnapAngleRef.current = null
+    setRotationSnap(null)
     setActivePanelId(panel.id)
     setPhotoDragState({
       panelId: panel.id,
@@ -976,6 +1734,16 @@ function App() {
 
     event.preventDefault()
     const shot = shots[firstPanel.id]
+    if (!showPhotoActions) {
+      setPhotoActionsDeferred(true)
+    }
+    if (!gestureHistoryRef.current) {
+      gestureHistoryRef.current = beginHistoryEntry('Transform photo')
+    } else if (gestureHistoryRef.current.label === 'Move photo') {
+      gestureHistoryRef.current = { ...gestureHistoryRef.current, label: 'Transform photo' }
+    }
+    lastSnapAngleRef.current = null
+    setRotationSnap(null)
     setActivePanelId(firstPanel.id)
     setPhotoDragState({
       panelId: firstPanel.id,
@@ -1017,8 +1785,20 @@ function App() {
     }
 
     const scale = photoDragState.scale * clamp(touchDistance(touches) / photoDragState.startDistance, 0.35, 3)
-    const rotation = photoDragState.rotation + angleDelta(photoDragState.startAngle, touchAngle(touches))
-    updateShotTransform(photoDragState.panelId, { scale, rotation })
+    const rawRotation = photoDragState.rotation + angleDelta(photoDragState.startAngle, touchAngle(touches))
+    const snappedRotation = snapPhotoRotation(rawRotation, lastSnapAngleRef.current)
+    if (snappedRotation.snappedAngle !== lastSnapAngleRef.current) {
+      lastSnapAngleRef.current = snappedRotation.snappedAngle
+      setRotationSnap(
+        snappedRotation.snappedAngle === null
+          ? null
+          : { panelId: photoDragState.panelId, angle: snappedRotation.snappedAngle },
+      )
+      if (snappedRotation.snappedAngle !== null) {
+        navigator.vibrate?.(10)
+      }
+    }
+    updateShotTransform(photoDragState.panelId, { scale, rotation: snappedRotation.rotation })
   }
 
   function updateShotTransform(panelId: string, update: Partial<Pick<Shot, 'offsetX' | 'offsetY' | 'scale' | 'rotation'>>) {
@@ -1039,8 +1819,133 @@ function App() {
     clearExport()
   }
 
+  function replaceSelectedPhoto() {
+    if (!activePanelId || !shots[activePanelId]) {
+      return
+    }
+    replacePanelIdRef.current = activePanelId
+    fileInputRef.current?.click()
+  }
+
+  function toggleSelectedPhotoFit() {
+    if (!activePanelId || !shots[activePanelId]) {
+      return
+    }
+    flushPendingSettingsHistory()
+    commitHistoryEntry(beginHistoryEntry('Change photo fit'))
+    const nextFit: PanelFit = (shots[activePanelId].fit ?? settings.fit) === 'cover' ? 'contain' : 'cover'
+    setShots((current) => {
+      const shot = current[activePanelId]
+      if (!shot) {
+        return current
+      }
+      const nextShot = { ...shot, fit: nextFit }
+      const next = { ...current, [activePanelId]: nextShot }
+      shotCacheRef.current = putShotInCache(layout, next, shotCacheRef.current, activePanelId, nextShot)
+      return next
+    })
+    setStatus(`Panel ${activePanelIndex + 1} now uses ${nextFit === 'cover' ? 'Fill frame' : 'Fit whole photo'}.`)
+    clearExport()
+  }
+
+  function resetSelectedPhoto() {
+    if (!activePanelId || !shots[activePanelId]) {
+      return
+    }
+    const currentShot = shots[activePanelId]
+    if (
+      Math.abs(currentShot.offsetX) < 0.001 &&
+      Math.abs(currentShot.offsetY) < 0.001 &&
+      Math.abs(currentShot.scale - 1) < 0.001 &&
+      Math.abs(currentShot.rotation) < 0.001
+    ) {
+      return
+    }
+    flushPendingSettingsHistory()
+    commitHistoryEntry(beginHistoryEntry('Reset photo'))
+    setShots((current) => {
+      const shot = current[activePanelId]
+      if (!shot) {
+        return current
+      }
+      const nextShot = normalizeShot({ ...shot, offsetX: 0, offsetY: 0, scale: 1, rotation: 0 })
+      const next = { ...current, [activePanelId]: nextShot }
+      shotCacheRef.current = putShotInCache(layout, next, shotCacheRef.current, activePanelId, nextShot)
+      return next
+    })
+    setStatus(`Reset panel ${activePanelIndex + 1} photo.`)
+    clearExport()
+  }
+
+  function removeSelectedPhoto() {
+    if (!activePanelId || !shots[activePanelId]) {
+      return
+    }
+    flushPendingSettingsHistory()
+    commitHistoryEntry(beginHistoryEntry('Remove photo'))
+    const panelId = activePanelId
+    const panelIndex = layout.panels.findIndex((panel) => panel.id === panelId)
+    const nextCache = [...shotCacheRef.current]
+    if (panelIndex >= 0) {
+      nextCache[panelIndex] = undefined
+    }
+    shotCacheRef.current = nextCache
+    setShots(shotsForLayout(layout, nextCache))
+    setActivePanelId(panelId)
+    setStatus(`Removed panel ${panelIndex + 1} photo. Capture or replace it when ready.`)
+    clearExport()
+    requestAnimationFrame(() => {
+      stripRef.current?.querySelector<HTMLButtonElement>(`[data-panel-id="${panelId}"]`)?.focus()
+    })
+    if (!stream) {
+      void startCamera()
+    }
+  }
+
+  function updateProjectSettings(next: Partial<Settings>) {
+    if (!pendingSettingsHistoryRef.current) {
+      pendingSettingsHistoryRef.current = beginHistoryEntry('Change style')
+    }
+    if (settingsHistoryTimerRef.current) {
+      clearTimeout(settingsHistoryTimerRef.current)
+    }
+    setSettings((current) => ({ ...current, ...next }))
+    settingsHistoryTimerRef.current = setTimeout(() => {
+      commitHistoryEntry(pendingSettingsHistoryRef.current)
+      pendingSettingsHistoryRef.current = null
+      settingsHistoryTimerRef.current = null
+    }, 360)
+    clearExport()
+  }
+
   function finishGestures() {
+    if (photoDragState && gestureHistoryRef.current) {
+      const baselineIndex = gestureHistoryRef.current.snapshot.layout.panels.findIndex(
+        (panel) => panel.id === photoDragState.panelId,
+      )
+      const currentIndex = layout.panels.findIndex((panel) => panel.id === photoDragState.panelId)
+      const baselineShot = baselineIndex >= 0 ? gestureHistoryRef.current.snapshot.shotCache[baselineIndex] : null
+      const shot = currentIndex >= 0 ? shotCacheRef.current[currentIndex] : undefined
+      const changed =
+        !!shot &&
+        !!baselineShot &&
+        (Math.abs(shot.offsetX - baselineShot.offsetX) > 0.001 ||
+          Math.abs(shot.offsetY - baselineShot.offsetY) > 0.001 ||
+          Math.abs(shot.scale - baselineShot.scale) > 0.001 ||
+          Math.abs(normalizeAngle(shot.rotation - baselineShot.rotation)) > 0.001)
+      if (changed) {
+        commitHistoryEntry(gestureHistoryRef.current)
+      }
+    }
+
+    if (rotationSnap) {
+      setStatus(`Rotation snapped to ${formatRotation(rotationSnap.angle)}.`)
+    }
+    gestureHistoryRef.current = null
+    lastSnapAngleRef.current = null
+    setRotationSnap(null)
     setPhotoDragState(null)
+    setPhotoActionsDeferred(false)
   }
 
   function openDrawer(tab?: DrawerTab) {
@@ -1165,7 +2070,10 @@ function App() {
   return (
     <main
       ref={shellRef}
-      className={`native-shell ${appContext.isInstalled ? 'is-app' : 'is-installer'}`}
+      className={`native-shell ${appContext.isInstalled ? 'is-app' : 'is-installer'} ${showPhotoActions ? 'has-photo-actions' : ''}`}
+      data-history-undo={historyCounts.undo}
+      data-history-redo={historyCounts.redo}
+      data-autosave-state={draftPhase}
       style={pageStyle}
       onPointerMove={(event) => {
         movePhoto(event.clientX, event.clientY)
@@ -1191,46 +2099,109 @@ function App() {
       ) : (
         <>
       {!started && (
-        <section className="start-screen" aria-label="Start Instacomic">
+        <section className="start-screen" aria-label="Start Instacomic" data-draft-phase={draftPhase}>
           <div className="start-mark">Instacomic</div>
-          <div className="format-picker" aria-label="Canvas ratio">
-            <span>Choose canvas</span>
-            <div className="format-options" role="group" aria-label="Canvas ratio">
-              {pageFormats.map((format) => (
-                <button
-                  key={format.id}
-                  className={`format-option ${pageFormat.id === format.id ? 'active' : ''}`}
-                  type="button"
-                  aria-pressed={pageFormat.id === format.id}
-                  onClick={() => selectPageFormat(format)}
-                >
-                  <strong>{format.id}</strong>
-                  <em>{format.label}</em>
+          {draftPhase === 'checking' ? (
+            <div className="draft-checking" role="status">Checking saved work…</div>
+          ) : savedDraft && (draftPhase === 'available' || draftPhase === 'error') && !newProjectRequested ? (
+            <>
+              <section className="draft-recovery-card" aria-label="Saved comic draft">
+                <LayoutPreview layout={savedDraft.document.layout} />
+                <div className="draft-recovery-copy">
+                  <span>Saved comic</span>
+                  <strong>{savedDraft.document.layout.name}</strong>
+                  <em>{`${savedDraftPhotoCount} photo${savedDraftPhotoCount === 1 ? '' : 's'} · ${savedDraft.document.pageFormatId} · ${formatSavedTime(savedDraft.updatedAt)}`}</em>
+                </div>
+              </section>
+              {draftPhase === 'error' && <div className="draft-recovery-error" role="alert">{status}</div>}
+              <div className="start-actions recovery-actions">
+                <button className="start-button" type="button" onClick={continueDraftFromGesture}>
+                  {draftPhase === 'error' ? 'Retry recovery' : 'Continue editing'}
                 </button>
-              ))}
-            </div>
-          </div>
-          <div className="start-actions">
-            <button
-              className="start-button"
-              type="button"
-              onPointerDown={(event) => {
-                if (event.isPrimary && event.button === 0) {
-                  startFromGesture()
-                }
-              }}
-              onClick={() => startFromGesture()}
-            >
-              Start
-            </button>
-          </div>
+                <button className="start-secondary" type="button" onClick={() => setNewProjectRequested(true)}>
+                  New comic
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="format-picker" aria-label="Canvas ratio">
+                <span>Choose canvas</span>
+                <div className="format-options" role="group" aria-label="Canvas ratio">
+                  {pageFormats.map((format) => (
+                    <button
+                      key={format.id}
+                      className={`format-option ${pageFormat.id === format.id ? 'active' : ''}`}
+                      type="button"
+                      aria-pressed={pageFormat.id === format.id}
+                      onClick={() => selectPageFormat(format)}
+                    >
+                      <strong>{format.id}</strong>
+                      <em>{format.label}</em>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="start-actions">
+                <button
+                  className="start-button"
+                  type="button"
+                  onPointerDown={(event) => {
+                    if (event.isPrimary && event.button === 0) {
+                      if (newProjectRequested) {
+                        startNewProjectFromGesture()
+                      } else {
+                        startFromGesture()
+                      }
+                    }
+                  }}
+                  onClick={() => (newProjectRequested ? startNewProjectFromGesture() : startFromGesture())}
+                >
+                  {newProjectRequested ? 'Start new' : 'Start'}
+                </button>
+                {newProjectRequested && (
+                  <button className="start-secondary" type="button" onClick={() => setNewProjectRequested(false)}>
+                    Back to saved comic
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </section>
       )}
       <video ref={videoRef} className="live-camera" autoPlay muted playsInline />
       <input ref={fileInputRef} className="photo-upload" type="file" accept="image/*" onChange={(event) => void uploadPhoto(event)} />
-      <div className="sr-status" aria-live="polite">
+      <div className="sr-status" id="app-status" aria-live="polite">
         {status}
       </div>
+      <p className="sr-status" id="photo-gesture-help">Drag to move. Pinch to zoom. Twist to rotate.</p>
+
+      {started && (
+        <div className="history-toolbar" role="toolbar" aria-label="Editing history">
+          <button
+            type="button"
+            aria-label="Undo"
+            aria-keyshortcuts="Control+Z Meta+Z"
+            disabled={historyCounts.undo === 0}
+            onClick={undoEditorAction}
+          >
+            <ToolIcon name="undo" />
+          </button>
+          <button
+            type="button"
+            aria-label="Redo"
+            aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y"
+            disabled={historyCounts.redo === 0}
+            onClick={redoEditorAction}
+          >
+            <ToolIcon name="redo" />
+          </button>
+          <span className={`autosave-chip is-${draftPhase}`} aria-label={draftPhase === 'error' ? 'Draft not saved' : `Draft ${draftPhase === 'none' ? 'ready' : draftPhase}`}>
+            <i aria-hidden="true" />
+            {draftPhase === 'saving' ? 'Saving' : draftPhase === 'error' ? 'Not saved' : draftPhase === 'none' ? 'Ready' : 'Saved'}
+          </span>
+        </div>
+      )}
 
       <section ref={stageRef} className="comic-stage" aria-label="Instacomic capture surface">
         <div
@@ -1265,17 +2236,20 @@ function App() {
               type="button"
               data-panel-id={panel.id}
               onClick={() => selectPanel(panel.id)}
-              aria-label={`Make panel ${index + 1} live`}
+              aria-label={shots[panel.id] ? `Select panel ${index + 1}, photo added` : `Select empty panel ${index + 1}`}
+              aria-pressed={panel.id === activePanelId}
+              aria-describedby={panel.id === activePanelId && shots[panel.id] ? 'photo-gesture-help' : undefined}
             >
               {shots[panel.id] && (
                 <img
                   src={shots[panel.id].dataUrl}
                   alt={`Panel ${index + 1}`}
-                  style={shotImageStyle(panel, shots[panel.id], settings.fit, pageFormat)}
+                  style={shotImageStyle(panel, shots[panel.id], shots[panel.id].fit ?? settings.fit, pageFormat)}
                   data-shot-scale={shots[panel.id].scale.toFixed(2)}
                   data-shot-x={shots[panel.id].offsetX.toFixed(2)}
                   data-shot-y={shots[panel.id].offsetY.toFixed(2)}
                   data-shot-rotation={shots[panel.id].rotation.toFixed(2)}
+                  data-shot-fit={shots[panel.id].fit ?? settings.fit}
                 />
               )}
               {panel.id === activePanelId && stream && !shots[panel.id] && (
@@ -1294,9 +2268,33 @@ function App() {
             />
           ))}
 
+          {rotationSnap && layout.panels.find((panel) => panel.id === rotationSnap.panelId) && (
+            <div
+              className="rotation-snap-cue"
+              data-snap-angle={rotationSnap.angle}
+              style={panelCenterStyle(layout.panels.find((panel) => panel.id === rotationSnap.panelId)!)}
+              aria-hidden="true"
+            >
+              <span>{formatRotation(rotationSnap.angle)}</span>
+              <i />
+            </div>
+          )}
+
           {settings.caption.trim() && <div className="strip-caption">{settings.caption}</div>}
         </div>
       </section>
+
+      {showPhotoActions && selectedShot && activePanelId && (
+        <PhotoActionTray
+          panelNumber={activePanelIndex + 1}
+          shot={selectedShot}
+          fit={selectedShotFit}
+          onReplace={replaceSelectedPhoto}
+          onToggleFit={toggleSelectedPhotoFit}
+          onReset={resetSelectedPhoto}
+          onRemove={removeSelectedPhoto}
+        />
+      )}
 
       <nav className="capture-bar" aria-label="Capture controls">
         <button className="round-action" type="button" onClick={() => void flipCamera()} aria-label="Flip camera">
@@ -1360,7 +2358,7 @@ function App() {
         </div>
       )}
 
-      <div className="progress-pills" aria-label={`${capturedCount} of ${layout.panels.length} panels captured`}>
+      <div className={`progress-pills ${showPhotoActions ? 'with-photo-actions' : ''}`} aria-label={`${capturedCount} of ${layout.panels.length} panels captured`}>
         {layout.panels.map((panel) => (
           <span key={panel.id} className={shots[panel.id] ? 'done' : panel.id === activePanelId ? 'live' : ''} />
         ))}
@@ -1384,13 +2382,7 @@ function App() {
           />
         )}
         {drawerTab === 'style' && (
-          <StylePanel
-            settings={settings}
-            onSettings={(next) => {
-              setSettings((current) => ({ ...current, ...next }))
-              clearExport()
-            }}
-          />
+          <StylePanel settings={settings} onSettings={updateProjectSettings} />
         )}
       </Drawer>
       <AnimatePresence>
@@ -1438,6 +2430,108 @@ function LiveVideo({ stream, panel, fit }: { stream: MediaStream; panel: Panel; 
   }, [stream])
 
   return <video ref={ref} className="live-frame" style={photoFrameStyle(panel, fit)} autoPlay muted playsInline aria-hidden="true" />
+}
+
+type ToolIconName = 'undo' | 'redo' | 'replace' | 'fit' | 'reset' | 'remove'
+
+function ToolIcon({ name }: { name: ToolIconName }) {
+  if (name === 'undo' || name === 'redo') {
+    return (
+      <svg className={name === 'redo' ? 'is-mirrored' : ''} viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M9 7 4.5 11 9 15" />
+        <path d="M5 11h7.5a6 6 0 0 1 6 6" />
+      </svg>
+    )
+  }
+
+  if (name === 'replace') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3.5" y="4.5" width="13" height="13" rx="2" />
+        <path d="m5.5 15 3.5-4 2.5 2.5 2-2 3 3" />
+        <path d="M15 7h5.5m0 0L18 4.5M20.5 7 18 9.5" />
+      </svg>
+    )
+  }
+
+  if (name === 'fit') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" />
+        <rect x="8" y="8" width="8" height="8" rx="1" />
+      </svg>
+    )
+  }
+
+  if (name === 'reset') {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M6.4 7.2A7 7 0 1 1 5 14" />
+        <path d="M6.5 3.5v4.3h4.3" />
+      </svg>
+    )
+  }
+
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 7h14M9 7V4.5h6V7m-8 0 .8 12h8.4L17 7M10 10v6M14 10v6" />
+    </svg>
+  )
+}
+
+function PhotoActionTray({
+  panelNumber,
+  shot,
+  fit,
+  onReplace,
+  onToggleFit,
+  onReset,
+  onRemove,
+}: {
+  panelNumber: number
+  shot: Shot
+  fit: PanelFit
+  onReplace: () => void
+  onToggleFit: () => void
+  onReset: () => void
+  onRemove: () => void
+}) {
+  const transformIsDefault =
+    Math.abs(shot.offsetX) < 0.001 &&
+    Math.abs(shot.offsetY) < 0.001 &&
+    Math.abs(shot.scale - 1) < 0.001 &&
+    Math.abs(shot.rotation) < 0.001
+  return (
+    <section className="photo-action-tray" role="toolbar" aria-label={`Panel ${panelNumber} photo controls`} data-panel-number={panelNumber}>
+      <div className="photo-action-summary">
+        <strong>{`Panel ${panelNumber}`}</strong>
+        <span>{`${Math.round(shot.scale * 100)}% · ${formatRotation(shot.rotation)}`}</span>
+      </div>
+      <div className="photo-action-buttons">
+        <button type="button" aria-label={`Replace panel ${panelNumber} photo`} onClick={onReplace}>
+          <ToolIcon name="replace" />
+          <span>Replace</span>
+        </button>
+        <button
+          type="button"
+          aria-label={`Fit whole photo in panel ${panelNumber}`}
+          aria-pressed={fit === 'contain'}
+          onClick={onToggleFit}
+        >
+          <ToolIcon name="fit" />
+          <span>Fit</span>
+        </button>
+        <button type="button" aria-label={`Reset panel ${panelNumber} photo`} disabled={transformIsDefault} onClick={onReset}>
+          <ToolIcon name="reset" />
+          <span>Reset</span>
+        </button>
+        <button className="is-danger" type="button" aria-label={`Remove panel ${panelNumber} photo`} onClick={onRemove}>
+          <ToolIcon name="remove" />
+          <span>Remove</span>
+        </button>
+      </div>
+    </section>
+  )
 }
 
 function Drawer({
@@ -2537,7 +3631,7 @@ function drawPanel(
   context.fill()
   context.clip()
   if (image) {
-    drawImageFit(context, image, x, y, w, h, settings.fit, shot ?? createShot(''))
+    drawImageFit(context, image, x, y, w, h, shot?.fit ?? settings.fit, shot ?? createShot('', ''))
   } else {
     drawEmptyPanel(context, x, y, w, h)
   }
@@ -2611,6 +3705,14 @@ function panelStyle(panel: Panel) {
     clipPath: panel.points ? pointsToClipPath(panel.points) : undefined,
     '--chip-x': `${center.x * 100}%`,
     '--chip-y': `${center.y * 100}%`,
+  }
+}
+
+function panelCenterStyle(panel: Panel) {
+  const center = panelCentroid(panel)
+  return {
+    left: `${center.x * 100}%`,
+    top: `${center.y * 100}%`,
   }
 }
 
@@ -2770,7 +3872,7 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 
 async function captureFullPhoto(stream: MediaStream, video: HTMLVideoElement): Promise<CapturedPhoto> {
   const stillPhoto = await takePhotoFromTrack(stream).catch(() => null)
-  return stillPhoto ?? captureVideoFrame(video)
+  return stillPhoto ?? (await captureVideoFrame(video))
 }
 
 async function takePhotoFromTrack(stream: MediaStream): Promise<CapturedPhoto | null> {
@@ -2783,16 +3885,15 @@ async function takePhotoFromTrack(stream: MediaStream): Promise<CapturedPhoto | 
   }
 
   const blob = await new ImageCaptureConstructor(track).takePhoto()
-  const dataUrl = await readBlobAsDataUrl(blob, 'Photo capture failed.')
-  const image = await loadImage(dataUrl)
+  const dimensions = await loadBlobDimensions(blob)
   return {
-    dataUrl,
-    width: image.naturalWidth || image.width,
-    height: image.naturalHeight || image.height,
+    blob,
+    width: dimensions.width,
+    height: dimensions.height,
   }
 }
 
-function captureVideoFrame(video: HTMLVideoElement): CapturedPhoto {
+async function captureVideoFrame(video: HTMLVideoElement): Promise<CapturedPhoto> {
   const width = video.videoWidth
   const height = video.videoHeight
   if (width <= 0 || height <= 0) {
@@ -2808,29 +3909,36 @@ function captureVideoFrame(video: HTMLVideoElement): CapturedPhoto {
   }
 
   context.drawImage(video, 0, 0, width, height)
+  const blob = await canvasToBlob(canvas, 'image/jpeg', 0.92)
   return {
-    dataUrl: canvas.toDataURL('image/jpeg', 0.92),
+    blob,
     width,
     height,
   }
 }
 
-function readFileAsDataUrl(file: File): Promise<string> {
-  return readBlobAsDataUrl(file, 'Photo upload failed.')
+async function loadBlobDimensions(blob: Blob) {
+  const url = URL.createObjectURL(blob)
+  try {
+    const image = await loadImage(url)
+    return {
+      width: image.naturalWidth || image.width,
+      height: image.naturalHeight || image.height,
+    }
+  } finally {
+    URL.revokeObjectURL(url)
+  }
 }
 
-function readBlobAsDataUrl(blob: Blob, failureMessage: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        resolve(reader.result)
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality?: number) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) {
+        resolve(blob)
       } else {
-        reject(new Error(failureMessage))
+        reject(new Error('Photo capture failed.'))
       }
-    }
-    reader.onerror = () => reject(new Error(failureMessage))
-    reader.readAsDataURL(blob)
+    }, type, quality)
   })
 }
 
@@ -3302,6 +4410,46 @@ function normalizeAngle(angle: number) {
     normalized += 360
   }
   return normalized
+}
+
+function angularDistance(first: number, second: number) {
+  return Math.abs(normalizeAngle(first - second))
+}
+
+function snapPhotoRotation(rawRotation: number, activeSnap: number | null) {
+  const rotation = normalizeAngle(rawRotation)
+  if (activeSnap !== null && angularDistance(rotation, activeSnap) <= ROTATION_SNAP_RELEASE_DEGREES) {
+    return { rotation: normalizeAngle(activeSnap), snappedAngle: activeSnap }
+  }
+
+  const nearestSnap = normalizeAngle(Math.round(rotation / 90) * 90)
+  if (angularDistance(rotation, nearestSnap) <= ROTATION_SNAP_ENTER_DEGREES) {
+    return { rotation: nearestSnap, snappedAngle: nearestSnap }
+  }
+  return { rotation, snappedAngle: null }
+}
+
+function formatRotation(rotation: number) {
+  const normalized = normalizeAngle(rotation)
+  return `${normalized === -0 ? 0 : Math.round(normalized)}°`
+}
+
+function formatSavedTime(timestamp: number) {
+  if (!Number.isFinite(timestamp)) {
+    return 'Saved recently'
+  }
+  const elapsedMinutes = Math.max(0, Math.round((Date.now() - timestamp) / 60_000))
+  if (elapsedMinutes < 1) {
+    return 'Saved just now'
+  }
+  if (elapsedMinutes < 60) {
+    return `Saved ${elapsedMinutes}m ago`
+  }
+  const elapsedHours = Math.round(elapsedMinutes / 60)
+  if (elapsedHours < 24) {
+    return `Saved ${elapsedHours}h ago`
+  }
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(timestamp))
 }
 
 function pointInPanel(panel: Panel, x: number, y: number) {
