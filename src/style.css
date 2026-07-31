@@ -7,6 +7,8 @@
   --teal: #18b7a8;
   --yellow: #ffd84d;
   --muted: rgba(17, 17, 17, 0.58);
+  --ui-border: 2px;
+  --ui-border-strong: 3px;
   color: var(--ink);
   background: #111;
   font-family:
@@ -96,7 +98,7 @@ select:focus-visible {
 .start-screen .start-button {
   min-width: 168px;
   min-height: 62px;
-  border: 3px solid #111;
+  border: var(--ui-border-strong) solid #111;
   border-radius: 999px;
   color: #111;
   background: var(--yellow);
@@ -131,7 +133,7 @@ select:focus-visible {
   place-items: center;
   gap: 2px;
   padding: 7px 3px;
-  border: 2px solid rgba(255, 248, 236, 0.32);
+  border: var(--ui-border) solid rgba(255, 248, 236, 0.32);
   border-radius: 14px;
   color: #fff8ec;
   background: rgba(17, 17, 17, 0.28);
@@ -171,7 +173,7 @@ select:focus-visible {
   width: 100%;
   min-height: 46px;
   margin: 0 0 14px;
-  border: 3px solid #111;
+  border: var(--ui-border-strong) solid #111;
   border-radius: 999px;
   color: #111;
   background: var(--yellow);
@@ -303,7 +305,7 @@ select:focus-visible {
   height: 100%;
   display: block;
   object-fit: fill;
-  will-change: left, top, width, height;
+  will-change: left, top, width, height, transform;
 }
 
 .live-divider-gap {
@@ -427,7 +429,7 @@ select:focus-visible {
 .round-action {
   width: 54px;
   height: 54px;
-  border: 2px solid rgba(255, 248, 236, 0.5);
+  border: var(--ui-border) solid rgba(255, 248, 236, 0.5);
   border-radius: 999px;
   color: #fff8ec;
   background: rgba(17, 17, 17, 0.34);
@@ -510,7 +512,7 @@ select:focus-visible {
   z-index: 82;
   height: 42px;
   overflow: hidden;
-  border: 2px solid rgba(17, 17, 17, 0.72);
+  border: var(--ui-border) solid rgba(17, 17, 17, 0.72);
   border-radius: 999px;
   color: #111;
   background: rgba(255, 248, 236, 0.94);
@@ -549,7 +551,7 @@ select:focus-visible {
   gap: 10px;
   align-items: center;
   padding: 10px;
-  border: 2px solid rgba(17, 17, 17, 0.72);
+  border: var(--ui-border) solid rgba(17, 17, 17, 0.72);
   border-radius: 18px;
   color: #111;
   background: rgba(255, 248, 236, 0.96);
@@ -666,7 +668,7 @@ select:focus-visible {
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
   padding: 4px;
-  border: 1px solid rgba(17, 17, 17, 0.12);
+  border: var(--ui-border) solid rgba(17, 17, 17, 0.12);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.62);
 }
@@ -702,7 +704,7 @@ select:focus-visible {
   display: grid;
   gap: 10px;
   padding: 12px;
-  border: 2px solid rgba(17, 17, 17, 0.14);
+  border: var(--ui-border) solid rgba(17, 17, 17, 0.14);
   border-radius: 16px;
   background: rgba(24, 183, 168, 0.12);
 }
@@ -742,7 +744,7 @@ select:focus-visible {
   gap: 10px;
   align-items: center;
   padding: 10px;
-  border: 2px solid rgba(17, 17, 17, 0.15);
+  border: var(--ui-border) solid rgba(17, 17, 17, 0.15);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.7);
   text-align: left;
@@ -777,7 +779,7 @@ select:focus-visible {
   height: 32px;
   display: grid;
   place-items: center;
-  border: 2px solid #fff8ec;
+  border: var(--ui-border) solid #fff8ec;
   border-radius: 999px;
   color: #fff8ec;
   background: #b3261e;
@@ -791,13 +793,13 @@ select:focus-visible {
   position: relative;
   width: 46px;
   height: 66px;
-  border: 2px solid var(--ink);
+  border: var(--ui-border) solid var(--ink);
   background: var(--paper);
 }
 
 .layout-mini i {
   position: absolute;
-  border: 1.5px solid var(--ink);
+  border: var(--ui-border) solid var(--ink);
   background: #fff;
 }
 
@@ -879,7 +881,7 @@ select:focus-visible {
 .creator-topbar button,
 .creator-actions button {
   min-height: 48px;
-  border: 0;
+  border: var(--ui-border) solid rgba(17, 17, 17, 0.16);
   border-radius: 16px;
   background: rgba(17, 17, 17, 0.08);
   color: var(--ink);
@@ -889,6 +891,7 @@ select:focus-visible {
 
 .creator-topbar .primary,
 .creator-actions .primary {
+  border-color: #111;
   background: var(--accent);
   color: #fff;
 }
@@ -1053,7 +1056,7 @@ select:focus-visible {
   width: 100%;
   min-height: 48px;
   padding: 0 12px;
-  border: 2px solid rgba(17, 17, 17, 0.16);
+  border: var(--ui-border) solid rgba(17, 17, 17, 0.16);
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.82);
   color: var(--ink);
@@ -1081,7 +1084,7 @@ select:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 0;
+  border: var(--ui-border) solid #111;
   border-radius: 17px;
   background: var(--accent);
   color: #fff;
@@ -1101,6 +1104,7 @@ input:disabled {
 }
 
 .subtle-danger {
+  border-color: rgba(179, 38, 30, 0.36);
   background: rgba(255, 93, 77, 0.14);
   color: #b3261e;
 }
@@ -1206,7 +1210,7 @@ input:disabled {
 .start-screen .start-button {
   width: 100%;
   min-height: 56px;
-  border: 3px solid #111;
+  border: var(--ui-border-strong) solid #111;
   border-radius: 999px;
   font-size: 19px;
   font-weight: 1000;
@@ -1279,7 +1283,7 @@ input:disabled {
 
 .installer-note {
   padding: 13px 14px;
-  border: 2px solid rgba(17, 17, 17, 0.14);
+  border: var(--ui-border) solid rgba(17, 17, 17, 0.14);
   border-radius: 10px;
   background: rgba(24, 183, 168, 0.1);
 }
@@ -1290,7 +1294,7 @@ input:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 3px solid #111;
+  border: var(--ui-border-strong) solid #111;
   border-radius: 999px;
   font-size: 17px;
   font-weight: 1000;

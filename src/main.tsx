@@ -34,6 +34,7 @@ type Shot = {
   offsetX: number
   offsetY: number
   scale: number
+  rotation: number
 }
 
 type CapturedPhoto = {
@@ -104,15 +105,15 @@ type TouchPoints = {
 
 type PhotoDragState = {
   panelId: string
-  mode: 'move' | 'pinch'
+  mode: 'move' | 'rotate'
   startX: number
   startY: number
   offsetX: number
   offsetY: number
-  scale: number
+  rotation: number
   frameWidth: number
   frameHeight: number
-  startDistance?: number
+  startAngle?: number
 }
 
 type LineTouchState = {
@@ -138,6 +139,7 @@ function createShot(dataUrl: string, width?: number, height?: number): Shot {
     offsetX: 0,
     offsetY: 0,
     scale: 1,
+    rotation: 0,
   }
 }
 
@@ -146,6 +148,7 @@ function normalizeShot(shot: Shot): Shot {
   return {
     ...shot,
     scale,
+    rotation: normalizeAngle(shot.rotation),
     offsetX: clamp(shot.offsetX, -0.65 * scale, 0.65 * scale),
     offsetY: clamp(shot.offsetY, -0.65 * scale, 0.65 * scale),
   }
@@ -724,7 +727,7 @@ function App() {
   function selectPanel(panelId: string) {
     setActivePanelId(panelId)
     if (shots[panelId]) {
-      setStatus(`Panel ${layout.panels.findIndex((panel) => panel.id === panelId) + 1} photo selected. Drag or pinch to adjust.`)
+      setStatus(`Panel ${layout.panels.findIndex((panel) => panel.id === panelId) + 1} photo selected. Drag to move or twist to rotate.`)
       return
     }
 
@@ -950,13 +953,13 @@ function App() {
       startY: event.clientY,
       offsetX: shot.offsetX,
       offsetY: shot.offsetY,
-      scale: shot.scale,
+      rotation: shot.rotation,
       ...panelPhotoFrameSize(panel, rect),
     })
-    setStatus(`Panel ${layout.panels.findIndex((item) => item.id === panel.id) + 1} photo selected. Drag or pinch to adjust.`)
+    setStatus(`Panel ${layout.panels.findIndex((item) => item.id === panel.id) + 1} photo selected. Drag to move or twist to rotate.`)
   }
 
-  function beginPhotoPinch(event: TouchEvent<HTMLElement>) {
+  function beginPhotoRotation(event: TouchEvent<HTMLElement>) {
     if (event.touches.length < 2) {
       return
     }
@@ -973,14 +976,14 @@ function App() {
     setActivePanelId(firstPanel.id)
     setPhotoDragState({
       panelId: firstPanel.id,
-      mode: 'pinch',
+      mode: 'rotate',
       startX: 0,
       startY: 0,
       offsetX: shot.offsetX,
       offsetY: shot.offsetY,
-      scale: shot.scale,
+      rotation: shot.rotation,
       ...panelPhotoFrameSize(firstPanel, rect),
-      startDistance: touchDistance(event.touches),
+      startAngle: touchAngle(event.touches),
     })
   }
 
@@ -997,16 +1000,16 @@ function App() {
     })
   }
 
-  function movePhotoPinch(touches: TouchPoints) {
-    if (!photoDragState || photoDragState.mode !== 'pinch' || touches.length < 2 || !photoDragState.startDistance) {
+  function movePhotoRotation(touches: TouchPoints) {
+    if (!photoDragState || photoDragState.mode !== 'rotate' || touches.length < 2 || photoDragState.startAngle === undefined) {
       return
     }
 
-    const scale = photoDragState.scale * clamp(touchDistance(touches) / photoDragState.startDistance, 0.35, 3)
-    updateShotTransform(photoDragState.panelId, { scale })
+    const rotation = photoDragState.rotation + angleDelta(photoDragState.startAngle, touchAngle(touches))
+    updateShotTransform(photoDragState.panelId, { rotation })
   }
 
-  function updateShotTransform(panelId: string, update: Partial<Pick<Shot, 'offsetX' | 'offsetY' | 'scale'>>) {
+  function updateShotTransform(panelId: string, update: Partial<Pick<Shot, 'offsetX' | 'offsetY' | 'scale' | 'rotation'>>) {
     setShots((current) => {
       const shot = current[panelId]
       if (!shot) {
@@ -1158,8 +1161,8 @@ function App() {
       onPointerUp={() => finishGestures()}
       onPointerCancel={() => finishGestures()}
       onTouchMove={(event) => {
-        if (photoDragState?.mode === 'pinch') {
-          movePhotoPinch(event.touches)
+        if (photoDragState?.mode === 'rotate') {
+          movePhotoRotation(event.touches)
         } else if (event.touches[0]) {
           movePhoto(event.touches[0].clientX, event.touches[0].clientY)
         }
@@ -1229,7 +1232,7 @@ function App() {
           }}
           onTouchStart={(event) => {
             if (event.touches.length > 1) {
-              beginPhotoPinch(event)
+              beginPhotoRotation(event)
             }
           }}
           style={
@@ -1260,6 +1263,7 @@ function App() {
                   data-shot-scale={shots[panel.id].scale.toFixed(2)}
                   data-shot-x={shots[panel.id].offsetX.toFixed(2)}
                   data-shot-y={shots[panel.id].offsetY.toFixed(2)}
+                  data-shot-rotation={shots[panel.id].rotation.toFixed(2)}
                 />
               )}
               {panel.id === activePanelId && stream && !shots[panel.id] && (
@@ -2514,6 +2518,8 @@ function shotImageStyle(panel: Panel, shot: Shot, fit: PanelFit, pageFormat: Pag
     width: `${size.width * shot.scale * 100}%`,
     height: `${size.height * shot.scale * 100}%`,
     objectFit: 'fill',
+    transform: `rotate(${shot.rotation}deg)`,
+    transformOrigin: 'center',
   } as React.CSSProperties
 }
 
@@ -2599,7 +2605,13 @@ function drawImageFit(
   const drawH = size.height * shot.scale
   const offsetX = shot.offsetX * w
   const offsetY = shot.offsetY * h
-  context.drawImage(image, x + (w - drawW) / 2 + offsetX, y + (h - drawH) / 2 + offsetY, drawW, drawH)
+  const centerX = x + w / 2 + offsetX
+  const centerY = y + h / 2 + offsetY
+  context.save()
+  context.translate(centerX, centerY)
+  context.rotate((shot.rotation * Math.PI) / 180)
+  context.drawImage(image, -drawW / 2, -drawH / 2, drawW, drawH)
+  context.restore()
 }
 
 function imageFitSize(imageRatio: number, w: number, h: number, fit: PanelFit, yScale = 1) {
@@ -3168,6 +3180,21 @@ function angleDelta(start: number, current: number) {
     delta += 360
   }
   return delta
+}
+
+function normalizeAngle(angle: number) {
+  if (!Number.isFinite(angle)) {
+    return 0
+  }
+
+  let normalized = angle % 360
+  if (normalized > 180) {
+    normalized -= 360
+  }
+  if (normalized <= -180) {
+    normalized += 360
+  }
+  return normalized
 }
 
 function pointInPanel(panel: Panel, x: number, y: number) {

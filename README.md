@@ -27,7 +27,7 @@ Instacomic turns a phone camera into a live comic strip editor. Pick a panel, sh
 - A Start button enters the editor and requests fullscreen when the browser allows it.
 - Capture advances forward through the layout, then freezes the final photo instead of covering it with the live preview.
 - Upload an existing image into the active panel when the camera is not the right source.
-- Filled panels support direct photo repositioning: drag to pan and pinch to resize.
+- Filled panels support direct photo repositioning: drag to pan and twist with two fingers to rotate.
 - Custom layouts open in a full-screen maker with divider handles, endpoint snapping, and thickness controls.
 - Style controls cover paper, ink, gutters, borders, corners, captions, and image fit.
 - Story video export renders a sliding panel reveal with duration and speed controls, downloading MP4 output.
@@ -51,7 +51,7 @@ npm run smoke:camera
 npm run smoke:video
 ```
 
-The smoke checks exercise the mobile editor flow, centered start aspect choices, uploaded photo positioning, full-screen snapping custom layouts with thickness controls, custom layout deletion, share fallback, manifest loading, fake-camera capture through the final panel, story video configuration, and story video render progress.
+The smoke checks exercise the mobile editor flow, centered start aspect choices, uploaded photo positioning and two-finger rotation without scaling, uniform editor control borders, full-screen snapping custom layouts with thickness controls, custom layout deletion, share fallback, manifest loading, fake-camera capture through the final panel, story video configuration, and story video render progress.
 
 ## Deploy
 

@@ -58,8 +58,8 @@ const uploadedPhoto = await page.locator('[data-panel-id="2"] img').count()
 const photoBefore = await photoTransform(page, '2')
 await dragPanelPhoto(page, 0.75, 0.31, 42, -28)
 const photoAfterDrag = await photoTransform(page, '2')
-await pinchPanelPhoto(page, 0.75, 0.31)
-const photoAfterPinch = await photoTransform(page, '2')
+await rotatePanelPhoto(page, 0.75, 0.31)
+const photoAfterRotation = await photoTransform(page, '2')
 await page.locator('[data-panel-id="3"]').evaluate((button) => button.click())
 await page.setInputFiles('.photo-upload', {
   name: 'panel-2.png',
@@ -76,6 +76,7 @@ await page.getByRole('button', { name: /Story/ }).tap()
 const photosAfterSmallerTemplate = await page.locator('.live-panel img').count()
 await page.getByRole('button', { name: /Shard/ }).tap()
 const photosAfterRestoredTemplate = await page.locator('.live-panel img').count()
+const photoAfterRestoredTemplate = await photoTransform(page, '2')
 await closeDrawer(page)
 
 await openDrawer(page)
@@ -100,6 +101,10 @@ const creatorFullscreenVisible = await page.locator('.creator-fullscreen').count
 const drawerHiddenAfterCreate = await page.locator('.motion-drawer').boundingBox().then((box) => box && box.y > 830)
 const creatorCanvasFormat = await page.locator('.creator-canvas').getAttribute('data-page-format')
 const creatorCanvasAspect = await page.locator('.creator-canvas').boundingBox().then((box) => (box ? box.height / box.width : 0))
+const uniformControlBorders = await page.evaluate(() => {
+  const standardSurfaces = document.querySelectorAll('.drawer-tabs, .layout-card, .layout-mini, .creator-topbar button, .creator-actions button, .field input')
+  return standardSurfaces.length > 0 && Array.from(standardSurfaces).every((element) => getComputedStyle(element).borderTopWidth === '2px')
+})
 await page.getByPlaceholder('My manga layout').fill('Final Layout')
 await page.getByPlaceholder('My manga layout').blur()
 await page.getByLabel('Divider thickness').evaluate((input) => {
@@ -213,7 +218,9 @@ const result = {
   selectedPanel,
   uploadedPhoto,
   photoMoved: Math.abs(photoAfterDrag.x - photoBefore.x) > 0.03 || Math.abs(photoAfterDrag.y - photoBefore.y) > 0.03,
-  photoPinched: photoAfterPinch.scale > photoAfterDrag.scale + 0.08,
+  photoRotated: Math.abs(photoAfterRotation.rotation - photoAfterDrag.rotation) > 70,
+  photoScaleUnchanged: Math.abs(photoAfterRotation.scale - photoAfterDrag.scale) < 0.01,
+  photoRotationPreserved: Math.abs(photoAfterRestoredTemplate.rotation - photoAfterRotation.rotation) < 0.01,
   photosAfterSmallerTemplate,
   photosAfterRestoredTemplate,
   stickerTabCount,
@@ -227,6 +234,7 @@ const result = {
   drawerHiddenAfterCreate,
   creatorCanvasFormat,
   creatorCanvasAspect,
+  uniformControlBorders,
   creatorThickness,
   dividerVisualThickness,
   creatorTextHasRay,
@@ -263,7 +271,9 @@ const failures = [
   result.selectedPanel === '2' ? null : 'panel selection did not land on panel 2',
   result.uploadedPhoto === 1 ? null : 'photo upload did not fill the active panel',
   result.photoMoved ? null : 'panel photo drag did not update the image offset',
-  result.photoPinched ? null : 'panel photo pinch did not update the image scale',
+  result.photoRotated ? null : 'two-finger photo twist did not update the image rotation',
+  result.photoScaleUnchanged ? null : 'two-finger photo twist unexpectedly changed the image scale',
+  result.photoRotationPreserved ? null : 'photo rotation was not preserved across layout changes',
   result.photosAfterSmallerTemplate === 2 ? null : 'template switch to fewer panels did not preserve visible photos',
   result.photosAfterRestoredTemplate === 2 ? null : 'template switch back to more panels did not restore cached photos',
   result.stickerTabCount === 0 ? null : 'sticker drawer tab is still visible',
@@ -277,6 +287,7 @@ const failures = [
   result.drawerHiddenAfterCreate ? null : 'drawer stayed visible behind the fullscreen creator',
   result.creatorCanvasFormat === '9:16' ? null : 'custom layout creator did not inherit the selected aspect ratio id',
   Math.abs(result.creatorCanvasAspect - 16 / 9) < 0.08 ? null : 'custom layout creator canvas did not render as 9:16',
+  result.uniformControlBorders ? null : 'standard editor controls do not use a uniform border width',
   result.creatorThickness === 16 ? null : 'custom layout thickness control did not update state',
   result.dividerVisualThickness >= 15 ? null : 'custom layout thickness control did not update divider styling',
   result.creatorTextHasRay === false ? null : 'custom layout maker still exposes ray copy',
@@ -333,6 +344,7 @@ async function photoTransform(page, panelId) {
     x: Number(await image.getAttribute('data-shot-x')),
     y: Number(await image.getAttribute('data-shot-y')),
     scale: Number(await image.getAttribute('data-shot-scale')),
+    rotation: Number(await image.getAttribute('data-shot-rotation')),
   }
 }
 
@@ -505,12 +517,12 @@ function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, value))
 }
 
-async function pinchPanelPhoto(page, nx, ny) {
+async function rotatePanelPhoto(page, nx, ny) {
   const box = await page.locator('.live-strip').boundingBox()
   const client = await page.context().newCDPSession(page)
   const center = { x: box.x + box.width * nx, y: box.y + box.height * ny }
-  const left = { x: center.x - 18, y: center.y }
-  const right = { x: center.x + 18, y: center.y }
+  const left = { x: center.x - 36, y: center.y }
+  const right = { x: center.x + 36, y: center.y }
   await client.send('Input.dispatchTouchEvent', {
     type: 'touchStart',
     touchPoints: [
@@ -521,8 +533,8 @@ async function pinchPanelPhoto(page, nx, ny) {
   await client.send('Input.dispatchTouchEvent', {
     type: 'touchMove',
     touchPoints: [
-      { x: left.x - 34, y: center.y, id: 1 },
-      { x: right.x + 34, y: center.y, id: 2 },
+      { x: center.x, y: center.y - 36, id: 1 },
+      { x: center.x, y: center.y + 36, id: 2 },
     ],
   })
   await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
