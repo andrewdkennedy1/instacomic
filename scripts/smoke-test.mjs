@@ -94,7 +94,7 @@ const exportedSize = pngSize(downloadPath)
 const manifest = await (await page.request.get(new URL('/manifest.webmanifest', baseUrl).toString())).json()
 const bodyOverflow = await page.evaluate(() => getComputedStyle(document.body).overflow)
 await openDrawer(page)
-await page.getByRole('button', { name: 'Create', exact: true }).tap()
+await page.getByRole('button', { name: /New grid/ }).tap()
 await page.locator('.creator-fullscreen').waitFor()
 await waitForDrawerHidden(page)
 const creatorFullscreenVisible = await page.locator('.creator-fullscreen').count()
@@ -102,9 +102,13 @@ const drawerHiddenAfterCreate = await page.locator('.motion-drawer').boundingBox
 const creatorCanvasFormat = await page.locator('.creator-canvas').getAttribute('data-page-format')
 const creatorCanvasAspect = await page.locator('.creator-canvas').boundingBox().then((box) => (box ? box.height / box.width : 0))
 const uniformControlBorders = await page.evaluate(() => {
-  const standardSurfaces = document.querySelectorAll('.drawer-tabs, .layout-card, .layout-mini, .creator-topbar button, .creator-actions button, .field input')
+  const standardSurfaces = document.querySelectorAll('.drawer-tabs, .layout-card, .layout-preview, .creator-topbar button, .creator-actions button, .field input')
   return standardSurfaces.length > 0 && Array.from(standardSurfaces).every((element) => getComputedStyle(element).borderTopWidth === '2px')
 })
+const creatorHasHorizontalDivider = await page.getByRole('button', { name: 'Horizontal divider' }).count()
+const creatorHasGestureHint = (await page.locator('.creator-gesture-hint').innerText()).includes('two fingers')
+mkdirSync('test-results', { recursive: true })
+await page.screenshot({ path: 'test-results/custom-grid-creator.png', fullPage: true })
 await page.getByPlaceholder('My manga layout').fill('Final Layout')
 await page.getByPlaceholder('My manga layout').blur()
 await page.getByLabel('Divider thickness').evaluate((input) => {
@@ -155,7 +159,7 @@ await closeDrawer(page)
 await page.screenshot({ path: 'test-results/instacomic-mobile.png', fullPage: true })
 await page.screenshot({ path: 'docs/instacomic-mobile.png', fullPage: true })
 await openDrawer(page)
-await page.getByRole('button', { name: 'Save', exact: true }).tap()
+await page.getByRole('button', { name: 'Style', exact: true }).tap()
 await page
   .locator('.motion-drawer-style label')
   .filter({ hasText: 'Paper' })
@@ -186,6 +190,29 @@ const restoredLayoutAspect = await page.locator('.live-strip').boundingBox().the
 await page.getByRole('button', { name: 'Start' }).tap()
 await openDrawer(page)
 await page.getByRole('button', { name: 'Layout', exact: true }).tap()
+const savedLayoutCard = page.locator(`[data-layout-option-id="${storedLayoutInfo.activeLayoutId}"]`)
+await savedLayoutCard.waitFor()
+const savedLayoutPreview = savedLayoutCard.locator('[data-layout-preview]')
+const savedPreviewPanelCount = await savedLayoutPreview.locator('[data-preview-panel]').count()
+const savedPreviewDividerCount = await savedLayoutPreview.locator('[data-preview-divider]').count()
+const savedPreviewBox = await savedLayoutPreview.boundingBox()
+const savedPreviewActive = await savedLayoutCard.getAttribute('aria-pressed')
+const savedPreviewVisibleWithoutScroll = await page.locator('.drawer-content').evaluate((drawer, activeLayoutId) => {
+  const card = drawer.querySelector(`[data-layout-option-id="${activeLayoutId}"]`)
+  const drawerBox = drawer.getBoundingClientRect()
+  const cardBox = card?.getBoundingClientRect()
+  return !!cardBox && drawer.scrollTop === 0 && cardBox.top >= drawerBox.top && cardBox.bottom <= drawerBox.bottom
+}, storedLayoutInfo.activeLayoutId)
+const layoutSectionHeadings = await page.locator('.layout-section-heading strong').allTextContents()
+const builtInPreviewCount = await page.locator('[data-custom-layout="false"] [data-layout-preview]').count()
+const savedPreviewImage = decodePngBuffer(await savedLayoutPreview.screenshot())
+const savedPreviewDividerRun = paperRunFromImage(
+  savedPreviewImage,
+  Math.round(savedPreviewImage.width * 0.5),
+  Math.round(savedPreviewImage.height * 0.24),
+  '#e9dfcd',
+)
+await page.screenshot({ path: 'test-results/custom-grid-gallery.png', fullPage: true })
 const deleteLayoutButton = page.getByRole('button', { name: 'Delete Final Layout layout' })
 await deleteLayoutButton.scrollIntoViewIfNeeded()
 const deleteButtonVisible = await deleteLayoutButton.isVisible()
@@ -237,6 +264,8 @@ const result = {
   creatorCanvasFormat,
   creatorCanvasAspect,
   uniformControlBorders,
+  creatorHasHorizontalDivider,
+  creatorHasGestureHint,
   creatorThickness,
   dividerVisualThickness,
   creatorTextHasRay,
@@ -253,6 +282,14 @@ const result = {
   customBezelPixel,
   restoredLayoutName,
   restoredLayoutAspect,
+  savedPreviewPanelCount,
+  savedPreviewDividerCount,
+  savedPreviewBox,
+  savedPreviewActive,
+  savedPreviewVisibleWithoutScroll,
+  savedPreviewDividerRun,
+  layoutSectionHeadings,
+  builtInPreviewCount,
   deleteButtonVisible,
   deletedLayoutInfo,
   layoutAfterDeleteName,
@@ -290,6 +327,8 @@ const failures = [
   result.creatorCanvasFormat === '9:16' ? null : 'custom layout creator did not inherit the selected aspect ratio id',
   Math.abs(result.creatorCanvasAspect - 16 / 9) < 0.08 ? null : 'custom layout creator canvas did not render as 9:16',
   result.uniformControlBorders ? null : 'standard editor controls do not use a uniform border width',
+  result.creatorHasHorizontalDivider === 1 ? null : 'custom layout maker does not expose horizontal dividers',
+  result.creatorHasGestureHint ? null : 'custom layout maker does not explain its two-finger line gesture',
   result.creatorThickness === 16 ? null : 'custom layout thickness control did not update state',
   result.dividerVisualThickness >= 15 ? null : 'custom layout thickness control did not update divider styling',
   result.creatorTextHasRay === false ? null : 'custom layout maker still exposes ray copy',
@@ -310,6 +349,14 @@ const failures = [
   isDarkPixel(result.customBezelPixel) ? null : 'custom layout export did not render the outer bezel',
   result.restoredLayoutName === 'Final Layout' ? null : 'last custom layout was not restored on reload',
   Math.abs(result.restoredLayoutAspect - 16 / 9) < 0.08 ? null : 'restored custom layout did not use the persisted selected aspect ratio',
+  result.savedPreviewPanelCount === result.storedLayoutInfo.panels ? null : 'saved grid preview did not render its stored panels',
+  result.savedPreviewDividerCount === result.storedLayoutInfo.dividers ? null : 'saved grid preview did not render its stored dividers',
+  result.savedPreviewBox?.width >= 80 && result.savedPreviewBox?.height >= 80 ? null : 'saved grid preview is too small to scan',
+  result.savedPreviewActive === 'true' ? null : 'saved grid preview does not expose its selected state',
+  result.savedPreviewVisibleWithoutScroll ? null : 'saved grid preview is below the initial drawer fold',
+  result.savedPreviewDividerRun.width >= 2 ? null : 'saved grid preview divider is not visibly rendered',
+  result.layoutSectionHeadings.join('|') === 'Your grids|Templates' ? null : 'grid library sections are not ordered for saved-grid discovery',
+  result.builtInPreviewCount === 8 ? null : 'template previews are missing from the grid library',
   result.drawerHiddenAfterLayoutSave ? null : 'drawer did not close after saving a custom layout',
   result.storedLayoutInfo.panels === 3 ? null : 'custom snapped layout did not create three panels',
   result.storedLayoutInfo.snapJunction ? null : 'custom layout did not snap divider endpoint to another divider',

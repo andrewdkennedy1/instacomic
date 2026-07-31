@@ -5,7 +5,7 @@ import { createRoot } from 'react-dom/client'
 import './style.css'
 
 type PanelFit = 'cover' | 'contain'
-type DrawerTab = 'layout' | 'create' | 'style'
+type DrawerTab = 'layout' | 'style'
 type CustomLinePreset = 'diagonal' | 'vertical' | 'horizontal'
 type PageFormatId = '4:5' | '3:4' | '4:3' | '9:16'
 
@@ -1372,13 +1372,7 @@ function App() {
         dragControls={dragControls}
         onOpen={() => setDrawerOpen(true)}
         onClose={() => setDrawerOpen(false)}
-        onTab={(tab) => {
-          if (tab === 'create') {
-            openCreator()
-          } else {
-            setDrawerTab(tab)
-          }
-        }}
+        onTab={setDrawerTab}
       >
         {drawerTab === 'layout' && (
           <LayoutPanel
@@ -1496,11 +1490,8 @@ function Drawer({
         <button className={tab === 'layout' ? 'active' : ''} type="button" onClick={() => onTab('layout')}>
           Layout
         </button>
-        <button className={tab === 'create' ? 'active' : ''} type="button" onClick={() => onTab('create')}>
-          Create
-        </button>
         <button className={tab === 'style' ? 'active' : ''} type="button" onClick={() => onTab('style')}>
-          Save
+          Style
         </button>
       </div>
       <AnimatePresence mode="wait">
@@ -1532,45 +1523,145 @@ function LayoutPanel({
   onCreate: () => void
   onDeleteCustomLayout: (layoutId: string) => void
 }) {
+  const builtInLayouts = layouts.filter((option) => !option.custom)
+  const savedLayouts = layouts.filter((option) => option.custom)
+
   return (
-    <div className="drawer-grid">
-      {layouts.map((option) => (
-        <div key={option.id} className="layout-card-shell">
-          <button
-            className={`layout-card ${layout.id === option.id ? 'active' : ''} ${option.custom ? 'has-delete' : ''}`}
-            type="button"
-            onClick={() => onLayout(option)}
-          >
-            <span className="layout-mini">
-              {option.panels.map((panel) => (
-                <i key={panel.id} style={panelStyle(panel)} />
-              ))}
-            </span>
-            <strong>{option.name}</strong>
-            {option.custom && <em>saved</em>}
-          </button>
-          {option.custom && (
-            <button
-              className="layout-delete"
-              type="button"
-              aria-label={`Delete ${option.name} layout`}
-              onClick={() => onDeleteCustomLayout(option.id)}
-            >
-              ⌫
-            </button>
-          )}
+    <div className="layout-library">
+      <section className="layout-section" aria-labelledby="saved-grid-heading">
+        <div className="layout-section-heading">
+          <strong id="saved-grid-heading">Your grids</strong>
+          <span>{savedLayouts.length > 0 ? `${savedLayouts.length} saved` : 'Saved locally'}</span>
         </div>
-      ))}
-      <button className="layout-card create-card" type="button" onClick={onCreate}>
-        <span className="layout-mini creator-mini">
-          <i />
-          <i />
-          <i />
-        </span>
-        <strong>Create your own</strong>
-        <em>saved on this phone</em>
-      </button>
+        <div className="layout-gallery saved-layout-gallery">
+          <button className="layout-card create-card" type="button" onClick={onCreate}>
+            <span className="layout-preview create-preview" aria-hidden="true">
+              <span>+</span>
+            </span>
+            <span className="layout-card-copy">
+              <strong>New grid</strong>
+              <em>Create and save</em>
+            </span>
+          </button>
+          {savedLayouts.map((option) => (
+            <LayoutCard
+              key={option.id}
+              option={option}
+              active={layout.id === option.id}
+              onSelect={onLayout}
+              onDelete={onDeleteCustomLayout}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section className="layout-section" aria-labelledby="built-in-grid-heading">
+        <div className="layout-section-heading">
+          <strong id="built-in-grid-heading">Templates</strong>
+          <span>{builtInLayouts.length} included</span>
+        </div>
+        <div className="layout-gallery">
+          {builtInLayouts.map((option) => (
+            <LayoutCard key={option.id} option={option} active={layout.id === option.id} onSelect={onLayout} />
+          ))}
+        </div>
+      </section>
     </div>
+  )
+}
+
+function LayoutCard({
+  option,
+  active,
+  onSelect,
+  onDelete,
+}: {
+  option: Layout
+  active: boolean
+  onSelect: (layout: Layout) => void
+  onDelete?: (layoutId: string) => void
+}) {
+  const panelLabel = `${option.panels.length} panel${option.panels.length === 1 ? '' : 's'}`
+
+  return (
+    <div className={`layout-card-shell ${option.custom ? 'is-saved' : ''}`}>
+      <button
+        className={`layout-card ${active ? 'active' : ''} ${option.custom ? 'has-delete' : ''}`}
+        type="button"
+        aria-label={`Use ${option.name} layout, ${panelLabel}`}
+        aria-pressed={active}
+        data-layout-option-id={option.id}
+        data-custom-layout={option.custom ? 'true' : 'false'}
+        data-panel-count={option.panels.length}
+        onClick={() => onSelect(option)}
+      >
+        <LayoutPreview layout={option} />
+        <span className="layout-card-copy">
+          <strong title={option.name}>{option.name}</strong>
+          <em>{panelLabel}</em>
+        </span>
+      </button>
+      {option.custom && onDelete && (
+        <button
+          className="layout-delete"
+          type="button"
+          aria-label={`Delete ${option.name} layout`}
+          onClick={() => onDelete(option.id)}
+        >
+          <span aria-hidden="true">×</span>
+        </button>
+      )}
+    </div>
+  )
+}
+
+function LayoutPreview({ layout }: { layout: Layout }) {
+  const dividerWidth = layout.custom ? clamp((layout.dividerThickness ?? 9) / 4, 2, 5) : 2.25
+  const panelStrokeWidth = layout.custom && layout.dividers?.length ? 0 : 2.25
+
+  return (
+    <span className="layout-preview" aria-hidden="true" data-layout-preview={layout.id}>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" focusable="false">
+        <rect className="layout-preview-paper" x="0" y="0" width="100" height="100" />
+        {layout.panels.map((panel) =>
+          panel.points ? (
+            <polygon
+              key={panel.id}
+              className="layout-preview-panel"
+              data-preview-panel={panel.id}
+              points={panel.points.map(([x, y]) => `${x},${y}`).join(' ')}
+              strokeWidth={panelStrokeWidth}
+              vectorEffect="non-scaling-stroke"
+            />
+          ) : (
+            <rect
+              key={panel.id}
+              className="layout-preview-panel"
+              data-preview-panel={panel.id}
+              x={panel.x * 100}
+              y={panel.y * 100}
+              width={panel.w * 100}
+              height={panel.h * 100}
+              strokeWidth={panelStrokeWidth}
+              vectorEffect="non-scaling-stroke"
+            />
+          ),
+        )}
+        {layout.dividers?.map((divider, index) => (
+          <line
+            key={`${divider.id}-${index}`}
+            className="layout-preview-divider"
+            data-preview-divider={divider.id}
+            x1={divider.x1}
+            y1={divider.y1}
+            x2={divider.x2}
+            y2={divider.y2}
+            strokeWidth={dividerWidth}
+            vectorEffect="non-scaling-stroke"
+          />
+        ))}
+      </svg>
+    </span>
   )
 }
 
@@ -1614,7 +1705,7 @@ function CreatorPanel({
   const canvasAspect = pageFormatCanvasAspect(pageFormat)
   const creatorStyle = {
     '--creator-divider-thickness': `${dividerThickness}px`,
-    '--creator-handle-size': `${Math.max(40, dividerThickness * 4)}px`,
+    '--creator-handle-size': '44px',
     '--creator-page-width': pageFormat.width,
     '--creator-page-height': pageFormat.height,
   } as React.CSSProperties
@@ -1922,6 +2013,7 @@ function CreatorPanel({
           ))}
         </div>
         <div className="creator-side">
+          <p className="creator-gesture-hint">Drag endpoints to shape a divider. Use two fingers to rotate and resize the nearest line.</p>
           <label className="field">
             <span>Name</span>
             <input
@@ -1946,10 +2038,13 @@ function CreatorPanel({
           </label>
           <div className="creator-actions">
             <button type="button" onClick={() => onAddLine('diagonal')}>
-              Add diagonal divider
+              Diagonal divider
             </button>
             <button type="button" onClick={() => onAddLine('vertical')}>
-              Add straight divider
+              Vertical divider
+            </button>
+            <button type="button" onClick={() => onAddLine('horizontal')}>
+              Horizontal divider
             </button>
             <button type="button" onClick={onReset}>
               Reset

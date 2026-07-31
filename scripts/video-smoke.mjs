@@ -36,7 +36,7 @@ await page.setInputFiles('.photo-upload', {
 await page.waitForFunction(() => document.querySelector('[data-panel-id="2"] img'))
 
 await openDrawer(page)
-await page.getByRole('button', { name: 'Save', exact: true }).tap()
+await page.getByRole('button', { name: 'Style', exact: true }).tap()
 await page.getByText('Story video').waitFor({ state: 'visible' })
 const videoConfigVisible = await page.getByText('Story video').isVisible()
 await setRangeValue(page, 'Video duration', '3')

@@ -105,7 +105,7 @@ async function tapStrip(page, nx, ny) {
 
 async function setFitMode(page, value) {
   await openDrawer(page)
-  await page.getByRole('button', { name: 'Save', exact: true }).tap()
+  await page.getByRole('button', { name: 'Style', exact: true }).tap()
   await page.locator('.motion-drawer-style select').selectOption(value)
   await closeDrawer(page)
 }
@@ -113,7 +113,7 @@ async function setFitMode(page, value) {
 async function setLayout(page, name) {
   await openDrawer(page)
   await page.getByRole('button', { name: 'Layout', exact: true }).tap()
-  await page.getByRole('button', { name: new RegExp(`^${name}$`) }).tap()
+  await page.getByRole('button', { name: new RegExp(`^Use ${name} layout`) }).tap()
   await closeDrawer(page)
 }
 
