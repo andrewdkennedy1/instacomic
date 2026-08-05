@@ -103,14 +103,27 @@ const creatorCanvasFormat = await page.locator('.creator-canvas').getAttribute('
 const creatorCanvasAspect = await page.locator('.creator-canvas').boundingBox().then((box) => (box ? box.height / box.width : 0))
 const uniformControlBorders = await page.evaluate(() => {
   const standardSurfaces = document.querySelectorAll('.drawer-tabs, .layout-card, .layout-preview, .creator-topbar button, .creator-actions button, .field input')
-  return standardSurfaces.length > 0 && Array.from(standardSurfaces).every((element) => getComputedStyle(element).borderTopWidth === '2px')
+  const expectedBorder = getComputedStyle(document.documentElement).getPropertyValue('--ui-border').trim()
+  return standardSurfaces.length > 0 && Array.from(standardSurfaces).every((element) => getComputedStyle(element).borderTopWidth === expectedBorder)
 })
 const creatorHasHorizontalDivider = await page.getByRole('button', { name: 'Horizontal divider' }).count()
 const creatorHasGestureHint = (await page.locator('.creator-gesture-hint').innerText()).includes('two fingers')
 mkdirSync('test-results', { recursive: true })
 await page.screenshot({ path: 'test-results/custom-grid-creator.png', fullPage: true })
-await page.getByPlaceholder('My manga layout').fill('Final Layout')
-await page.getByPlaceholder('My manga layout').blur()
+await page.getByLabel('Grid name').fill('Final Layout')
+await page.getByLabel('Grid name').blur()
+await page.getByLabel('Border color').evaluate((input) => {
+  const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  valueSetter?.call(input, '#203040')
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  input.dispatchEvent(new Event('change', { bubbles: true }))
+})
+await page.getByLabel('Border thickness').evaluate((input) => {
+  const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  valueSetter?.call(input, '5')
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  input.dispatchEvent(new Event('change', { bubbles: true }))
+})
 await page.getByLabel('Divider thickness').evaluate((input) => {
   const range = input
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
@@ -118,6 +131,8 @@ await page.getByLabel('Divider thickness').evaluate((input) => {
   range.dispatchEvent(new Event('input', { bubbles: true }))
 })
 const creatorThickness = Number(await page.locator('.creator-stack').getAttribute('data-divider-thickness'))
+const creatorBorderColor = await page.locator('.creator-stack').getAttribute('data-border-color')
+const creatorBorderThickness = Number(await page.locator('.creator-stack').getAttribute('data-border-thickness'))
 const dividerVisualThickness = await page.locator('.creator-free-line').first().evaluate((line) => {
   return Number.parseFloat(getComputedStyle(line, '::before').height)
 })
@@ -128,8 +143,30 @@ await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
 const creatorClosedAfterLayoutSave = await page.locator('.creator-fullscreen').count() === 0
 await waitForDrawerHidden(page)
 const drawerHiddenAfterLayoutSave = await page.locator('.motion-drawer').boundingBox().then((box) => box && box.y > 830)
+await openDrawer(page)
+const editGridButtonVisible = await page.getByRole('button', { name: 'Edit Final Layout grid' }).count()
+await page.getByRole('button', { name: 'Edit Final Layout grid' }).tap()
+await page.locator('.creator-fullscreen').waitFor()
+const editBorderColor = await page.getByLabel('Border color').inputValue()
+const editBorderThickness = Number(await page.getByLabel('Border thickness').inputValue())
+await page.getByLabel('Border thickness').evaluate((input) => {
+  const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  valueSetter?.call(input, '6')
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  input.dispatchEvent(new Event('change', { bubbles: true }))
+})
+await page.getByRole('button', { name: 'Update layout' }).tap()
+await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
+await waitForDrawerHidden(page)
 const liveGutterAfterLayoutSave = await page.locator('.live-strip').evaluate((strip) => {
   return Number.parseFloat(getComputedStyle(strip).getPropertyValue('--gutter'))
+})
+const liveBorderAfterLayoutSave = await page.locator('.live-strip').evaluate((strip) => {
+  const style = getComputedStyle(strip)
+  return {
+    color: style.getPropertyValue('--ink').trim(),
+    thickness: Number.parseFloat(style.getPropertyValue('--border')),
+  }
 })
 const liveAspectAfterLayoutSave = await page.locator('.live-strip').boundingBox().then((box) => (box ? box.height / box.width : 0))
 const storedLayoutInfo = await page.evaluate(() => {
@@ -141,6 +178,8 @@ const storedLayoutInfo = await page.evaluate(() => {
     name: latest?.name ?? '',
     activeLayoutId,
     dividerThickness: latest?.dividerThickness ?? null,
+    borderColor: latest?.borderColor ?? null,
+    borderThickness: latest?.borderThickness ?? null,
     dividers: latest?.dividers?.length ?? 0,
     hasPageFormatId: Object.prototype.hasOwnProperty.call(latest ?? {}, 'pageFormatId'),
     panels: latest?.panels?.length ?? 0,
@@ -217,7 +256,7 @@ const savedPreviewDividerRun = paperRunFromImage(
   savedPreviewImage,
   Math.round(savedPreviewImage.width * 0.5),
   Math.round(savedPreviewImage.height * 0.24),
-  '#e9dfcd',
+  '#e5e5ea',
 )
 await page.screenshot({ path: 'test-results/custom-grid-gallery.png', fullPage: true })
 const deleteLayoutButton = page.getByRole('button', { name: 'Delete Final Layout layout' })
@@ -274,11 +313,17 @@ const result = {
   creatorHasHorizontalDivider,
   creatorHasGestureHint,
   creatorThickness,
+  creatorBorderColor,
+  creatorBorderThickness,
   dividerVisualThickness,
   creatorTextHasRay,
   creatorClosedAfterLayoutSave,
   drawerHiddenAfterLayoutSave,
+  editGridButtonVisible,
+  editBorderColor,
+  editBorderThickness,
   liveGutterAfterLayoutSave,
+  liveBorderAfterLayoutSave,
   liveAspectAfterLayoutSave,
   storedLayoutInfo,
   customSharedFile: customDownload.suggestedFilename(),
@@ -340,6 +385,8 @@ const failures = [
   result.creatorHasHorizontalDivider === 1 ? null : 'custom layout maker does not expose horizontal dividers',
   result.creatorHasGestureHint ? null : 'custom layout maker does not explain its two-finger line gesture',
   result.creatorThickness === 16 ? null : 'custom layout thickness control did not update state',
+  result.creatorBorderColor === '#203040' ? null : 'custom grid border color control did not update state',
+  result.creatorBorderThickness === 5 ? null : 'custom grid border thickness control did not update state',
   result.dividerVisualThickness >= 15 ? null : 'custom layout thickness control did not update divider styling',
   result.creatorTextHasRay === false ? null : 'custom layout maker still exposes ray copy',
   result.creatorClosedAfterLayoutSave ? null : 'fullscreen creator did not close after saving a layout',
@@ -347,9 +394,17 @@ const failures = [
   result.storedLayoutInfo.name === 'Final Layout' ? null : 'custom layout name was not saved',
   result.storedLayoutInfo.activeLayoutId?.startsWith('custom-') ? null : 'active layout id was not persisted',
   result.storedLayoutInfo.dividerThickness === 16 ? null : 'custom layout did not persist divider thickness',
+  result.storedLayoutInfo.borderColor === '#203040' ? null : 'custom grid did not persist its border color',
+  result.storedLayoutInfo.borderThickness === 6 ? null : 'edited custom grid did not persist its border thickness',
   result.storedLayoutInfo.dividers > 0 ? null : 'custom layout did not persist divider lines',
   result.storedLayoutInfo.hasPageFormatId === false ? null : 'custom layout still persists its own aspect ratio',
   result.liveGutterAfterLayoutSave === 16 ? null : 'saved custom layout did not apply divider thickness to the live layout',
+  result.editGridButtonVisible === 1 ? null : 'saved custom grid does not expose an edit action',
+  result.editBorderColor === '#203040' ? null : 'grid editor did not restore the saved border color',
+  result.editBorderThickness === 5 ? null : 'grid editor did not restore the saved border thickness',
+  result.liveBorderAfterLayoutSave.color === '#203040' && result.liveBorderAfterLayoutSave.thickness === 6
+    ? null
+    : 'edited custom grid border settings were not applied to the live layout',
   Math.abs(result.liveAspectAfterLayoutSave - 16 / 9) < 0.08 ? null : 'saved custom layout did not keep the live canvas at 9:16',
   result.customSharedFile === 'instacomic.png' ? null : 'custom layout share fallback did not produce instacomic.png',
   result.customExportedSize.width === 1440 && result.customExportedSize.height === 2560 ? null : 'custom 9:16 export dimensions are incorrect',
@@ -604,6 +659,11 @@ async function pinchRotatePanelPhoto(page, nx, ny) {
 }
 
 async function openDrawer(page) {
+  const doneEditing = page.getByRole('button', { name: /Done editing panel/ })
+  if ((await doneEditing.count()) > 0) {
+    await doneEditing.evaluate((button) => button.click()).catch(() => undefined)
+    await doneEditing.waitFor({ state: 'detached' }).catch(() => undefined)
+  }
   await page.locator('.capture-bar button[aria-label="Controls"]').tap()
   try {
     await page.locator('.motion-drawer.is-open').waitFor({ timeout: 1200 })

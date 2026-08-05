@@ -44,7 +44,9 @@ await page.mouse.up()
 
 const tray = page.getByRole('toolbar', { name: 'Panel 1 photo controls' })
 await tray.waitFor()
-const trayButtons = tray.getByRole('button')
+await page.waitForFunction(() => Number.parseFloat(getComputedStyle(document.querySelector('.capture-bar')).opacity) < 0.05)
+const afterTrayActivationBox = await page.locator('.live-strip').boundingBox()
+const trayButtons = tray.locator('.photo-action-buttons').getByRole('button')
 const trayButtonCount = await trayButtons.count()
 const trayButtonsMeetTarget = await trayButtons.evaluateAll((buttons) =>
   buttons.every((button) => {
@@ -52,16 +54,31 @@ const trayButtonsMeetTarget = await trayButtons.evaluateAll((buttons) =>
     return box.width >= 44 && box.height >= 44
   }),
 )
-const trayDoesNotOverlapCapture = await page.evaluate(() => {
+const contextualTrayLayout = await page.evaluate(() => {
   const trayBox = document.querySelector('.photo-action-tray')?.getBoundingClientRect()
   const captureBox = document.querySelector('.capture-bar')?.getBoundingClientRect()
-  return !!trayBox && !!captureBox && trayBox.bottom <= captureBox.top + 1
+  const stripBox = document.querySelector('.live-strip')?.getBoundingClientRect()
+  const captureStyle = document.querySelector('.capture-bar') ? getComputedStyle(document.querySelector('.capture-bar')) : null
+  return {
+    clearsCanvas: !!trayBox && !!stripBox && stripBox.bottom <= trayBox.top + 1,
+    captureControlsYielded:
+      !!trayBox &&
+      !!captureBox &&
+      !!captureStyle &&
+      Number.parseFloat(captureStyle.opacity) < 0.05 &&
+      captureStyle.pointerEvents === 'none',
+  }
 })
 const uploadHistoryCount = await historyCount(page, 'undo')
 const uploadCreatedOneHistoryStep = uploadHistoryCount === layoutHistoryCount + 1
 const stageStableDuringActivation =
   Math.abs(beforeTrayActivationBox.y - duringTrayActivationBox.y) < 1 &&
   Math.abs(beforeTrayActivationBox.height - duringTrayActivationBox.height) < 1
+const canvasStableWithTray =
+  Math.abs(beforeTrayActivationBox.x - afterTrayActivationBox.x) < 1 &&
+  Math.abs(beforeTrayActivationBox.y - afterTrayActivationBox.y) < 1 &&
+  Math.abs(beforeTrayActivationBox.width - afterTrayActivationBox.width) < 1 &&
+  Math.abs(beforeTrayActivationBox.height - afterTrayActivationBox.height) < 1
 await page.getByRole('button', { name: 'Undo' }).tap()
 await page.waitForFunction(() => !document.querySelector('[data-panel-id="1"] img'))
 const uploadUndone = (await page.locator('[data-panel-id="1"] img').count()) === 0
@@ -230,8 +247,9 @@ const result = {
   baselineRedoDisabled,
   trayButtonCount,
   trayButtonsMeetTarget,
-  trayDoesNotOverlapCapture,
+  contextualTrayLayout,
   stageStableDuringActivation,
+  canvasStableWithTray,
   uploadHistoryCount,
   uploadCreatedOneHistoryStep,
   uploadUndone,
@@ -300,8 +318,10 @@ const failures = [
   result.baselineRedoDisabled ? null : 'Redo is enabled before any edit',
   result.trayButtonCount === 4 ? null : 'contextual photo tray does not expose four focused actions',
   result.trayButtonsMeetTarget ? null : 'contextual photo controls are smaller than 44px',
-  result.trayDoesNotOverlapCapture ? null : 'contextual photo tray overlaps the capture controls',
+  result.contextualTrayLayout.clearsCanvas ? null : 'contextual photo tray overlaps the editable canvas',
+  result.contextualTrayLayout.captureControlsYielded ? null : 'capture controls did not yield to contextual photo editing',
   result.stageStableDuringActivation ? null : 'selecting a photo moves the canvas while the finger is down',
+  result.canvasStableWithTray ? null : 'opening contextual photo controls changes the canvas geometry or aspect ratio',
   result.uploadCreatedOneHistoryStep ? null : 'upload did not create exactly one history step',
   result.uploadUndone ? null : 'Undo did not remove the uploaded photo',
   result.moveToPinchMoved ? null : 'one-finger move before pinch did not update the photo',
@@ -442,6 +462,11 @@ async function selectPanel(page, panelId) {
 }
 
 async function openDrawer(page) {
+  const doneEditing = page.getByRole('button', { name: /Done editing panel/ })
+  if ((await doneEditing.count()) > 0) {
+    await doneEditing.evaluate((button) => button.click()).catch(() => undefined)
+    await doneEditing.waitFor({ state: 'detached' }).catch(() => undefined)
+  }
   await page.locator('.capture-bar button[aria-label="Controls"]').tap()
   try {
     await page.locator('.motion-drawer.is-open').waitFor({ timeout: 1200 })

@@ -160,6 +160,11 @@ async function setRangeValue(page, label, value) {
 }
 
 async function openDrawer(page) {
+  const doneEditing = page.getByRole('button', { name: /Done editing panel/ })
+  if ((await doneEditing.count()) > 0) {
+    await doneEditing.evaluate((button) => button.click()).catch(() => undefined)
+    await doneEditing.waitFor({ state: 'detached' }).catch(() => undefined)
+  }
   await page.locator('.capture-bar button[aria-label="Controls"]').tap()
   try {
     await page.locator('.motion-drawer.is-open').waitFor({ timeout: 1200 })

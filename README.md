@@ -27,11 +27,11 @@ Instacomic turns a phone camera into a live comic strip editor. Pick a panel, sh
 - A Start button enters the editor and requests fullscreen when the browser allows it.
 - Capture advances forward through the layout, then freezes the final photo instead of covering it with the live preview.
 - Upload an existing image into the active panel when the camera is not the right source.
-- Filled panels support direct photo editing with contextual Replace, Fit, Reset, and Remove controls; drag to pan, then pinch and twist together to zoom and rotate with snap feedback.
+- Filled panels open a contextual Replace, Fit, Reset, and Remove toolbar without resizing the canvas; tap Done to return to capture controls, or drag, pinch, and twist to position the photo with snap feedback.
 - Action-level Undo/Redo and automatic on-device draft recovery protect edits between sessions.
-- Custom layouts open in a full-screen maker with divider handles, endpoint snapping, and thickness controls.
+- Custom grids open in a responsive full-screen editor with divider handles, endpoint snapping, persistent border color and thickness controls, and edit-after-save support.
 - The grid library renders faithful panel-and-divider previews for both templates and locally saved custom grids.
-- Style controls cover paper, ink, gutters, borders, corners, captions, and image fit.
+- Style controls cover paper, border color and thickness, gaps, corners, captions, and image fit, with matching live, PNG, and story-video rendering.
 - Story video export renders a sliding panel reveal with duration and speed controls, downloading MP4 output.
 - Share renders automatically and falls back to downloading the PNG when native share is unavailable.
 - Installable PWA shell with manifest icons and offline app caching.

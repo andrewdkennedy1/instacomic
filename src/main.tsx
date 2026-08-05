@@ -32,6 +32,8 @@ type Layout = {
   panels: Panel[]
   custom?: boolean
   dividerThickness?: number
+  borderColor?: string
+  borderThickness?: number
   dividers?: CustomLine[]
 }
 
@@ -256,6 +258,8 @@ function nextOpenPanelId(layout: Layout, shots: Record<string, Shot>) {
 }
 
 const CREATOR_SNAP_DISTANCE = 4.5
+const DEFAULT_CUSTOM_GRID_BORDER_COLOR = '#111111'
+const DEFAULT_CUSTOM_GRID_BORDER_THICKNESS = 2
 
 const pageFormats: PageFormat[] = [
   { id: '4:5', label: 'Post', detail: 'Instagram portrait', width: 4, height: 5 },
@@ -280,6 +284,33 @@ function layoutDividerThickness(layout: Layout) {
   }
 
   return clamp(Math.round(layout.dividerThickness), 0, 24)
+}
+
+function layoutBorderThickness(layout: Layout) {
+  if (typeof layout.borderThickness === 'number' && Number.isFinite(layout.borderThickness)) {
+    return clamp(Math.round(layout.borderThickness), 0, 10)
+  }
+
+  return layout.custom ? DEFAULT_CUSTOM_GRID_BORDER_THICKNESS : null
+}
+
+function layoutBorderColor(layout: Layout) {
+  if (typeof layout.borderColor === 'string' && /^#[0-9a-f]{6}$/i.test(layout.borderColor)) {
+    return layout.borderColor
+  }
+
+  return layout.custom ? DEFAULT_CUSTOM_GRID_BORDER_COLOR : null
+}
+
+function layoutStyleSettings(layout: Layout): Partial<Settings> {
+  const gutters = layoutDividerThickness(layout)
+  const border = layoutBorderThickness(layout)
+  const borderColor = layoutBorderColor(layout)
+  return {
+    ...(gutters !== null ? { gutters } : {}),
+    ...(border !== null ? { border } : {}),
+    ...(borderColor !== null ? { borderColor } : {}),
+  }
 }
 
 const layouts: Layout[] = [
@@ -363,11 +394,11 @@ const layouts: Layout[] = [
 ]
 
 const defaultSettings: Settings = {
-  gutters: 4,
+  gutters: 6,
   radius: 0,
-  border: 0,
+  border: 2,
   background: '#ffffff',
-  borderColor: '#ffffff',
+  borderColor: '#1c1c1e',
   caption: '',
   captionColor: '#111111',
   fit: 'cover',
@@ -452,6 +483,8 @@ function isValidStoredProjectDraft(value: DraftRecord<StoredProjectDocument>): v
     document.layout.panels.every(validPanel) &&
     new Set(panelIds).size === panelIds.length &&
     (document.layout.dividerThickness === undefined || validNumber(document.layout.dividerThickness)) &&
+    (document.layout.borderThickness === undefined || validNumber(document.layout.borderThickness)) &&
+    (document.layout.borderColor === undefined || typeof document.layout.borderColor === 'string') &&
     (document.layout.dividers === undefined || (Array.isArray(document.layout.dividers) && document.layout.dividers.every(validLine))) &&
     Array.isArray(document.shotCache) &&
     document.shotCache.every(validShot) &&
@@ -578,6 +611,9 @@ function App() {
   const [draftLines, setDraftLines] = useState<CustomLine[]>(() => createDefaultDraftLines())
   const [draftName, setDraftName] = useState('')
   const [draftThickness, setDraftThickness] = useState(9)
+  const [draftBorderColor, setDraftBorderColor] = useState(DEFAULT_CUSTOM_GRID_BORDER_COLOR)
+  const [draftBorderThickness, setDraftBorderThickness] = useState(DEFAULT_CUSTOM_GRID_BORDER_THICKNESS)
+  const [editingLayoutId, setEditingLayoutId] = useState<string | null>(null)
   const [creatorOpen, setCreatorOpen] = useState(false)
   const [appContext, setAppContext] = useState<AppContext>(() => getAppContext())
   const [storageReady, setStorageReady] = useState(false)
@@ -977,9 +1013,8 @@ function App() {
       }
 
       setPageFormat(storedPageFormat)
-      const restoredDividerThickness = restoredLayout ? layoutDividerThickness(restoredLayout) : null
-      if (restoredDividerThickness !== null) {
-        setSettings((current) => ({ ...current, gutters: restoredDividerThickness }))
+      if (restoredLayout) {
+        setSettings((current) => ({ ...current, ...layoutStyleSettings(restoredLayout) }))
       }
     } catch {
       localStorage.removeItem(CUSTOM_LAYOUT_KEY)
@@ -1382,7 +1417,7 @@ function App() {
       setShots({})
       setSettings({
         ...defaultSettings,
-        gutters: layoutDividerThickness(layout) ?? defaultSettings.gutters,
+        ...layoutStyleSettings(layout),
       })
       setActivePanelId(layout.panels[0]?.id ?? null)
       setSavedDraft(null)
@@ -1588,7 +1623,7 @@ function App() {
   }
 
   function changeLayout(nextLayout: Layout, recordHistory = true) {
-    if (nextLayout.id === layout.id) {
+    if (nextLayout === layout) {
       return
     }
     if (recordHistory) {
@@ -1599,11 +1634,8 @@ function App() {
     shotCacheRef.current = nextCache
     const nextShots = shotsForLayout(nextLayout, nextCache)
     const restoredCount = Object.keys(nextShots).length
-    const nextDividerThickness = layoutDividerThickness(nextLayout)
     setLayout(nextLayout)
-    if (nextDividerThickness !== null) {
-      setSettings((current) => ({ ...current, gutters: nextDividerThickness }))
-    }
+    setSettings((current) => ({ ...current, ...layoutStyleSettings(nextLayout) }))
     setActivePanelId(nextOpenPanelId(nextLayout, nextShots))
     setShots(nextShots)
     setStatus(
@@ -1647,6 +1679,31 @@ function App() {
   }
 
   function openCreator() {
+    const currentBorderColor = layoutBorderColor(layout) ?? settings.borderColor
+    const currentBorderThickness = layoutBorderThickness(layout) ?? settings.border
+    setEditingLayoutId(null)
+    setDraftName('')
+    setDraftLines(createDefaultDraftLines())
+    setDraftThickness(9)
+    setDraftBorderColor(currentBorderColor.toLowerCase() === '#ffffff' ? DEFAULT_CUSTOM_GRID_BORDER_COLOR : currentBorderColor)
+    setDraftBorderThickness(currentBorderThickness > 0 ? currentBorderThickness : DEFAULT_CUSTOM_GRID_BORDER_THICKNESS)
+    setCreatorOpen(true)
+    setDrawerOpen(false)
+    setDrawerTab('layout')
+  }
+
+  function editCustomLayout(layoutId: string) {
+    const targetLayout = customLayouts.find((item) => item.id === layoutId)
+    if (!targetLayout) {
+      return
+    }
+
+    setEditingLayoutId(targetLayout.id)
+    setDraftName(targetLayout.name)
+    setDraftLines(targetLayout.dividers?.map((divider) => ({ ...divider })) ?? createDefaultDraftLines())
+    setDraftThickness(layoutDividerThickness(targetLayout) ?? 9)
+    setDraftBorderColor(layoutBorderColor(targetLayout) ?? DEFAULT_CUSTOM_GRID_BORDER_COLOR)
+    setDraftBorderThickness(layoutBorderThickness(targetLayout) ?? DEFAULT_CUSTOM_GRID_BORDER_THICKNESS)
     setCreatorOpen(true)
     setDrawerOpen(false)
     setDrawerTab('layout')
@@ -1654,6 +1711,7 @@ function App() {
 
   function closeCreator() {
     setCreatorOpen(false)
+    setEditingLayoutId(null)
     setDrawerTab('layout')
   }
 
@@ -1670,21 +1728,28 @@ function App() {
     }
 
     const customLayout: Layout = {
-      id: `custom-${Date.now()}`,
+      id: editingLayoutId ?? `custom-${Date.now()}`,
       name: draftName.trim() || `Custom ${customLayouts.length + 1}`,
       custom: true,
       dividerThickness: draftThickness,
+      borderColor: draftBorderColor,
+      borderThickness: draftBorderThickness,
       dividers: draftLines.map((line) => ({ ...line })),
       panels,
     }
-    setCustomLayouts((current) => [...current, customLayout])
-    changeLayout(customLayout)
+    setCustomLayouts((current) =>
+      editingLayoutId
+        ? current.map((item) => (item.id === editingLayoutId ? customLayout : item))
+        : [...current, customLayout],
+    )
+    changeLayout(customLayout, !editingLayoutId)
     setDraftName('')
     setDraftLines(createDefaultDraftLines())
     setCreatorOpen(false)
+    setEditingLayoutId(null)
     setDrawerTab('layout')
     setDrawerOpen(false)
-    setStatus('Custom layout saved on this phone.')
+    setStatus(editingLayoutId ? 'Custom grid updated on this phone.' : 'Custom grid saved on this phone.')
   }
 
   function beginPhotoMove(event: PointerEvent<HTMLElement>) {
@@ -2284,17 +2349,20 @@ function App() {
         </div>
       </section>
 
-      {showPhotoActions && selectedShot && activePanelId && (
-        <PhotoActionTray
-          panelNumber={activePanelIndex + 1}
-          shot={selectedShot}
-          fit={selectedShotFit}
-          onReplace={replaceSelectedPhoto}
-          onToggleFit={toggleSelectedPhotoFit}
-          onReset={resetSelectedPhoto}
-          onRemove={removeSelectedPhoto}
-        />
-      )}
+      <AnimatePresence>
+        {showPhotoActions && selectedShot && activePanelId && (
+          <PhotoActionTray
+            panelNumber={activePanelIndex + 1}
+            shot={selectedShot}
+            fit={selectedShotFit}
+            onReplace={replaceSelectedPhoto}
+            onToggleFit={toggleSelectedPhotoFit}
+            onReset={resetSelectedPhoto}
+            onRemove={removeSelectedPhoto}
+            onDone={() => setPhotoActionsDeferred(true)}
+          />
+        )}
+      </AnimatePresence>
 
       <nav className="capture-bar" aria-label="Capture controls">
         <button className="round-action" type="button" onClick={() => void flipCamera()} aria-label="Flip camera">
@@ -2378,6 +2446,7 @@ function App() {
             layouts={allLayouts}
             onLayout={changeLayout}
             onCreate={openCreator}
+            onEditCustomLayout={editCustomLayout}
             onDeleteCustomLayout={deleteCustomLayout}
           />
         )}
@@ -2389,7 +2458,7 @@ function App() {
         {creatorOpen && (
           <motion.section
             className="creator-fullscreen"
-            aria-label="Create custom layout"
+            aria-label={editingLayoutId ? 'Edit custom grid' : 'Create custom grid'}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20 }}
@@ -2399,11 +2468,16 @@ function App() {
               draftName={draftName}
               draftLines={draftLines}
               dividerThickness={draftThickness}
+              borderColor={draftBorderColor}
+              borderThickness={draftBorderThickness}
+              editing={editingLayoutId !== null}
               pageFormat={pageFormat}
               onName={setDraftName}
               onAddLine={addDraftLine}
               onMoveLine={updateDraftLine}
               onThickness={setDraftThickness}
+              onBorderColor={setDraftBorderColor}
+              onBorderThickness={setDraftBorderThickness}
               onReset={resetDraftLayout}
               onSave={saveDraftLayout}
               onCancel={closeCreator}
@@ -2487,6 +2561,7 @@ function PhotoActionTray({
   onToggleFit,
   onReset,
   onRemove,
+  onDone,
 }: {
   panelNumber: number
   shot: Shot
@@ -2495,6 +2570,7 @@ function PhotoActionTray({
   onToggleFit: () => void
   onReset: () => void
   onRemove: () => void
+  onDone: () => void
 }) {
   const transformIsDefault =
     Math.abs(shot.offsetX) < 0.001 &&
@@ -2502,10 +2578,24 @@ function PhotoActionTray({
     Math.abs(shot.scale - 1) < 0.001 &&
     Math.abs(shot.rotation) < 0.001
   return (
-    <section className="photo-action-tray" role="toolbar" aria-label={`Panel ${panelNumber} photo controls`} data-panel-number={panelNumber}>
+    <motion.section
+      className="photo-action-tray"
+      role="toolbar"
+      aria-label={`Panel ${panelNumber} photo controls`}
+      data-panel-number={panelNumber}
+      initial={{ opacity: 0, y: 18, scale: 0.98 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 14, scale: 0.98 }}
+      transition={{ duration: 0.16, ease: 'easeOut' }}
+    >
       <div className="photo-action-summary">
-        <strong>{`Panel ${panelNumber}`}</strong>
-        <span>{`${Math.round(shot.scale * 100)}% · ${formatRotation(shot.rotation)}`}</span>
+        <div>
+          <strong>{`Panel ${panelNumber}`}</strong>
+          <span>{`${Math.round(shot.scale * 100)}% · ${formatRotation(shot.rotation)}`}</span>
+        </div>
+        <button type="button" className="photo-action-done" aria-label={`Done editing panel ${panelNumber}`} onClick={onDone}>
+          Done
+        </button>
       </div>
       <div className="photo-action-buttons">
         <button type="button" aria-label={`Replace panel ${panelNumber} photo`} onClick={onReplace}>
@@ -2530,7 +2620,7 @@ function PhotoActionTray({
           <span>Remove</span>
         </button>
       </div>
-    </section>
+    </motion.section>
   )
 }
 
@@ -2609,12 +2699,14 @@ function LayoutPanel({
   layouts,
   onLayout,
   onCreate,
+  onEditCustomLayout,
   onDeleteCustomLayout,
 }: {
   layout: Layout
   layouts: Layout[]
   onLayout: (layout: Layout) => void
   onCreate: () => void
+  onEditCustomLayout: (layoutId: string) => void
   onDeleteCustomLayout: (layoutId: string) => void
 }) {
   const builtInLayouts = layouts.filter((option) => !option.custom)
@@ -2643,6 +2735,7 @@ function LayoutPanel({
               option={option}
               active={layout.id === option.id}
               onSelect={onLayout}
+              onEdit={onEditCustomLayout}
               onDelete={onDeleteCustomLayout}
             />
           ))}
@@ -2668,11 +2761,13 @@ function LayoutCard({
   option,
   active,
   onSelect,
+  onEdit,
   onDelete,
 }: {
   option: Layout
   active: boolean
   onSelect: (layout: Layout) => void
+  onEdit?: (layoutId: string) => void
   onDelete?: (layoutId: string) => void
 }) {
   const panelLabel = `${option.panels.length} panel${option.panels.length === 1 ? '' : 's'}`
@@ -2680,7 +2775,7 @@ function LayoutCard({
   return (
     <div className={`layout-card-shell ${option.custom ? 'is-saved' : ''}`}>
       <button
-        className={`layout-card ${active ? 'active' : ''} ${option.custom ? 'has-delete' : ''}`}
+        className={`layout-card ${active ? 'active' : ''} ${option.custom ? 'has-actions' : ''}`}
         type="button"
         aria-label={`Use ${option.name} layout, ${panelLabel}`}
         aria-pressed={active}
@@ -2695,9 +2790,19 @@ function LayoutCard({
           <em>{panelLabel}</em>
         </span>
       </button>
+      {option.custom && onEdit && (
+        <button
+          className="layout-card-action layout-edit"
+          type="button"
+          aria-label={`Edit ${option.name} grid`}
+          onClick={() => onEdit(option.id)}
+        >
+          <span aria-hidden="true">Edit</span>
+        </button>
+      )}
       {option.custom && onDelete && (
         <button
-          className="layout-delete"
+          className="layout-card-action layout-delete"
           type="button"
           aria-label={`Delete ${option.name} layout`}
           onClick={() => onDelete(option.id)}
@@ -2710,11 +2815,16 @@ function LayoutCard({
 }
 
 function LayoutPreview({ layout }: { layout: Layout }) {
-  const dividerWidth = layout.custom ? clamp((layout.dividerThickness ?? 9) / 4, 2, 5) : 2.25
-  const panelStrokeWidth = layout.custom && layout.dividers?.length ? 0 : 2.25
+  const dividerWidth = layout.custom ? clamp((layout.dividerThickness ?? 9) / 4, 1.5, 5) : 2.25
+  const borderWidth = layoutBorderThickness(layout) ?? 0.8
+  const borderColor = layoutBorderColor(layout) ?? '#d6d3d1'
+  const panelStrokeWidth = layout.custom ? borderWidth : 0.8
+  const previewStyle = {
+    '--layout-preview-border': borderColor,
+  } as React.CSSProperties
 
   return (
-    <span className="layout-preview" aria-hidden="true" data-layout-preview={layout.id}>
+    <span className="layout-preview" aria-hidden="true" data-layout-preview={layout.id} style={previewStyle}>
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" focusable="false">
         <rect className="layout-preview-paper" x="0" y="0" width="100" height="100" />
         {layout.panels.map((panel) =>
@@ -2742,18 +2852,43 @@ function LayoutPreview({ layout }: { layout: Layout }) {
           ),
         )}
         {layout.dividers?.map((divider, index) => (
-          <line
-            key={`${divider.id}-${index}`}
-            className="layout-preview-divider"
-            data-preview-divider={divider.id}
-            x1={divider.x1}
-            y1={divider.y1}
-            x2={divider.x2}
-            y2={divider.y2}
-            strokeWidth={dividerWidth}
+          <React.Fragment key={`${divider.id}-${index}`}>
+            {borderWidth > 0 && (
+              <line
+                className="layout-preview-divider-border"
+                x1={divider.x1}
+                y1={divider.y1}
+                x2={divider.x2}
+                y2={divider.y2}
+                strokeWidth={dividerWidth + borderWidth * 2}
+                vectorEffect="non-scaling-stroke"
+              />
+            )}
+            <line
+              className="layout-preview-divider"
+              data-preview-divider={divider.id}
+              x1={divider.x1}
+              y1={divider.y1}
+              x2={divider.x2}
+              y2={divider.y2}
+              strokeWidth={dividerWidth}
+              vectorEffect="non-scaling-stroke"
+            />
+          </React.Fragment>
+        ))}
+        {borderWidth > 0 && (
+          <rect
+            className="layout-preview-outline"
+            x={borderWidth / 2}
+            y={borderWidth / 2}
+            width={100 - borderWidth}
+            height={100 - borderWidth}
+            rx="4"
+            fill="none"
+            strokeWidth={borderWidth}
             vectorEffect="non-scaling-stroke"
           />
-        ))}
+        )}
       </svg>
     </span>
   )
@@ -2763,11 +2898,16 @@ function CreatorPanel({
   draftName,
   draftLines,
   dividerThickness,
+  borderColor,
+  borderThickness,
+  editing,
   pageFormat,
   onName,
   onAddLine,
   onMoveLine,
   onThickness,
+  onBorderColor,
+  onBorderThickness,
   onReset,
   onSave,
   onCancel,
@@ -2775,11 +2915,16 @@ function CreatorPanel({
   draftName: string
   draftLines: CustomLine[]
   dividerThickness: number
+  borderColor: string
+  borderThickness: number
+  editing: boolean
   pageFormat: PageFormat
   onName: (name: string) => void
   onAddLine: (preset: CustomLinePreset) => void
   onMoveLine: (lineId: string, update: Partial<CustomLine>) => void
   onThickness: (thickness: number) => void
+  onBorderColor: (color: string) => void
+  onBorderThickness: (thickness: number) => void
   onReset: () => void
   onSave: () => void
   onCancel: () => void
@@ -2799,6 +2944,8 @@ function CreatorPanel({
   const canvasAspect = pageFormatCanvasAspect(pageFormat)
   const creatorStyle = {
     '--creator-divider-thickness': `${dividerThickness}px`,
+    '--creator-border-color': borderColor,
+    '--creator-border-thickness': `${borderThickness}px`,
     '--creator-handle-size': '44px',
     '--creator-page-width': pageFormat.width,
     '--creator-page-height': pageFormat.height,
@@ -3010,6 +3157,8 @@ function CreatorPanel({
       className="creator-stack"
       style={creatorStyle}
       data-divider-thickness={dividerThickness}
+      data-border-color={borderColor}
+      data-border-thickness={borderThickness}
       data-page-format={pageFormat.id}
       onSubmit={submitLayout}
     >
@@ -3017,9 +3166,9 @@ function CreatorPanel({
         <button type="button" onClick={onCancel} aria-label="Close creator">
           Close
         </button>
-        <strong>Create Layout</strong>
+        <strong>{editing ? 'Edit grid' : 'Create grid'}</strong>
         <button type="submit" className="primary">
-          Save
+          {editing ? 'Update' : 'Save'}
         </button>
       </div>
       <div className="creator-workbench">
@@ -3108,18 +3257,32 @@ function CreatorPanel({
         </div>
         <div className="creator-side">
           <p className="creator-gesture-hint">Drag endpoints to shape a divider. Use two fingers to rotate and resize the nearest line.</p>
-          <label className="field">
-            <span>Name</span>
-            <input
-              value={draftName}
-              placeholder="My manga layout"
-              autoComplete="off"
-              enterKeyHint="done"
-              onChange={(event) => onName(event.target.value)}
-            />
-          </label>
+          <div className="creator-border-controls" aria-label="Grid border controls">
+            <label className="field creator-border-color">
+              <span>Border color</span>
+              <input
+                type="color"
+                value={borderColor}
+                aria-label="Border color"
+                onChange={(event) => onBorderColor(event.target.value)}
+              />
+            </label>
+            <label className="field creator-thickness">
+              <span>Border thickness</span>
+              <input
+                type="range"
+                min="0"
+                max="10"
+                step="1"
+                value={borderThickness}
+                aria-label="Border thickness"
+                onChange={(event) => onBorderThickness(Number(event.target.value))}
+              />
+              <output>{borderThickness}px</output>
+            </label>
+          </div>
           <label className="field creator-thickness">
-            <span>Section gap</span>
+            <span>Panel gap</span>
             <input
               type="range"
               min="6"
@@ -3129,6 +3292,17 @@ function CreatorPanel({
               onChange={(event) => onThickness(Number(event.target.value))}
             />
             <output>{dividerThickness}px</output>
+          </label>
+          <label className="field">
+            <span>Grid name</span>
+            <input
+              value={draftName}
+              placeholder="My grid"
+              aria-label="Grid name"
+              autoComplete="off"
+              enterKeyHint="done"
+              onChange={(event) => onName(event.target.value)}
+            />
           </label>
           <div className="creator-actions">
             <button type="button" onClick={() => onAddLine('diagonal')}>
@@ -3143,8 +3317,8 @@ function CreatorPanel({
             <button type="button" onClick={onReset}>
               Reset
             </button>
-            <button type="submit" className="primary">
-              Save layout
+            <button type="submit" className="primary" aria-label={editing ? 'Update layout' : 'Save layout'}>
+              {editing ? 'Update grid' : 'Save grid'}
             </button>
           </div>
         </div>
@@ -3172,7 +3346,7 @@ function StylePanel({
           <input type="color" value={settings.background} onChange={(event) => onSettings({ background: event.target.value })} />
         </label>
         <label className="field">
-          <span>Ink</span>
+          <span>Border color</span>
           <input type="color" value={settings.borderColor} onChange={(event) => onSettings({ borderColor: event.target.value })} />
         </label>
         <label className="field">
@@ -3193,7 +3367,7 @@ function StylePanel({
           <input type="range" min="0" max="24" value={settings.radius} onChange={(event) => onSettings({ radius: Number(event.target.value) })} />
         </label>
         <label className="field">
-          <span>Border</span>
+          <span>{`Border ${settings.border}px`}</span>
           <input type="range" min="0" max="10" value={settings.border} onChange={(event) => onSettings({ border: Number(event.target.value) })} />
         </label>
       </div>
@@ -3322,7 +3496,7 @@ async function renderToPng(
   }
 
   for (const divider of layout.dividers ?? []) {
-    drawDividerGap(context, divider, width, panelHeight, outer, gutter, settings.background)
+    drawDividerGap(context, divider, width, panelHeight, outer, gutter, settings.background, settings.border * 3, settings.borderColor)
   }
 
   if (settings.caption.trim()) {
@@ -3331,16 +3505,16 @@ async function renderToPng(
     context.fillStyle = '#ffffff'
     context.fillRect(outer + gutter / 2, captionY, width - outer * 2 - gutter, captionHeight - gutter)
     context.strokeStyle = settings.borderColor
-    context.lineWidth = Math.max(3, settings.border * 2)
+    context.lineWidth = settings.border > 0 ? Math.max(3, settings.border * 3) : 0
     context.strokeRect(outer + gutter / 2, captionY, width - outer * 2 - gutter, captionHeight - gutter)
     context.fillStyle = settings.captionColor
-    context.font = '900 74px ui-rounded, "Avenir Next", "Segoe UI", sans-serif'
+    context.font = '700 68px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
     context.textAlign = 'center'
     context.textBaseline = 'middle'
     context.fillText(settings.caption, width / 2, captionY + captionHeight / 2, width - 130)
   }
 
-  drawOuterBezel(context, width, panelHeight, outer, settings, !!layout.custom)
+  drawOuterBezel(context, width, panelHeight, outer, settings)
 
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
   if (!blob) {
@@ -3482,7 +3656,17 @@ function drawStoryVideoFrame(
     context.save()
     context.globalAlpha = decorationAlpha
     for (const divider of layout.dividers ?? []) {
-      drawDividerGap(context, divider, width, panelHeight, outer, gutter, settings.background)
+      drawDividerGap(
+        context,
+        divider,
+        width,
+        panelHeight,
+        outer,
+        gutter,
+        settings.background,
+        settings.border * styleScale,
+        settings.borderColor,
+      )
     }
     context.restore()
   }
@@ -3495,18 +3679,18 @@ function drawStoryVideoFrame(
     context.globalAlpha = captionAlpha
     context.fillStyle = '#ffffff'
     context.fillRect(outer + gutter / 2, captionY, width - outer * 2 - gutter, captionHeight - gutter)
-    context.strokeStyle = bezelInk(settings)
+    context.strokeStyle = settings.borderColor
     context.lineWidth = Math.max(2, settings.border * styleScale)
     context.strokeRect(outer + gutter / 2, captionY, width - outer * 2 - gutter, captionHeight - gutter)
     context.fillStyle = settings.captionColor
-    context.font = `900 ${Math.round(54 * (width / 1080))}px ui-rounded, "Avenir Next", "Segoe UI", sans-serif`
+    context.font = `700 ${Math.round(50 * (width / 1080))}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`
     context.textAlign = 'center'
     context.textBaseline = 'middle'
     context.fillText(settings.caption, width / 2, captionY + captionHeight / 2, width - 96)
     context.restore()
   }
 
-  drawOuterBezel(context, width, panelHeight, outer, settings, !!layout.custom)
+  drawOuterBezel(context, width, panelHeight, outer, settings)
 }
 
 function panelRevealMotion(
@@ -3553,24 +3737,19 @@ function drawOuterBezel(
   panelHeight: number,
   outer: number,
   settings: Settings,
-  force: boolean,
 ) {
-  const lineWidth = force ? Math.max(6, settings.border * 3) : settings.border > 0 ? Math.max(2, settings.border * 2) : 0
+  const lineWidth = outer > 0 ? Math.max(2, outer) : 0
   if (lineWidth <= 0) {
     return
   }
 
-  const inset = Math.max(lineWidth / 2, outer + lineWidth / 2)
+  const inset = lineWidth / 2
   context.save()
   context.lineWidth = lineWidth
-  context.strokeStyle = force ? bezelInk(settings) : settings.borderColor
+  context.strokeStyle = settings.borderColor
   drawRoundedRect(context, inset, inset, width - inset * 2, panelHeight - inset * 2, Math.max(10, settings.radius * 3))
   context.stroke()
   context.restore()
-}
-
-function bezelInk(settings: Settings) {
-  return settings.borderColor.toLowerCase() === '#ffffff' ? '#111111' : settings.borderColor
 }
 
 function easeOutCubic(value: number) {
@@ -3638,7 +3817,7 @@ function drawPanel(
   context.restore()
 
   if (settings.border > 0) {
-    context.lineWidth = Math.max(2, settings.border * 2)
+    context.lineWidth = Math.max(2, settings.border * styleScale)
     context.strokeStyle = settings.borderColor
     if (panel.points) {
       drawPanelPolygon(context, panel, width, panelHeight, outer)
@@ -3676,6 +3855,8 @@ function drawDividerGap(
   outer: number,
   gutter: number,
   color: string,
+  borderWidth: number,
+  borderColor: string,
 ) {
   const innerWidth = width - outer * 2
   const innerHeight = panelHeight - outer * 2
@@ -3685,13 +3866,23 @@ function drawDividerGap(
   const y2 = outer + (line.y2 / 100) * innerHeight
 
   context.save()
-  context.strokeStyle = color
-  context.lineWidth = gutter
   context.lineCap = 'round'
-  context.beginPath()
-  context.moveTo(x1, y1)
-  context.lineTo(x2, y2)
-  context.stroke()
+  if (borderWidth > 0) {
+    context.strokeStyle = borderColor
+    context.lineWidth = gutter + borderWidth * 2
+    context.beginPath()
+    context.moveTo(x1, y1)
+    context.lineTo(x2, y2)
+    context.stroke()
+  }
+  if (gutter > 0) {
+    context.strokeStyle = color
+    context.lineWidth = gutter
+    context.beginPath()
+    context.moveTo(x1, y1)
+    context.lineTo(x2, y2)
+    context.stroke()
+  }
   context.restore()
 }
 
@@ -3849,16 +4040,8 @@ function drawRoundedRect(context: CanvasRenderingContext2D, x: number, y: number
 }
 
 function drawEmptyPanel(context: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
-  context.fillStyle = '#f4f0e6'
+  context.fillStyle = '#f2f2f7'
   context.fillRect(x, y, w, h)
-  context.strokeStyle = '#ded5c4'
-  context.lineWidth = 6
-  for (let offset = -h; offset < w; offset += 46) {
-    context.beginPath()
-    context.moveTo(x + offset, y + h)
-    context.lineTo(x + offset + h, y)
-    context.stroke()
-  }
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {

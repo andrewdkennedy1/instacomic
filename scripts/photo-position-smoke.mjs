@@ -84,7 +84,7 @@ const failures = [
   Math.abs(result.frame.renderedRatio - result.frame.sourceRatio) / result.frame.sourceRatio < 0.08
     ? null
     : 'uploaded landscape photo is rendered with the built-in panel aspect ratio instead of the source photo ratio',
-  result.frame.w > 2.9 && result.frame.w < 3.05 ? null : 'uploaded landscape fill mode did not account for the rectangular built-in panel aspect ratio',
+  result.frame.w > 2.85 && result.frame.w < 3.05 ? null : 'uploaded landscape fill mode did not account for the rectangular built-in panel aspect ratio and visible border',
   result.frame.h > 0.95 && result.frame.h < 1.05 ? null : 'uploaded landscape photo is not fitted to the rectangular built-in panel height',
   result.afterTransform.x > result.beforeTransform.x + 0.2 ? null : 'manual photo drag did not update the shot offset',
   result.beforePixel.width === 1440 && result.beforePixel.height === 1800 ? null : 'default 4:5 export dimensions are incorrect',
@@ -118,6 +118,11 @@ async function setLayout(page, name) {
 }
 
 async function openDrawer(page) {
+  const doneEditing = page.getByRole('button', { name: /Done editing panel/ })
+  if ((await doneEditing.count()) > 0) {
+    await doneEditing.evaluate((button) => button.click()).catch(() => undefined)
+    await doneEditing.waitFor({ state: 'detached' }).catch(() => undefined)
+  }
   await page.locator('.capture-bar button[aria-label="Controls"]').tap()
   try {
     await page.locator('.motion-drawer.is-open').waitFor({ timeout: 1200 })
@@ -157,10 +162,27 @@ async function photoTransform(page, panelId) {
 }
 
 async function sharedPngPixel(page, point) {
+  await page.waitForTimeout(220)
+  const doneEditing = page.getByRole('button', { name: /Done editing panel/ })
+  const captureBarIsAvailable = await page.locator('.capture-bar').evaluate((bar) => {
+    const shareButton = bar.querySelector('button[aria-label="Share"]')
+    return Number(getComputedStyle(bar).opacity) > 0.9 && !!shareButton && getComputedStyle(shareButton).pointerEvents !== 'none'
+  })
+  if (!captureBarIsAvailable) {
+    await doneEditing.waitFor({ state: 'visible' })
+    await doneEditing.evaluate((button) => button.click())
+    await doneEditing.waitFor({ state: 'detached' })
+  }
+  await page.waitForFunction(() => {
+    const bar = document.querySelector('.capture-bar')
+    if (!bar) return false
+    const shareButton = bar.querySelector('button[aria-label="Share"]')
+    return Number(getComputedStyle(bar).opacity) > 0.9 && !!shareButton && getComputedStyle(shareButton).pointerEvents !== 'none'
+  })
   const downloadIndex = await page.evaluate(() => window.__instacomicDownloads.length)
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByRole('button', { name: 'Share' }).tap(),
+    page.getByRole('button', { name: 'Share' }).evaluate((button) => button.click()),
   ])
   await page.waitForFunction((count) => window.__instacomicDownloads.length > count, downloadIndex)
   const pixel = await page.evaluate(
