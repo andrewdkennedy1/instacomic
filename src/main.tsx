@@ -1,4 +1,4 @@
-import { AnimatePresence, motion, useDragControls } from 'framer-motion'
+import { AnimatePresence, MotionConfig, motion, useDragControls } from 'framer-motion'
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent, TouchEvent } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -11,9 +11,10 @@ import {
   type DraftRecord,
 } from './draft-store'
 import './style.css'
+import './ux-overhaul.css'
 
 type PanelFit = 'cover' | 'contain'
-type DrawerTab = 'layout' | 'style'
+type DrawerTab = 'layout' | 'style' | 'export'
 type CustomLinePreset = 'diagonal' | 'vertical' | 'horizontal'
 type PageFormatId = '4:5' | '3:4' | '4:3' | '9:16'
 
@@ -601,7 +602,8 @@ function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerTab, setDrawerTab] = useState<DrawerTab>('layout')
   const [status, setStatus] = useState('Tap a panel. Shoot. Repeat.')
-  const [exportUrl, setExportUrl] = useState<string | null>(null)
+  const [imageExporting, setImageExporting] = useState(false)
+  const [photoProcessing, setPhotoProcessing] = useState(false)
   const [videoRendering, setVideoRendering] = useState(false)
   const [videoProgress, setVideoProgress] = useState(0)
   const [videoProgressPhase, setVideoProgressPhase] = useState<StoryVideoRenderPhase>('rendering')
@@ -615,11 +617,13 @@ function App() {
   const [draftBorderThickness, setDraftBorderThickness] = useState(DEFAULT_CUSTOM_GRID_BORDER_THICKNESS)
   const [editingLayoutId, setEditingLayoutId] = useState<string | null>(null)
   const [creatorOpen, setCreatorOpen] = useState(false)
+  const [creatorDirty, setCreatorDirty] = useState(false)
+  const [creatorDiscardConfirmOpen, setCreatorDiscardConfirmOpen] = useState(false)
   const [appContext, setAppContext] = useState<AppContext>(() => getAppContext())
   const [storageReady, setStorageReady] = useState(false)
   const [savedDraft, setSavedDraft] = useState<StoredProjectDraft | null>(null)
   const [draftPhase, setDraftPhase] = useState<DraftPhase>('checking')
-  const [newProjectRequested, setNewProjectRequested] = useState(false)
+  const [newProjectRequested, setNewProjectRequested] = useState(() => new URLSearchParams(window.location.search).has('new'))
   const [historyCounts, setHistoryCounts] = useState({ undo: 0, redo: 0 })
   const [rotationSnap, setRotationSnap] = useState<RotationSnap | null>(null)
   const [photoActionsDeferred, setPhotoActionsDeferred] = useState(false)
@@ -650,6 +654,8 @@ function App() {
   const lastSnapAngleRef = useRef<number | null>(null)
   const readyVideoUrlRef = useRef<string | null>(null)
   const startRequestedRef = useRef(false)
+  const photoOperationCountRef = useRef(0)
+  const imageExportingRef = useRef(false)
   const dragControls = useDragControls()
 
   const allLayouts = useMemo(() => [...layouts, ...customLayouts], [customLayouts])
@@ -664,6 +670,26 @@ function App() {
     '--page-height': pageFormat.height,
   } as React.CSSProperties
   const creatorCanvasAspect = pageFormatCanvasAspect(pageFormat)
+
+  useEffect(() => {
+    function dismissOverlay(event: KeyboardEvent) {
+      if (event.key !== 'Escape') {
+        return
+      }
+      if (creatorDiscardConfirmOpen) {
+        setCreatorDiscardConfirmOpen(false)
+      } else if (creatorOpen) {
+        closeCreator()
+      } else if (drawerOpen) {
+        setDrawerOpen(false)
+      } else if (showPhotoActions) {
+        setPhotoActionsDeferred(true)
+      }
+    }
+
+    window.addEventListener('keydown', dismissOverlay)
+    return () => window.removeEventListener('keydown', dismissOverlay)
+  }, [creatorDiscardConfirmOpen, creatorOpen, drawerOpen, showPhotoActions])
 
   useEffect(() => {
     editorVersionRef.current += 1
@@ -941,10 +967,11 @@ function App() {
       })
   }
 
-  function queueDraftClear() {
+  function queueDraftClear(options: { onlyIfProjectEmpty?: boolean } = {}) {
     const epoch = draftEpochRef.current + 1
     draftEpochRef.current = epoch
     draftRevisionRef.current += 1
+    const requestedEditorVersion = editorVersionRef.current
     if (autosaveTimerRef.current) {
       clearTimeout(autosaveTimerRef.current)
       autosaveTimerRef.current = null
@@ -954,6 +981,12 @@ function App() {
       .catch(() => undefined)
       .then(async () => {
         if (epoch !== draftEpochRef.current) {
+          return false
+        }
+        if (
+          options.onlyIfProjectEmpty &&
+          (editorVersionRef.current !== requestedEditorVersion || shotCacheRef.current.some(Boolean))
+        ) {
           return false
         }
         await clearDraftData()
@@ -1142,7 +1175,7 @@ function App() {
         return
       }
       emptyDraftClearedRef.current = true
-      void queueDraftClear().catch((error) => {
+      void queueDraftClear({ onlyIfProjectEmpty: true }).catch((error) => {
         console.error('Draft clear failed:', error)
         emptyDraftClearedRef.current = false
         setDraftPhase('error')
@@ -1162,7 +1195,7 @@ function App() {
         autosaveTimerRef.current = null
       }
     }
-  }, [activePanelId, layout, pageFormat.id, settings, shots, started])
+  }, [activePanelId, draftPhase, layout, pageFormat.id, settings, shots, started])
 
   useEffect(() => {
     if (!started) {
@@ -1260,14 +1293,6 @@ function App() {
 
   useEffect(() => {
     return () => {
-      if (exportUrl) {
-        URL.revokeObjectURL(exportUrl)
-      }
-    }
-  }, [exportUrl])
-
-  useEffect(() => {
-    return () => {
       if (readyVideoUrlRef.current) {
         URL.revokeObjectURL(readyVideoUrlRef.current)
       }
@@ -1283,10 +1308,6 @@ function App() {
   }
 
   function clearExport() {
-    if (exportUrl) {
-      URL.revokeObjectURL(exportUrl)
-      setExportUrl(null)
-    }
     clearReadyVideo()
   }
 
@@ -1339,14 +1360,49 @@ function App() {
     }
   }
 
-  async function enterApp() {
+  async function prepareAppSurface() {
+    if (!appContext.isInstalled) {
+      return
+    }
     await requestAppFullscreen()
     await lockPortraitOrientation()
+  }
 
+  async function enterApp() {
+    await prepareAppSurface()
     setStarted(true)
+    setStatus('Starting camera…')
+    void startCamera()
+  }
+
+  function returnHome() {
+    flushPendingSettingsHistory()
+    const snapshot = captureProjectSnapshot()
+    if (draftSessionReadyRef.current && snapshot.shotCache.some(Boolean)) {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current)
+        autosaveTimerRef.current = null
+      }
+      queueDraftSave(snapshot)
+    }
+    stream?.getTracks().forEach((track) => track.stop())
+    setStream(null)
+    setDrawerOpen(false)
+    setCreatorOpen(false)
+    setPhotoActionsDeferred(true)
+    setNewProjectRequested(false)
+    setStarted(false)
+    startRequestedRef.current = false
   }
 
   function selectPageFormat(format: PageFormat) {
+    if (format.id === pageFormat.id) {
+      return
+    }
+    if (started) {
+      flushPendingSettingsHistory()
+      commitHistoryEntry(beginHistoryEntry('Change canvas format'))
+    }
     setPageFormat(format)
     clearExport()
     setStatus(`${format.id} ${format.label} canvas selected.`)
@@ -1368,8 +1424,7 @@ function App() {
 
     startRequestedRef.current = true
     void (async () => {
-      await requestAppFullscreen()
-      await lockPortraitOrientation()
+      await prepareAppSurface()
       setDraftPhase('checking')
       try {
         const snapshot = await hydrateStoredDraft(savedDraft)
@@ -1379,6 +1434,10 @@ function App() {
         setDraftPhase('saved')
         setStarted(true)
         setStatus(`Continued ${snapshot.layout.name} with ${snapshot.shotCache.filter(Boolean).length} saved photo${snapshot.shotCache.filter(Boolean).length === 1 ? '' : 's'}.`)
+        const resumedPanelIndex = snapshot.layout.panels.findIndex((panel) => panel.id === snapshot.activePanelId)
+        if (resumedPanelIndex >= 0 && !snapshot.shotCache[resumedPanelIndex]) {
+          void startCamera()
+        }
       } catch (error) {
         console.error('Draft recovery failed:', error)
         setDraftPhase('error')
@@ -1395,8 +1454,7 @@ function App() {
 
     startRequestedRef.current = true
     void (async () => {
-      await requestAppFullscreen()
-      await lockPortraitOrientation()
+      await prepareAppSurface()
       try {
         const cleared = await queueDraftClear()
         if (!cleared) {
@@ -1428,6 +1486,7 @@ function App() {
       clearExport()
       setStarted(true)
       setStatus(`${layout.name} layout. Panel 1 is live.`)
+      void startCamera()
     })()
   }
 
@@ -1482,10 +1541,12 @@ function App() {
   function selectPanel(panelId: string) {
     setActivePanelId(panelId)
     if (shots[panelId]) {
+      setPhotoActionsDeferred(false)
       setStatus(`Panel ${layout.panels.findIndex((panel) => panel.id === panelId) + 1} photo selected. Drag to move, pinch to zoom, or twist to rotate.`)
       return
     }
 
+    setPhotoActionsDeferred(true)
     setStatus(`Panel ${layout.panels.findIndex((panel) => panel.id === panelId) + 1} is live.`)
     if (!stream) {
       void startCamera()
@@ -1512,6 +1573,16 @@ function App() {
     }
   }
 
+  function beginPhotoOperation() {
+    photoOperationCountRef.current += 1
+    setPhotoProcessing(true)
+  }
+
+  function finishPhotoOperation() {
+    photoOperationCountRef.current = Math.max(0, photoOperationCountRef.current - 1)
+    setPhotoProcessing(photoOperationCountRef.current > 0)
+  }
+
   async function capturePanel() {
     const video = videoRef.current
     const targetPanelId = activePanelId
@@ -1527,37 +1598,42 @@ function App() {
       return
     }
 
-    setStatus('Capturing full photo...')
-    let photo: CapturedPhoto
+    beginPhotoOperation()
     try {
-      photo = await captureFullPhoto(stream, video)
-    } catch (error) {
-      setStatus(error instanceof Error ? `Photo capture failed: ${error.message}` : 'Photo capture failed.')
-      return
-    }
+      setStatus('Capturing full photo...')
+      let photo: CapturedPhoto
+      try {
+        photo = await captureFullPhoto(stream, video)
+      } catch (error) {
+        setStatus(error instanceof Error ? `Photo capture failed: ${error.message}` : 'Photo capture failed.')
+        return
+      }
 
-    if (editorVersion !== editorVersionRef.current) {
-      setStatus('The comic changed while capturing. Tap the shutter again for this panel.')
-      return
-    }
+      if (editorVersion !== editorVersionRef.current) {
+        setStatus('The comic changed while capturing. Tap the shutter again for this panel.')
+        return
+      }
 
-    const nextShot = createAssetShot(photo.blob, photo.width, photo.height)
-    commitHistoryEntry(beginHistoryEntry(shots[targetPanelId] ? 'Replace photo' : 'Capture photo'))
-    const nextCache = putShotInCache(layout, shots, shotCacheRef.current, targetPanelId, nextShot)
-    shotCacheRef.current = nextCache
-    const nextShots = shotsForLayout(layout, nextCache)
-    setShots(nextShots)
+      const nextShot = createAssetShot(photo.blob, photo.width, photo.height)
+      commitHistoryEntry(beginHistoryEntry(shots[targetPanelId] ? 'Replace photo' : 'Capture photo'))
+      const nextCache = putShotInCache(layout, shots, shotCacheRef.current, targetPanelId, nextShot)
+      shotCacheRef.current = nextCache
+      const nextShots = shotsForLayout(layout, nextCache)
+      setShots(nextShots)
 
-    const currentIndex = layout.panels.findIndex((panel) => panel.id === targetPanelId)
-    const nextPanel = layout.panels.slice(currentIndex + 1).find((panel) => !nextShots[panel.id])
-    if (nextPanel) {
-      setActivePanelId(nextPanel.id)
-      setStatus(`Saved panel ${currentIndex + 1}. Panel ${layout.panels.findIndex((panel) => panel.id === nextPanel.id) + 1} is live.`)
-    } else {
-      setActivePanelId(null)
-      setStatus(`Saved panel ${currentIndex + 1}. Tap another panel to retake it, or share.`)
+      const currentIndex = layout.panels.findIndex((panel) => panel.id === targetPanelId)
+      const nextPanel = layout.panels.slice(currentIndex + 1).find((panel) => !nextShots[panel.id])
+      if (nextPanel) {
+        setActivePanelId(nextPanel.id)
+        setStatus(`Saved panel ${currentIndex + 1}. Panel ${layout.panels.findIndex((panel) => panel.id === nextPanel.id) + 1} is live.`)
+      } else {
+        setActivePanelId(null)
+        setStatus(`Saved panel ${currentIndex + 1}. Tap another panel to retake it, or share.`)
+      }
+      clearExport()
+    } finally {
+      finishPhotoOperation()
     }
-    clearExport()
   }
 
   async function uploadPhoto(event: React.ChangeEvent<HTMLInputElement>) {
@@ -1581,57 +1657,71 @@ function App() {
       return
     }
 
-    let dimensions: { width: number; height: number }
+    beginPhotoOperation()
     try {
-      dimensions = await loadBlobDimensions(file)
-    } catch {
-      replacePanelIdRef.current = null
-      setStatus('Photo upload failed.')
-      return
-    }
-    if (editorVersion !== editorVersionRef.current) {
-      replacePanelIdRef.current = null
-      setStatus('The comic changed while loading that photo. Choose it again for the current panel.')
-      return
-    }
-    const replacing = !!shots[targetPanelId] || replacePanelIdRef.current === targetPanelId
-    const nextShot = createAssetShot(file, dimensions.width, dimensions.height)
-    commitHistoryEntry(beginHistoryEntry(replacing ? 'Replace photo' : 'Add photo'))
-    const nextCache = putShotInCache(layout, shots, shotCacheRef.current, targetPanelId, nextShot)
-    shotCacheRef.current = nextCache
-    const nextShots = shotsForLayout(layout, nextCache)
-    setShots(nextShots)
+      let dimensions: { width: number; height: number }
+      try {
+        dimensions = await loadBlobDimensions(file)
+      } catch {
+        replacePanelIdRef.current = null
+        setStatus('Photo upload failed.')
+        return
+      }
+      if (editorVersion !== editorVersionRef.current) {
+        replacePanelIdRef.current = null
+        setStatus('The comic changed while loading that photo. Choose it again for the current panel.')
+        return
+      }
+      const replacing = !!shots[targetPanelId] || replacePanelIdRef.current === targetPanelId
+      const nextShot = createAssetShot(file, dimensions.width, dimensions.height)
+      commitHistoryEntry(beginHistoryEntry(replacing ? 'Replace photo' : 'Add photo'))
+      const nextCache = putShotInCache(layout, shots, shotCacheRef.current, targetPanelId, nextShot)
+      shotCacheRef.current = nextCache
+      const nextShots = shotsForLayout(layout, nextCache)
+      setShots(nextShots)
 
-    const currentIndex = layout.panels.findIndex((panel) => panel.id === targetPanelId)
-    if (replacing) {
-      replacePanelIdRef.current = null
-      setActivePanelId(targetPanelId)
-      setStatus(`Replaced panel ${currentIndex + 1} photo.`)
+      const currentIndex = layout.panels.findIndex((panel) => panel.id === targetPanelId)
+      if (replacing) {
+        replacePanelIdRef.current = null
+        setActivePanelId(targetPanelId)
+        setStatus(`Replaced panel ${currentIndex + 1} photo.`)
+        clearExport()
+        return
+      }
+
+      const nextPanel = layout.panels.slice(currentIndex + 1).find((panel) => !nextShots[panel.id])
+      if (nextPanel) {
+        setActivePanelId(nextPanel.id)
+        setStatus(`Photo added to panel ${currentIndex + 1}. Panel ${layout.panels.findIndex((panel) => panel.id === nextPanel.id) + 1} is live.`)
+      } else {
+        setActivePanelId(null)
+        setStatus(`Photo added to panel ${currentIndex + 1}. Tap another panel to replace it, or share.`)
+      }
       clearExport()
-      return
+    } finally {
+      finishPhotoOperation()
     }
-
-    const nextPanel = layout.panels.slice(currentIndex + 1).find((panel) => !nextShots[panel.id])
-    if (nextPanel) {
-      setActivePanelId(nextPanel.id)
-      setStatus(`Photo added to panel ${currentIndex + 1}. Panel ${layout.panels.findIndex((panel) => panel.id === nextPanel.id) + 1} is live.`)
-    } else {
-      setActivePanelId(null)
-      setStatus(`Photo added to panel ${currentIndex + 1}. Tap another panel to replace it, or share.`)
-    }
-    clearExport()
   }
 
   function changeLayout(nextLayout: Layout, recordHistory = true) {
     if (nextLayout === layout) {
-      return
+      return { applied: false, hiddenPhotoCount: 0 }
     }
     if (recordHistory) {
       flushPendingSettingsHistory()
-      commitHistoryEntry(beginHistoryEntry('Change layout'))
     }
+    const historyEntry = recordHistory ? beginHistoryEntry('Change layout') : null
     const nextCache = mergeLayoutShotsIntoCache(layout, shots, shotCacheRef.current)
     shotCacheRef.current = nextCache
+    const hiddenPhotoCount = nextCache.slice(nextLayout.panels.length).filter(Boolean).length
+    if (hiddenPhotoCount > 0) {
+      const photoLabel = hiddenPhotoCount === 1 ? 'photo' : 'photos'
+      setStatus(
+        `${nextLayout.name} was not applied because it would hide ${hiddenPhotoCount} ${photoLabel}. ${layout.name} was kept so every photo stays visible.`,
+      )
+      return { applied: false, hiddenPhotoCount }
+    }
+    commitHistoryEntry(historyEntry)
     const nextShots = shotsForLayout(nextLayout, nextCache)
     const restoredCount = Object.keys(nextShots).length
     setLayout(nextLayout)
@@ -1644,6 +1734,7 @@ function App() {
         : `${nextLayout.name} layout. Panel 1 is live.`,
     )
     clearExport()
+    return { applied: true, hiddenPhotoCount: 0 }
   }
 
   function deleteCustomLayout(layoutId: string) {
@@ -1652,30 +1743,62 @@ function App() {
       return
     }
 
-    setCustomLayouts((current) => current.filter((item) => item.id !== layoutId))
     if (layout.id === layoutId) {
       const fallbackLayout = layouts[0]
-      changeLayout(fallbackLayout, false)
+      const result = changeLayout(fallbackLayout, false)
+      if (!result.applied) {
+        setStatus(`${targetLayout.name} was not deleted because changing grids would hide photos.`)
+        return
+      }
+      setCustomLayouts((current) => current.filter((item) => item.id !== layoutId))
       setStatus(`${targetLayout.name} layout deleted. ${fallbackLayout.name} layout is active.`)
     } else {
+      setCustomLayouts((current) => current.filter((item) => item.id !== layoutId))
       setStatus(`${targetLayout.name} layout deleted.`)
       clearExport()
     }
   }
 
   function addDraftLine(preset: CustomLinePreset) {
+    setCreatorDirty(true)
     setDraftLines((current) => [...current, createDraftLine(preset, current.length)])
   }
 
-  function updateDraftLine(lineId: string, update: Partial<CustomLine>) {
+  function removeDraftLine(lineId: string) {
+    setCreatorDirty(true)
+    setDraftLines((current) => current.filter((line) => line.id !== lineId))
+    setStatus('Divider removed.')
+  }
+
+  function updateDraftLine(lineId: string, update: Partial<CustomLine>, shouldSnap = true) {
+    setCreatorDirty(true)
     setDraftLines((current) =>
-      current.map((line) => (line.id === lineId ? snapCustomLine(clampCustomLine({ ...line, ...update }), current, lineId, creatorCanvasAspect) : line)),
+      current.map((line) => {
+        if (line.id !== lineId) {
+          return line
+        }
+        const nextLine = clampCustomLine({ ...line, ...update })
+        return shouldSnap ? snapCustomLine(nextLine, current, lineId, creatorCanvasAspect) : nextLine
+      }),
     )
   }
 
   function resetDraftLayout() {
+    setCreatorDirty(true)
     setDraftLines(createDefaultDraftLines())
     setStatus('Creator reset.')
+  }
+
+  function resetAppearance() {
+    updateProjectSettings({
+      gutters: defaultSettings.gutters,
+      radius: defaultSettings.radius,
+      border: defaultSettings.border,
+      background: defaultSettings.background,
+      borderColor: defaultSettings.borderColor,
+      fit: defaultSettings.fit,
+    })
+    setStatus('Appearance reset to defaults.')
   }
 
   function openCreator() {
@@ -1687,6 +1810,8 @@ function App() {
     setDraftThickness(9)
     setDraftBorderColor(currentBorderColor.toLowerCase() === '#ffffff' ? DEFAULT_CUSTOM_GRID_BORDER_COLOR : currentBorderColor)
     setDraftBorderThickness(currentBorderThickness > 0 ? currentBorderThickness : DEFAULT_CUSTOM_GRID_BORDER_THICKNESS)
+    setCreatorDirty(false)
+    setCreatorDiscardConfirmOpen(false)
     setCreatorOpen(true)
     setDrawerOpen(false)
     setDrawerTab('layout')
@@ -1704,12 +1829,24 @@ function App() {
     setDraftThickness(layoutDividerThickness(targetLayout) ?? 9)
     setDraftBorderColor(layoutBorderColor(targetLayout) ?? DEFAULT_CUSTOM_GRID_BORDER_COLOR)
     setDraftBorderThickness(layoutBorderThickness(targetLayout) ?? DEFAULT_CUSTOM_GRID_BORDER_THICKNESS)
+    setCreatorDirty(false)
+    setCreatorDiscardConfirmOpen(false)
     setCreatorOpen(true)
     setDrawerOpen(false)
     setDrawerTab('layout')
   }
 
   function closeCreator() {
+    if (creatorDirty) {
+      setCreatorDiscardConfirmOpen(true)
+      return
+    }
+    discardCreator()
+  }
+
+  function discardCreator() {
+    setCreatorDirty(false)
+    setCreatorDiscardConfirmOpen(false)
     setCreatorOpen(false)
     setEditingLayoutId(null)
     setDrawerTab('layout')
@@ -1742,14 +1879,23 @@ function App() {
         ? current.map((item) => (item.id === editingLayoutId ? customLayout : item))
         : [...current, customLayout],
     )
-    changeLayout(customLayout, !editingLayoutId)
+    const layoutChange = changeLayout(customLayout, !editingLayoutId)
     setDraftName('')
     setDraftLines(createDefaultDraftLines())
+    setCreatorDirty(false)
+    setCreatorDiscardConfirmOpen(false)
     setCreatorOpen(false)
     setEditingLayoutId(null)
     setDrawerTab('layout')
     setDrawerOpen(false)
-    setStatus(editingLayoutId ? 'Custom grid updated on this phone.' : 'Custom grid saved on this phone.')
+    if (layoutChange.hiddenPhotoCount > 0) {
+      const photoCount = shotCacheRef.current.filter(Boolean).length
+      setStatus(
+        `${customLayout.name} saved to Your grids; kept ${layout.name} active so all ${photoCount} photos stay visible.`,
+      )
+    } else {
+      setStatus(editingLayoutId ? 'Custom grid updated on this phone.' : 'Custom grid saved on this phone.')
+    }
   }
 
   function beginPhotoMove(event: PointerEvent<HTMLElement>) {
@@ -1884,6 +2030,32 @@ function App() {
     clearExport()
   }
 
+  function adjustPhotoFromKeyboard(event: React.KeyboardEvent<HTMLButtonElement>, panelId: string) {
+    const shot = shots[panelId]
+    if (!shot) {
+      return
+    }
+    const step = event.shiftKey ? 0.12 : 0.03
+    let update: Partial<Pick<Shot, 'offsetX' | 'offsetY' | 'scale' | 'rotation'>> | null = null
+    if (event.key === 'ArrowLeft') update = { offsetX: shot.offsetX - step }
+    if (event.key === 'ArrowRight') update = { offsetX: shot.offsetX + step }
+    if (event.key === 'ArrowUp') update = { offsetY: shot.offsetY - step }
+    if (event.key === 'ArrowDown') update = { offsetY: shot.offsetY + step }
+    if (event.key === '+' || event.key === '=') update = { scale: clamp(shot.scale + 0.05, 0.35, 3) }
+    if (event.key === '-') update = { scale: clamp(shot.scale - 0.05, 0.35, 3) }
+    if (event.key === '[') update = { rotation: normalizeAngle(shot.rotation - 2) }
+    if (event.key === ']') update = { rotation: normalizeAngle(shot.rotation + 2) }
+    if (!update) {
+      return
+    }
+    event.preventDefault()
+    flushPendingSettingsHistory()
+    commitHistoryEntry(beginHistoryEntry('Adjust photo'))
+    updateShotTransform(panelId, update)
+    setPhotoActionsDeferred(false)
+    setStatus(`Adjusted panel ${layout.panels.findIndex((panel) => panel.id === panelId) + 1}.`)
+  }
+
   function replaceSelectedPhoto() {
     if (!activePanelId || !shots[activePanelId]) {
       return
@@ -1984,6 +2156,7 @@ function App() {
   }
 
   function finishGestures() {
+    const finishedPhotoGesture = !!photoDragState
     if (photoDragState && gestureHistoryRef.current) {
       const baselineIndex = gestureHistoryRef.current.snapshot.layout.panels.findIndex(
         (panel) => panel.id === photoDragState.panelId,
@@ -2010,7 +2183,9 @@ function App() {
     lastSnapAngleRef.current = null
     setRotationSnap(null)
     setPhotoDragState(null)
-    setPhotoActionsDeferred(false)
+    if (finishedPhotoGesture) {
+      setPhotoActionsDeferred(false)
+    }
   }
 
   function openDrawer(tab?: DrawerTab) {
@@ -2019,33 +2194,70 @@ function App() {
   }
 
   async function renderComicBlob() {
-    setStatus('Rendering...')
-    const blob = await renderToPng(layout, shots, settings, pageFormat)
-    clearExport()
+    if (photoOperationCountRef.current > 0) {
+      throw new Error('The latest photo is still being prepared. Try saving again in a moment.')
+    }
+    if (imageExportingRef.current) {
+      throw new Error('The PNG is already being prepared.')
+    }
+
+    imageExportingRef.current = true
+    setImageExporting(true)
+    setStatus('Preparing the latest comic...')
+    const snapshot = captureProjectSnapshot()
+    const snapshotCache = snapshot.shotCache.map((shot) => shot ?? undefined)
+    const snapshotShots = shotsForLayout(snapshot.layout, snapshotCache)
+    clearReadyVideo()
+    try {
+      return await renderToPng(
+        snapshot.layout,
+        snapshotShots,
+        snapshot.settings,
+        getPageFormat(snapshot.pageFormatId),
+      )
+    } finally {
+      imageExportingRef.current = false
+      setImageExporting(false)
+    }
+  }
+
+  function downloadComicBlob(blob: Blob) {
     const url = URL.createObjectURL(blob)
-    setExportUrl(url)
-    return { blob, url }
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'instacomic.png'
+    document.body.append(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  }
+
+  async function downloadComic() {
+    try {
+      downloadComicBlob(await renderComicBlob())
+      setStatus('PNG downloaded with the latest photos.')
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'PNG download failed.')
+    }
   }
 
   async function shareComic() {
     try {
-      const blob = exportUrl ? await fetch(exportUrl).then((response) => response.blob()) : (await renderComicBlob()).blob
+      const blob = await renderComicBlob()
       const file = new File([blob], 'instacomic.png', { type: 'image/png' })
       if ('canShare' in navigator && navigator.canShare?.({ files: [file] })) {
         await navigator.share({ files: [file], title: 'Instacomic' })
         setStatus('Shared.')
       } else {
-        const fallbackUrl = exportUrl ?? URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        link.href = fallbackUrl
-        link.download = 'instacomic.png'
-        document.body.append(link)
-        link.click()
-        link.remove()
+        downloadComicBlob(blob)
         setStatus('Sharing is unavailable here, so the PNG downloaded.')
       }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Share failed.')
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        setStatus('Share canceled. Your comic is unchanged.')
+      } else {
+        setStatus(error instanceof Error ? error.message : 'Share failed.')
+      }
     }
   }
 
@@ -2053,14 +2265,26 @@ function App() {
     if (videoRendering) {
       return
     }
+    if (photoOperationCountRef.current > 0) {
+      setStatus('The latest photo is still being prepared. Try exporting again in a moment.')
+      return
+    }
 
     clearReadyVideo()
+    const snapshot = captureProjectSnapshot()
+    const snapshotCache = snapshot.shotCache.map((shot) => shot ?? undefined)
+    const snapshotShots = shotsForLayout(snapshot.layout, snapshotCache)
     setVideoRendering(true)
     setVideoProgress(0)
     setVideoProgressPhase('rendering')
     try {
       setStatus('Rendering story video...')
-      const video = await renderStoryVideo(layout, shots, settings, pageFormat, (progress, phase) => {
+      const video = await renderStoryVideo(
+        snapshot.layout,
+        snapshotShots,
+        snapshot.settings,
+        getPageFormat(snapshot.pageFormatId),
+        (progress, phase) => {
         setVideoProgress(progress)
         setVideoProgressPhase(phase)
         setStatus(
@@ -2068,11 +2292,11 @@ function App() {
             ? `Finalizing story video ${Math.round(progress * 100)}%...`
             : `Rendering story video ${Math.round(progress * 100)}%...`,
         )
-      })
+        },
+      )
       const fileName = `instacomic-story.${video.extension}`
-      const ready = setReadyStoryVideo(video, fileName)
-      downloadReadyVideo(ready)
-      setStatus(`Video ready. If it did not download, tap Download video.`)
+      setReadyStoryVideo(video, fileName)
+      setStatus('Story video ready. Choose Download or Share.')
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Story video export failed.')
     } finally {
@@ -2099,6 +2323,8 @@ function App() {
     }
     readyVideoUrlRef.current = url
     setReadyVideo(ready)
+    setDrawerTab('export')
+    setDrawerOpen(true)
     return ready
   }
 
@@ -2139,6 +2365,8 @@ function App() {
       data-history-undo={historyCounts.undo}
       data-history-redo={historyCounts.redo}
       data-autosave-state={draftPhase}
+      data-photo-processing={photoProcessing || undefined}
+      data-image-exporting={imageExporting || undefined}
       style={pageStyle}
       onPointerMove={(event) => {
         movePhoto(event.clientX, event.clientY)
@@ -2155,120 +2383,208 @@ function App() {
       onTouchEnd={() => finishGestures()}
       onTouchCancel={() => finishGestures()}
     >
-      {!appContext.isInstalled ? (
-        <InstallerScreen
-          appContext={appContext}
-          deferredPrompt={deferredPrompt}
-          onTriggerNativeInstall={triggerNativeInstall}
-        />
-      ) : (
-        <>
+      <>
       {!started && (
         <section className="start-screen" aria-label="Start Instacomic" data-draft-phase={draftPhase}>
-          <div className="start-mark">Instacomic</div>
-          {draftPhase === 'checking' ? (
-            <div className="draft-checking" role="status">Checking saved work…</div>
-          ) : savedDraft && (draftPhase === 'available' || draftPhase === 'error') && !newProjectRequested ? (
-            <>
-              <section className="draft-recovery-card" aria-label="Saved comic draft">
-                <LayoutPreview layout={savedDraft.document.layout} />
-                <div className="draft-recovery-copy">
-                  <span>Saved comic</span>
-                  <strong>{savedDraft.document.layout.name}</strong>
-                  <em>{`${savedDraftPhotoCount} photo${savedDraftPhotoCount === 1 ? '' : 's'} · ${savedDraft.document.pageFormatId} · ${formatSavedTime(savedDraft.updatedAt)}`}</em>
-                </div>
-              </section>
-              {draftPhase === 'error' && <div className="draft-recovery-error" role="alert">{status}</div>}
-              <div className="start-actions recovery-actions">
-                <button className="start-button" type="button" onClick={continueDraftFromGesture}>
-                  {draftPhase === 'error' ? 'Retry recovery' : 'Continue editing'}
-                </button>
-                <button className="start-secondary" type="button" onClick={() => setNewProjectRequested(true)}>
-                  New comic
-                </button>
+          <div className="start-shell">
+            <header className="start-hero">
+              <div className="start-brand-row">
+                <span className="start-logo" aria-hidden="true">I</span>
+                <div className="start-mark">Instacomic</div>
               </div>
-            </>
-          ) : (
-            <>
-              <div className="format-picker" aria-label="Canvas ratio">
-                <span>Choose canvas</span>
-                <div className="format-options" role="group" aria-label="Canvas ratio">
-                  {pageFormats.map((format) => (
-                    <button
-                      key={format.id}
-                      className={`format-option ${pageFormat.id === format.id ? 'active' : ''}`}
-                      type="button"
-                      aria-pressed={pageFormat.id === format.id}
-                      onClick={() => selectPageFormat(format)}
-                    >
-                      <strong>{format.id}</strong>
-                      <em>{format.label}</em>
+              <h1>Turn moments into a comic.</h1>
+              <p>Shoot or add photos panel by panel, arrange the page, then export it ready to share.</p>
+            </header>
+
+            <div className="start-panel">
+              {draftPhase === 'checking' ? (
+                <div className="draft-checking" role="status">
+                  <span className="loading-ring" aria-hidden="true" />
+                  Checking saved work…
+                </div>
+              ) : savedDraft && ['available', 'saved', 'saving', 'error'].includes(draftPhase) && !newProjectRequested ? (
+                <>
+                  <div className="start-section-heading">
+                    <div>
+                      <span>Welcome back</span>
+                      <strong>Continue where you left off</strong>
+                    </div>
+                    <em>Saved automatically</em>
+                  </div>
+                  <section className="draft-recovery-card" aria-label="Saved comic draft">
+                    <LayoutPreview layout={savedDraft.document.layout} />
+                    <div className="draft-recovery-copy">
+                      <span>Saved comic</span>
+                      <strong>{savedDraft.document.layout.name}</strong>
+                      <em>{`${savedDraftPhotoCount} photo${savedDraftPhotoCount === 1 ? '' : 's'} · ${savedDraft.document.pageFormatId} · ${formatSavedTime(savedDraft.updatedAt)}`}</em>
+                    </div>
+                  </section>
+                  {draftPhase === 'error' && <div className="draft-recovery-error" role="alert">{status}</div>}
+                  <div className="start-actions recovery-actions">
+                    <button className="start-button" type="button" disabled={draftPhase === 'saving'} onClick={continueDraftFromGesture}>
+                      {draftPhase === 'saving' ? 'Saving changes…' : draftPhase === 'error' ? 'Retry recovery' : 'Continue editing'}
                     </button>
-                  ))}
-                </div>
-              </div>
-              <div className="start-actions">
-                <button
-                  className="start-button"
-                  type="button"
-                  onPointerDown={(event) => {
-                    if (event.isPrimary && event.button === 0) {
-                      if (newProjectRequested) {
-                        startNewProjectFromGesture()
-                      } else {
-                        startFromGesture()
-                      }
-                    }
-                  }}
-                  onClick={() => (newProjectRequested ? startNewProjectFromGesture() : startFromGesture())}
-                >
-                  {newProjectRequested ? 'Start new' : 'Start'}
-                </button>
-                {newProjectRequested && (
-                  <button className="start-secondary" type="button" onClick={() => setNewProjectRequested(false)}>
-                    Back to saved comic
-                  </button>
-                )}
-              </div>
-            </>
-          )}
+                    <button className="start-secondary" type="button" disabled={draftPhase === 'saving'} onClick={() => setNewProjectRequested(true)}>
+                      New comic
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="start-section-heading">
+                    <div>
+                      <span>New comic</span>
+                      <strong>Choose a canvas and grid</strong>
+                    </div>
+                    <em>You can change this later</em>
+                  </div>
+                  <div className="format-picker" aria-label="Canvas ratio">
+                    <div className="format-options" role="group" aria-label="Canvas ratio">
+                      {pageFormats.map((format) => (
+                        <button
+                          key={format.id}
+                          className={`format-option ${pageFormat.id === format.id ? 'active' : ''}`}
+                          type="button"
+                          aria-pressed={pageFormat.id === format.id}
+                          onClick={() => selectPageFormat(format)}
+                        >
+                          <span
+                            className="format-shape"
+                            style={{ aspectRatio: `${format.width} / ${format.height}` }}
+                            aria-hidden="true"
+                          />
+                          <span className="format-option-copy">
+                            <strong>{format.id}</strong>
+                            <em>{format.label}</em>
+                          </span>
+                          <i aria-hidden="true">✓</i>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="setup-grid-picker">
+                    <div className="setup-grid-heading">
+                      <span>Starting grid</span>
+                      <em>{`${layout.name} · ${layout.panels.length} panels`}</em>
+                    </div>
+                    <div className="setup-grid-options" role="group" aria-label="Starting grid">
+                      {layouts
+                        .filter((option) => ['story', 'four', 'shard', 'manga'].includes(option.id))
+                        .map((option) => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            className={layout.id === option.id ? 'active' : ''}
+                            aria-label={`Use ${option.name} starting grid, ${option.panels.length} panels`}
+                            aria-pressed={layout.id === option.id}
+                            onClick={() => changeLayout(option, false)}
+                          >
+                            <LayoutPreview layout={option} />
+                            <span>{option.name}</span>
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                  <div className="start-actions">
+                    <button
+                      className="start-button"
+                      type="button"
+                      onPointerDown={(event) => {
+                        if (event.isPrimary && event.button === 0) {
+                          if (newProjectRequested) {
+                            startNewProjectFromGesture()
+                          } else {
+                            startFromGesture()
+                          }
+                        }
+                      }}
+                      onClick={() => (newProjectRequested ? startNewProjectFromGesture() : startFromGesture())}
+                    >
+                      {newProjectRequested ? 'Start new comic' : 'Start creating'}
+                    </button>
+                    {newProjectRequested && savedDraft && (
+                      <button className="start-secondary" type="button" onClick={() => setNewProjectRequested(false)}>
+                        Back to saved comic
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {!appContext.isInstalled && (
+              <InstallNudge
+                appContext={appContext}
+                deferredPrompt={deferredPrompt}
+                onTriggerNativeInstall={triggerNativeInstall}
+              />
+            )}
+          </div>
         </section>
       )}
       <video ref={videoRef} className="live-camera" autoPlay muted playsInline />
-      <input ref={fileInputRef} className="photo-upload" type="file" accept="image/*" onChange={(event) => void uploadPhoto(event)} />
-      <div className="sr-status" id="app-status" aria-live="polite">
-        {status}
-      </div>
+      <input ref={fileInputRef} className="photo-upload" type="file" accept="image/*" tabIndex={-1} disabled={photoProcessing} onChange={(event) => void uploadPhoto(event)} />
       <p className="sr-status" id="photo-gesture-help">Drag to move. Pinch to zoom. Twist to rotate.</p>
 
       {started && (
-        <div className="history-toolbar" role="toolbar" aria-label="Editing history">
-          <button
-            type="button"
-            aria-label="Undo"
-            aria-keyshortcuts="Control+Z Meta+Z"
-            disabled={historyCounts.undo === 0}
-            onClick={undoEditorAction}
-          >
-            <ToolIcon name="undo" />
+        <header className="editor-header" aria-hidden={drawerOpen || creatorOpen} inert={drawerOpen || creatorOpen || undefined}>
+          <button className="editor-home" type="button" aria-label="Back to projects" onClick={returnHome}>
+            <ActionIcon name="home" />
           </button>
-          <button
-            type="button"
-            aria-label="Redo"
-            aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y"
-            disabled={historyCounts.redo === 0}
-            onClick={redoEditorAction}
-          >
-            <ToolIcon name="redo" />
+          <div className="editor-context">
+            <span>{layout.name}</span>
+            <strong>{activePanelIndex >= 0 ? `Panel ${activePanelIndex + 1} of ${layout.panels.length}` : 'Comic ready'}</strong>
+          </div>
+          <div className="history-toolbar" role="group" aria-label="Editing history">
+            <button
+              type="button"
+              aria-label="Undo"
+              aria-keyshortcuts="Control+Z Meta+Z"
+              disabled={historyCounts.undo === 0}
+              onClick={undoEditorAction}
+            >
+              <ToolIcon name="undo" />
+            </button>
+            <button
+              type="button"
+              aria-label="Redo"
+              aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z Control+Y"
+              disabled={historyCounts.redo === 0}
+              onClick={redoEditorAction}
+            >
+              <ToolIcon name="redo" />
+            </button>
+            <span className={`autosave-chip is-${draftPhase}`} aria-label={draftPhase === 'error' ? 'Draft not saved' : `Draft ${draftPhase === 'none' ? 'ready' : draftPhase}`}>
+              <i aria-hidden="true" />
+              {draftPhase === 'saving' ? 'Saving' : draftPhase === 'error' ? 'Not saved' : draftPhase === 'none' ? 'Ready' : 'Saved'}
+            </span>
+          </div>
+          <button className="header-export" type="button" aria-label="Open export controls" onClick={() => openDrawer('export')}>
+            <ActionIcon name="export" />
+            <span>Export</span>
           </button>
-          <span className={`autosave-chip is-${draftPhase}`} aria-label={draftPhase === 'error' ? 'Draft not saved' : `Draft ${draftPhase === 'none' ? 'ready' : draftPhase}`}>
-            <i aria-hidden="true" />
-            {draftPhase === 'saving' ? 'Saving' : draftPhase === 'error' ? 'Not saved' : draftPhase === 'none' ? 'Ready' : 'Saved'}
-          </span>
+        </header>
+      )}
+
+      {started && (
+        <div
+          id="app-status"
+          className={`editor-notice ${/(blocked|failed|unavailable|not saved|could not)/i.test(status) ? 'is-error' : ''}`}
+          role={/(blocked|failed|unavailable|not saved|could not)/i.test(status) ? 'alert' : 'status'}
+          aria-live={/(blocked|failed|unavailable|not saved|could not)/i.test(status) ? 'assertive' : 'polite'}
+        >
+          <i />
+          <span>{status}</span>
         </div>
       )}
 
-      <section ref={stageRef} className="comic-stage" aria-label="Instacomic capture surface">
+      <section
+        ref={stageRef}
+        className="comic-stage"
+        aria-label="Instacomic capture surface"
+        aria-hidden={!started}
+        inert={!started || drawerOpen || creatorOpen || undefined}
+      >
         <div
           ref={stripRef}
           className={`live-strip layout-${layout.id} ${layout.custom ? 'is-custom' : ''} ${layout.panels.some((panel) => panel.points) ? 'is-manga' : ''}`}
@@ -2301,10 +2617,18 @@ function App() {
               type="button"
               data-panel-id={panel.id}
               onClick={() => selectPanel(panel.id)}
+              onKeyDown={(event) => adjustPhotoFromKeyboard(event, panel.id)}
               aria-label={shots[panel.id] ? `Select panel ${index + 1}, photo added` : `Select empty panel ${index + 1}`}
               aria-pressed={panel.id === activePanelId}
+              aria-keyshortcuts={shots[panel.id] ? 'ArrowLeft ArrowRight ArrowUp ArrowDown + - [ ]' : undefined}
               aria-describedby={panel.id === activePanelId && shots[panel.id] ? 'photo-gesture-help' : undefined}
             >
+              {!shots[panel.id] && !(panel.id === activePanelId && stream) && (
+                <span className="panel-placeholder" aria-hidden="true">
+                  <b>{index + 1}</b>
+                  <em>{panel.id === activePanelId ? 'Ready for a photo' : 'Add photo'}</em>
+                </span>
+              )}
               {shots[panel.id] && (
                 <img
                   src={shots[panel.id].dataUrl}
@@ -2320,7 +2644,7 @@ function App() {
               {panel.id === activePanelId && stream && !shots[panel.id] && (
                 <LiveVideo stream={stream} panel={panel} fit={settings.fit} />
               )}
-              {panel.id === activePanelId && !shots[panel.id] && <span className="panel-chip">LIVE</span>}
+              {panel.id === activePanelId && stream && !shots[panel.id] && <span className="panel-chip">Camera</span>}
             </button>
           ))}
 
@@ -2345,7 +2669,7 @@ function App() {
             </div>
           )}
 
-          {settings.caption.trim() && <div className="strip-caption">{settings.caption}</div>}
+          {settings.caption.trim() && <div className="strip-caption" style={{ color: settings.captionColor }}>{settings.caption}</div>}
         </div>
       </section>
 
@@ -2359,78 +2683,58 @@ function App() {
             onToggleFit={toggleSelectedPhotoFit}
             onReset={resetSelectedPhoto}
             onRemove={removeSelectedPhoto}
+            onOpenControls={() => openDrawer('layout')}
             onDone={() => setPhotoActionsDeferred(true)}
           />
         )}
       </AnimatePresence>
 
-      <nav className="capture-bar" aria-label="Capture controls">
-        <button className="round-action" type="button" onClick={() => void flipCamera()} aria-label="Flip camera">
-          ↺
-        </button>
-        <button className="round-action" type="button" onClick={() => fileInputRef.current?.click()} aria-label="Upload photo">
-          ▧
-        </button>
-        <button className="shutter" type="button" onClick={capturePanel} aria-label="Capture active panel">
-          <span />
-        </button>
-        <button className="round-action" type="button" onClick={() => openDrawer()} aria-label="Controls">
-          ⋯
-        </button>
-        <button
-          className={`round-action video-action ${videoRendering ? 'is-rendering' : ''}`}
-          type="button"
-          onClick={() => void exportStoryVideo()}
-          aria-label="Export story video"
-          disabled={videoRendering}
-        >
-          ▶
-        </button>
-        <button className="round-action share-action" type="button" onClick={() => void shareComic()} aria-label="Share">
-          ⇪
-        </button>
+      <nav
+        className="capture-bar"
+        aria-label="Capture controls"
+        aria-hidden={!started || showPhotoActions}
+        inert={!started || showPhotoActions || drawerOpen || creatorOpen || undefined}
+      >
+        <div className="capture-progress">
+          <span>{`${capturedCount} of ${layout.panels.length} panels`}</span>
+          <div
+            className="progress-pills"
+            role="progressbar"
+            aria-label="Panels captured"
+            aria-valuemin={0}
+            aria-valuemax={layout.panels.length}
+            aria-valuenow={capturedCount}
+            aria-valuetext={`${capturedCount} of ${layout.panels.length} panels captured`}
+          >
+            {layout.panels.map((panel) => (
+              <span key={panel.id} className={shots[panel.id] ? 'done' : panel.id === activePanelId ? 'live' : ''} />
+            ))}
+          </div>
+        </div>
+        <div className="capture-actions">
+          <button className="round-action capture-tool" type="button" onClick={() => void flipCamera()} aria-label="Flip camera">
+            <ActionIcon name="flip" />
+            <span>Flip</span>
+          </button>
+          <button className="round-action capture-tool" type="button" disabled={photoProcessing} onClick={() => fileInputRef.current?.click()} aria-label="Upload photo">
+            <ActionIcon name="photo" />
+            <span>Photos</span>
+          </button>
+          <button
+            className="shutter"
+            type="button"
+            disabled={!activePanelId || photoProcessing}
+            onClick={capturePanel}
+            aria-label={activePanelIndex >= 0 ? `Capture panel ${activePanelIndex + 1}` : 'All panels captured'}
+          >
+            <span />
+          </button>
+          <button className="round-action capture-tool" type="button" onClick={() => openDrawer()} aria-label="Controls">
+            <ActionIcon name="controls" />
+            <span>Edit</span>
+          </button>
+        </div>
       </nav>
-
-      {videoRendering && (
-        <div
-          className="video-render-progress"
-          role="progressbar"
-          aria-label="Rendering story video"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(videoProgress * 100)}
-          aria-valuetext={`${videoProgressPhase === 'finalizing' ? 'Finalizing' : 'Rendering'} ${Math.round(videoProgress * 100)}%`}
-        >
-          <span style={{ width: `${Math.round(videoProgress * 100)}%` }} />
-          <em>{`${videoProgressPhase === 'finalizing' ? 'Finalizing' : 'Rendering'} ${Math.round(videoProgress * 100)}%`}</em>
-        </div>
-      )}
-
-      {readyVideo && !videoRendering && (
-        <div className="video-ready-card" role="status" aria-live="polite">
-          <div>
-            <strong>Story video ready</strong>
-            <em>{`${readyVideo.width}x${readyVideo.height} ${readyVideo.extension.toUpperCase()}`}</em>
-          </div>
-          <div className="video-ready-actions">
-            <button type="button" onClick={() => downloadReadyVideo(readyVideo)}>
-              Download video
-            </button>
-            <button type="button" onClick={() => void shareReadyVideo(readyVideo)}>
-              Share
-            </button>
-            <button type="button" aria-label="Dismiss video ready" onClick={clearReadyVideo}>
-              ×
-            </button>
-          </div>
-        </div>
-      )}
-
-      <div className={`progress-pills ${showPhotoActions ? 'with-photo-actions' : ''}`} aria-label={`${capturedCount} of ${layout.panels.length} panels captured`}>
-        {layout.panels.map((panel) => (
-          <span key={panel.id} className={shots[panel.id] ? 'done' : panel.id === activePanelId ? 'live' : ''} />
-        ))}
-      </div>
 
       <Drawer
         open={drawerOpen}
@@ -2444,49 +2748,102 @@ function App() {
           <LayoutPanel
             layout={layout}
             layouts={allLayouts}
+            pageFormat={pageFormat}
+            formats={pageFormats}
             onLayout={changeLayout}
+            onFormat={selectPageFormat}
             onCreate={openCreator}
             onEditCustomLayout={editCustomLayout}
             onDeleteCustomLayout={deleteCustomLayout}
           />
         )}
         {drawerTab === 'style' && (
-          <StylePanel settings={settings} onSettings={updateProjectSettings} />
+          <StylePanel settings={settings} onSettings={updateProjectSettings} onReset={resetAppearance} />
+        )}
+        {drawerTab === 'export' && (
+          <ExportPanel
+            settings={settings}
+            capturedCount={capturedCount}
+            panelCount={layout.panels.length}
+            pageFormat={pageFormat}
+            imageExporting={imageExporting}
+            photoProcessing={photoProcessing}
+            videoRendering={videoRendering}
+            videoProgress={videoProgress}
+            videoProgressPhase={videoProgressPhase}
+            readyVideo={readyVideo}
+            onSettings={updateProjectSettings}
+            onDownloadImage={downloadComic}
+            onShareImage={shareComic}
+            onExportVideo={exportStoryVideo}
+            onDownloadVideo={downloadReadyVideo}
+            onShareVideo={shareReadyVideo}
+            onDismissVideo={clearReadyVideo}
+          />
         )}
       </Drawer>
       <AnimatePresence>
         {creatorOpen && (
           <motion.section
             className="creator-fullscreen"
+            role="dialog"
+            aria-modal="true"
             aria-label={editingLayoutId ? 'Edit custom grid' : 'Create custom grid'}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 20 }}
             transition={{ duration: 0.18 }}
           >
-            <CreatorPanel
-              draftName={draftName}
-              draftLines={draftLines}
-              dividerThickness={draftThickness}
-              borderColor={draftBorderColor}
-              borderThickness={draftBorderThickness}
-              editing={editingLayoutId !== null}
-              pageFormat={pageFormat}
-              onName={setDraftName}
-              onAddLine={addDraftLine}
-              onMoveLine={updateDraftLine}
-              onThickness={setDraftThickness}
-              onBorderColor={setDraftBorderColor}
-              onBorderThickness={setDraftBorderThickness}
-              onReset={resetDraftLayout}
-              onSave={saveDraftLayout}
-              onCancel={closeCreator}
-            />
+            <div className="creator-panel-host" inert={creatorDiscardConfirmOpen || undefined}>
+              <CreatorPanel
+                draftName={draftName}
+                draftLines={draftLines}
+                dividerThickness={draftThickness}
+                borderColor={draftBorderColor}
+                borderThickness={draftBorderThickness}
+                editing={editingLayoutId !== null}
+                pageFormat={pageFormat}
+                onName={(value) => {
+                  setCreatorDirty(true)
+                  setDraftName(value)
+                }}
+                onAddLine={addDraftLine}
+                onRemoveLine={removeDraftLine}
+                onMoveLine={updateDraftLine}
+                onThickness={(value) => {
+                  setCreatorDirty(true)
+                  setDraftThickness(value)
+                }}
+                onBorderColor={(value) => {
+                  setCreatorDirty(true)
+                  setDraftBorderColor(value)
+                }}
+                onBorderThickness={(value) => {
+                  setCreatorDirty(true)
+                  setDraftBorderThickness(value)
+                }}
+                onReset={resetDraftLayout}
+                onSave={saveDraftLayout}
+                onCancel={closeCreator}
+              />
+            </div>
+            {creatorDiscardConfirmOpen && (
+              <div className="creator-discard-backdrop">
+                <section className="creator-discard-dialog" role="alertdialog" aria-modal="true" aria-labelledby="discard-grid-heading" aria-describedby="discard-grid-copy">
+                  <span>Unsaved grid</span>
+                  <strong id="discard-grid-heading">Discard your changes?</strong>
+                  <p id="discard-grid-copy">The grid has changes that have not been saved.</p>
+                  <div>
+                    <button type="button" autoFocus onClick={() => setCreatorDiscardConfirmOpen(false)}>Keep editing</button>
+                    <button className="is-danger" type="button" onClick={discardCreator}>Discard changes</button>
+                  </div>
+                </section>
+              </div>
+            )}
           </motion.section>
         )}
       </AnimatePresence>
-        </>
-      )}
+      </>
     </main>
   )
 }
@@ -2553,6 +2910,23 @@ function ToolIcon({ name }: { name: ToolIconName }) {
   )
 }
 
+type ActionIconName = 'home' | 'export' | 'flip' | 'photo' | 'controls' | 'image' | 'share' | 'video' | 'install'
+
+function ActionIcon({ name }: { name: ActionIconName }) {
+  const paths: Record<ActionIconName, React.ReactNode> = {
+    home: <><path d="m4 11 8-7 8 7" /><path d="M6.5 10v10h11V10" /><path d="M10 20v-6h4v6" /></>,
+    export: <><path d="M12 3v12" /><path d="m7.5 7.5 4.5-4.5 4.5 4.5" /><path d="M5 13v6h14v-6" /></>,
+    flip: <><path d="M4.5 8.5A8 8 0 0 1 18 6" /><path d="M18 3v3.5h-3.5" /><path d="M19.5 15.5A8 8 0 0 1 6 18" /><path d="M6 21v-3.5h3.5" /></>,
+    photo: <><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="8" cy="9" r="1.5" /><path d="m4 17 4.7-4.6 3.3 3 2.4-2.2L20 18" /></>,
+    controls: <><path d="M4 7h10" /><path d="M18 7h2" /><circle cx="16" cy="7" r="2" /><path d="M4 17h2" /><path d="M10 17h10" /><circle cx="8" cy="17" r="2" /></>,
+    image: <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="m4 17 5-5 3.5 3.5 2-2L20 19" /><circle cx="16.5" cy="8.5" r="1.5" /></>,
+    share: <><path d="M12 4v11" /><path d="m8 8 4-4 4 4" /><path d="M5 13v6h14v-6" /></>,
+    video: <><rect x="3" y="5" width="14" height="14" rx="3" /><path d="m17 10 4-2v8l-4-2" /><path d="m9 9 4 3-4 3Z" /></>,
+    install: <><rect x="6" y="3" width="12" height="18" rx="3" /><path d="M10 17h4" /><path d="M12 7v6" /><path d="m9.5 10.5 2.5 2.5 2.5-2.5" /></>,
+  }
+  return <svg className="action-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>
+}
+
 function PhotoActionTray({
   panelNumber,
   shot,
@@ -2561,6 +2935,7 @@ function PhotoActionTray({
   onToggleFit,
   onReset,
   onRemove,
+  onOpenControls,
   onDone,
 }: {
   panelNumber: number
@@ -2570,6 +2945,7 @@ function PhotoActionTray({
   onToggleFit: () => void
   onReset: () => void
   onRemove: () => void
+  onOpenControls: () => void
   onDone: () => void
 }) {
   const transformIsDefault =
@@ -2580,7 +2956,7 @@ function PhotoActionTray({
   return (
     <motion.section
       className="photo-action-tray"
-      role="toolbar"
+      role="group"
       aria-label={`Panel ${panelNumber} photo controls`}
       data-panel-number={panelNumber}
       initial={{ opacity: 0, y: 18, scale: 0.98 }}
@@ -2592,10 +2968,16 @@ function PhotoActionTray({
         <div>
           <strong>{`Panel ${panelNumber}`}</strong>
           <span>{`${Math.round(shot.scale * 100)}% · ${formatRotation(shot.rotation)}`}</span>
+          <em>Drag to move · pinch to zoom</em>
         </div>
-        <button type="button" className="photo-action-done" aria-label={`Done editing panel ${panelNumber}`} onClick={onDone}>
-          Done
-        </button>
+        <span className="photo-action-summary-actions">
+          <button type="button" className="photo-action-controls" aria-label="Open comic controls" onClick={onOpenControls}>
+            <ActionIcon name="controls" />
+          </button>
+          <button type="button" className="photo-action-done" aria-label={`Done editing panel ${panelNumber}`} onClick={onDone}>
+            Done
+          </button>
+        </span>
       </div>
       <div className="photo-action-buttons">
         <button type="button" aria-label={`Replace panel ${panelNumber} photo`} onClick={onReplace}>
@@ -2609,11 +2991,11 @@ function PhotoActionTray({
           onClick={onToggleFit}
         >
           <ToolIcon name="fit" />
-          <span>Fit</span>
+          <span>{fit === 'contain' ? 'Fill' : 'Fit'}</span>
         </button>
         <button type="button" aria-label={`Reset panel ${panelNumber} photo`} disabled={transformIsDefault} onClick={onReset}>
           <ToolIcon name="reset" />
-          <span>Reset</span>
+          <span>Reset position</span>
         </button>
         <button className="is-danger" type="button" aria-label={`Remove panel ${panelNumber} photo`} onClick={onRemove}>
           <ToolIcon name="remove" />
@@ -2641,70 +3023,179 @@ function Drawer({
   onClose: () => void
   onTab: (tab: DrawerTab) => void
 }) {
+  const tabTitle = tab === 'layout' ? 'Layout & canvas' : tab === 'style' ? 'Appearance' : 'Export comic'
+  const drawerRef = useRef<HTMLElement>(null)
+  const previousFocusRef = useRef<HTMLElement | null>(null)
+  const drawerTabs: Array<{ id: DrawerTab; label: string }> = [
+    { id: 'layout', label: 'Layout' },
+    { id: 'style', label: 'Style' },
+    { id: 'export', label: 'Export' },
+  ]
+
+  function moveTabFocus(event: React.KeyboardEvent<HTMLButtonElement>, currentTab: DrawerTab) {
+    const currentIndex = drawerTabs.findIndex((item) => item.id === currentTab)
+    let nextIndex = currentIndex
+    if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % drawerTabs.length
+    if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + drawerTabs.length) % drawerTabs.length
+    if (event.key === 'Home') nextIndex = 0
+    if (event.key === 'End') nextIndex = drawerTabs.length - 1
+    if (nextIndex === currentIndex && !['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) {
+      return
+    }
+    event.preventDefault()
+    const nextTab = drawerTabs[nextIndex].id
+    onTab(nextTab)
+    requestAnimationFrame(() => drawerRef.current?.querySelector<HTMLButtonElement>(`#drawer-tab-${nextTab}`)?.focus())
+  }
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const drawer = drawerRef.current
+    const focusableSelector = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'
+    requestAnimationFrame(() => drawer?.querySelector<HTMLElement>('.drawer-close')?.focus())
+
+    function keepFocusInside(event: KeyboardEvent) {
+      if (event.key !== 'Tab' || !drawer) {
+        return
+      }
+      const focusable = Array.from(drawer.querySelectorAll<HTMLElement>(focusableSelector)).filter((element) => !element.hidden)
+      const first = focusable[0]
+      const last = focusable.at(-1)
+      if (!first || !last) {
+        return
+      }
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    document.addEventListener('keydown', keepFocusInside)
+    return () => {
+      document.removeEventListener('keydown', keepFocusInside)
+      previousFocusRef.current?.focus()
+    }
+  }, [open])
+
   return (
-    <motion.aside
-      className={`motion-drawer motion-drawer-${tab} ${open ? 'is-open' : ''}`}
-      aria-hidden={!open}
-      drag="y"
-      dragControls={dragControls}
-      dragListener={false}
-      dragConstraints={{ top: 0, bottom: 0 }}
-      dragElastic={0.08}
-      animate={{ y: open ? 0 : '112%' }}
-      transition={{ type: 'spring', stiffness: 430, damping: 38 }}
-      onDragEnd={(_, info) => {
-        if (info.offset.y > 50 || info.velocity.y > 400) {
-          onClose()
-        } else {
-          onOpen()
-        }
-      }}
-    >
-      <button
-        className="drawer-grabber"
-        type="button"
-        onPointerDown={(event) => dragControls.start(event)}
-        onClick={() => (open ? onClose() : onOpen())}
-        aria-label={open ? 'Close controls' : 'Open controls'}
-      >
-        <span />
-        <strong>Controls</strong>
-      </button>
-      <div className="drawer-tabs" role="tablist">
-        <button className={tab === 'layout' ? 'active' : ''} type="button" onClick={() => onTab('layout')}>
-          Layout
-        </button>
-        <button className={tab === 'style' ? 'active' : ''} type="button" onClick={() => onTab('style')}>
-          Style
-        </button>
-      </div>
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={tab}
-          className="drawer-content"
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.16 }}
-        >
-          {children}
-        </motion.div>
+    <>
+      <AnimatePresence>
+        {open && (
+          <motion.button
+            className="drawer-backdrop"
+            type="button"
+            tabIndex={-1}
+            aria-label="Close controls"
+            onClick={onClose}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.16 }}
+          />
+        )}
       </AnimatePresence>
-    </motion.aside>
+      <motion.aside
+        ref={drawerRef}
+        className={`motion-drawer motion-drawer-${tab} ${open ? 'is-open' : ''}`}
+        role="dialog"
+        aria-modal={open || undefined}
+        aria-label={tabTitle}
+        aria-hidden={!open}
+        inert={!open || undefined}
+        drag="y"
+        dragControls={dragControls}
+        dragListener={false}
+        dragConstraints={{ top: 0, bottom: 0 }}
+        dragElastic={0.08}
+        animate={{ y: open ? 0 : '112%' }}
+        transition={{ type: 'spring', stiffness: 430, damping: 38 }}
+        onDragEnd={(_, info) => {
+          if (info.offset.y > 50 || info.velocity.y > 400) {
+            onClose()
+          } else {
+            onOpen()
+          }
+        }}
+      >
+        <div className="drawer-heading">
+          <button
+            className="drawer-grabber"
+            type="button"
+            onPointerDown={(event) => dragControls.start(event)}
+            onClick={() => (open ? onClose() : onOpen())}
+            aria-label={open ? 'Close controls' : 'Open controls'}
+          >
+            <span />
+          </button>
+          <div>
+            <span>Edit comic</span>
+            <strong>{tabTitle}</strong>
+          </div>
+          <button className="drawer-close" type="button" aria-label="Done editing comic" onClick={onClose}>
+            Done
+          </button>
+        </div>
+        <div className="drawer-tabs" role="tablist" aria-label="Comic controls">
+          {drawerTabs.map((item) => (
+            <button
+              key={item.id}
+              id={`drawer-tab-${item.id}`}
+              className={tab === item.id ? 'active' : ''}
+              role="tab"
+              aria-controls={`drawer-panel-${item.id}`}
+              aria-selected={tab === item.id}
+              tabIndex={tab === item.id ? 0 : -1}
+              type="button"
+              onKeyDown={(event) => moveTabFocus(event, item.id)}
+              onClick={() => onTab(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={tab}
+            id={`drawer-panel-${tab}`}
+            className="drawer-content"
+            role="tabpanel"
+            aria-labelledby={`drawer-tab-${tab}`}
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.16 }}
+          >
+            {children}
+          </motion.div>
+        </AnimatePresence>
+      </motion.aside>
+    </>
   )
 }
 
 function LayoutPanel({
   layout,
   layouts,
+  pageFormat,
+  formats,
   onLayout,
+  onFormat,
   onCreate,
   onEditCustomLayout,
   onDeleteCustomLayout,
 }: {
   layout: Layout
   layouts: Layout[]
+  pageFormat: PageFormat
+  formats: PageFormat[]
   onLayout: (layout: Layout) => void
+  onFormat: (format: PageFormat) => void
   onCreate: () => void
   onEditCustomLayout: (layoutId: string) => void
   onDeleteCustomLayout: (layoutId: string) => void
@@ -2714,6 +3205,40 @@ function LayoutPanel({
 
   return (
     <div className="layout-library">
+      <section className="canvas-format-section" aria-labelledby="canvas-format-heading">
+        <div className="canvas-format-heading">
+          <div>
+            <strong id="canvas-format-heading">Canvas format</strong>
+            <span>Changes the final image dimensions</span>
+          </div>
+          <em>{`${pageFormat.id} · ${pageFormat.label}`}</em>
+        </div>
+        <div className="drawer-format-grid" role="group" aria-label="Canvas format">
+          {formats.map((format) => (
+            <button
+              key={format.id}
+              type="button"
+              className={pageFormat.id === format.id ? 'active' : ''}
+              aria-pressed={pageFormat.id === format.id}
+              onClick={() => onFormat(format)}
+            >
+              <span style={{ aspectRatio: `${format.width} / ${format.height}` }} aria-hidden="true" />
+              <strong>{format.id}</strong>
+              <em>{format.label}</em>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <div className="current-layout-card" aria-label={`Current layout ${layout.name}`}>
+        <LayoutPreview layout={layout} />
+        <div>
+          <span>Current grid</span>
+          <strong>{layout.name}</strong>
+          <em>{`${layout.panels.length} panel${layout.panels.length === 1 ? '' : 's'}`}</em>
+        </div>
+      </div>
+
       <section className="layout-section" aria-labelledby="saved-grid-heading">
         <div className="layout-section-heading">
           <strong id="saved-grid-heading">Your grids</strong>
@@ -2771,6 +3296,7 @@ function LayoutCard({
   onDelete?: (layoutId: string) => void
 }) {
   const panelLabel = `${option.panels.length} panel${option.panels.length === 1 ? '' : 's'}`
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   return (
     <div className={`layout-card-shell ${option.custom ? 'is-saved' : ''}`}>
@@ -2790,7 +3316,7 @@ function LayoutCard({
           <em>{panelLabel}</em>
         </span>
       </button>
-      {option.custom && onEdit && (
+      {option.custom && onEdit && !confirmingDelete && (
         <button
           className="layout-card-action layout-edit"
           type="button"
@@ -2800,15 +3326,29 @@ function LayoutCard({
           <span aria-hidden="true">Edit</span>
         </button>
       )}
-      {option.custom && onDelete && (
+      {option.custom && onDelete && !confirmingDelete && (
         <button
           className="layout-card-action layout-delete"
           type="button"
           aria-label={`Delete ${option.name} layout`}
-          onClick={() => onDelete(option.id)}
+          onClick={() => setConfirmingDelete(true)}
         >
           <span aria-hidden="true">×</span>
         </button>
+      )}
+      {option.custom && onDelete && confirmingDelete && (
+        <div className="layout-delete-confirm" role="group" aria-label={`Delete ${option.name} layout?`}>
+          <button type="button" onClick={() => setConfirmingDelete(false)}>Cancel</button>
+          <button
+            className="is-danger"
+            type="button"
+            autoFocus
+            aria-label={`Confirm delete ${option.name} layout`}
+            onClick={() => onDelete(option.id)}
+          >
+            Delete
+          </button>
+        </div>
       )}
     </div>
   )
@@ -2904,6 +3444,7 @@ function CreatorPanel({
   pageFormat,
   onName,
   onAddLine,
+  onRemoveLine,
   onMoveLine,
   onThickness,
   onBorderColor,
@@ -2921,7 +3462,8 @@ function CreatorPanel({
   pageFormat: PageFormat
   onName: (name: string) => void
   onAddLine: (preset: CustomLinePreset) => void
-  onMoveLine: (lineId: string, update: Partial<CustomLine>) => void
+  onRemoveLine: (lineId: string) => void
+  onMoveLine: (lineId: string, update: Partial<CustomLine>, shouldSnap?: boolean) => void
   onThickness: (thickness: number) => void
   onBorderColor: (color: string) => void
   onBorderThickness: (thickness: number) => void
@@ -2940,6 +3482,7 @@ function CreatorPanel({
   const [lineTouch, setLineTouch] = useState<LineTouchState | null>(null)
   const lineTouchRef = useRef<LineTouchState | null>(null)
   const linePointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(new Map())
+  const [selectedLineId, setSelectedLineId] = useState<string | null>(draftLines[0]?.id ?? null)
   const previewPanels = useMemo(() => panelsFromLines(draftLines), [draftLines])
   const canvasAspect = pageFormatCanvasAspect(pageFormat)
   const creatorStyle = {
@@ -2950,6 +3493,13 @@ function CreatorPanel({
     '--creator-page-width': pageFormat.width,
     '--creator-page-height': pageFormat.height,
   } as React.CSSProperties
+
+  useEffect(() => {
+    if (selectedLineId && draftLines.some((line) => line.id === selectedLineId)) {
+      return
+    }
+    setSelectedLineId(draftLines[0]?.id ?? null)
+  }, [draftLines, selectedLineId])
 
   function beginLineDrag(event: PointerEvent<HTMLElement>, line: CustomLine, mode: 'line' | 'start' | 'end') {
     event.preventDefault()
@@ -2965,6 +3515,7 @@ function CreatorPanel({
   }
 
   function beginLinePointer(event: PointerEvent<HTMLElement>, line: CustomLine, mode: 'line' | 'start' | 'end') {
+    setSelectedLineId(line.id)
     if (event.pointerType !== 'touch') {
       beginLineDrag(event, line, mode)
       return
@@ -3023,6 +3574,31 @@ function CreatorPanel({
       x2: lineDrag.line.x2 + dx,
       y2: lineDrag.line.y2 + dy,
     })
+  }
+
+  function nudgeLine(event: React.KeyboardEvent<HTMLButtonElement>, line: CustomLine, mode: 'line' | 'start' | 'end') {
+    const directions: Record<string, [number, number]> = {
+      ArrowLeft: [-1, 0],
+      ArrowRight: [1, 0],
+      ArrowUp: [0, -1],
+      ArrowDown: [0, 1],
+    }
+    const direction = directions[event.key]
+    if (!direction) {
+      return
+    }
+    event.preventDefault()
+    setSelectedLineId(line.id)
+    const step = event.shiftKey ? 2 : 0.5
+    const dx = direction[0] * step
+    const dy = direction[1] * step
+    if (mode === 'line') {
+      onMoveLine(line.id, { x1: line.x1 + dx, y1: line.y1 + dy, x2: line.x2 + dx, y2: line.y2 + dy }, false)
+    } else if (mode === 'start') {
+      onMoveLine(line.id, { x1: line.x1 + dx, y1: line.y1 + dy }, false)
+    } else {
+      onMoveLine(line.id, { x2: line.x2 + dx, y2: line.y2 + dy }, false)
+    }
   }
 
   function moveLinePointer(event: PointerEvent<HTMLElement>) {
@@ -3086,6 +3662,7 @@ function CreatorPanel({
 
   function startLineTouch(line: CustomLine, touches: TouchPoints, rect: DOMRect) {
     const center = touchCenterPercent(touches, rect)
+    setSelectedLineId(line.id)
     setLineDrag(null)
     const nextTouch = {
       id: line.id,
@@ -3146,6 +3723,7 @@ function CreatorPanel({
 
   function submitLayout(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    event.stopPropagation()
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur()
     }
@@ -3163,11 +3741,17 @@ function CreatorPanel({
       onSubmit={submitLayout}
     >
       <div className="creator-topbar">
-        <button type="button" onClick={onCancel} aria-label="Close creator">
+        <button type="button" autoFocus onClick={onCancel} aria-label="Close creator">
           Close
         </button>
         <strong>{editing ? 'Edit grid' : 'Create grid'}</strong>
-        <button type="submit" className="primary">
+        <button
+          type="submit"
+          className="primary"
+          aria-label={editing ? 'Update layout' : 'Save layout'}
+          onClick={(event) => event.stopPropagation()}
+          onTouchEnd={(event) => event.stopPropagation()}
+        >
           {editing ? 'Update' : 'Save'}
         </button>
       </div>
@@ -3191,8 +3775,20 @@ function CreatorPanel({
           ))}
           {draftLines.map((line, index) => (
             <React.Fragment key={line.id}>
+              <button
+                className={`creator-line-hit ${selectedLineId === line.id ? 'is-selected' : ''}`}
+                style={lineSegmentStyle(line, canvasAspect)}
+                type="button"
+                aria-label={`Move divider ${index + 1}`}
+                data-divider-id={line.id}
+                onPointerDown={(event) => beginLinePointer(event, line, 'line')}
+                onPointerMove={moveLinePointer}
+                onPointerUp={endLinePointer}
+                onPointerCancel={endLinePointer}
+                onKeyDown={(event) => nudgeLine(event, line, 'line')}
+              />
               <span
-                className={`creator-free-line ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
+                className={`creator-free-line ${selectedLineId === line.id ? 'is-selected' : ''} ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
                 style={lineSegmentStyle(line, canvasAspect)}
                 aria-hidden="true"
                 data-divider-id={line.id}
@@ -3203,7 +3799,7 @@ function CreatorPanel({
                 data-divider-y2={line.y2.toFixed(2)}
               />
               <button
-                className={`creator-handle creator-handle-start ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
+                className={`creator-handle creator-handle-start ${selectedLineId === line.id ? 'is-selected' : ''} ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
                 style={lineHandleStyle(line.x1, line.y1)}
                 type="button"
                 aria-label={`Move divider ${index + 1} start`}
@@ -3214,6 +3810,7 @@ function CreatorPanel({
                 onPointerMove={moveLinePointer}
                 onPointerUp={endLinePointer}
                 onPointerCancel={endLinePointer}
+                onKeyDown={(event) => nudgeLine(event, line, 'start')}
                 onTouchStart={(event) => {
                   if (event.touches.length > 1) {
                     beginLineTouch(event)
@@ -3228,7 +3825,7 @@ function CreatorPanel({
                 onTouchCancel={clearLineTouch}
               />
               <button
-                className={`creator-handle creator-handle-end ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
+                className={`creator-handle creator-handle-end ${selectedLineId === line.id ? 'is-selected' : ''} ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
                 style={lineHandleStyle(line.x2, line.y2)}
                 type="button"
                 aria-label={`Move divider ${index + 1} end`}
@@ -3239,6 +3836,7 @@ function CreatorPanel({
                 onPointerMove={moveLinePointer}
                 onPointerUp={endLinePointer}
                 onPointerCancel={endLinePointer}
+                onKeyDown={(event) => nudgeLine(event, line, 'end')}
                 onTouchStart={(event) => {
                   if (event.touches.length > 1) {
                     beginLineTouch(event)
@@ -3256,70 +3854,67 @@ function CreatorPanel({
           ))}
         </div>
         <div className="creator-side">
-          <p className="creator-gesture-hint">Drag endpoints to shape a divider. Use two fingers to rotate and resize the nearest line.</p>
-          <div className="creator-border-controls" aria-label="Grid border controls">
-            <label className="field creator-border-color">
-              <span>Border color</span>
-              <input
-                type="color"
-                value={borderColor}
-                aria-label="Border color"
-                onChange={(event) => onBorderColor(event.target.value)}
-              />
-            </label>
-            <label className="field creator-thickness">
-              <span>Border thickness</span>
-              <input
-                type="range"
-                min="0"
-                max="10"
-                step="1"
-                value={borderThickness}
-                aria-label="Border thickness"
-                onChange={(event) => onBorderThickness(Number(event.target.value))}
-              />
-              <output>{borderThickness}px</output>
-            </label>
+          <div className="creator-inspector-heading">
+            <div>
+              <span>Grid structure</span>
+              <strong>{`${previewPanels.length} panel${previewPanels.length === 1 ? '' : 's'} · ${draftLines.length} divider${draftLines.length === 1 ? '' : 's'}`}</strong>
+            </div>
+            <em>{selectedLineId ? `Divider ${draftLines.findIndex((line) => line.id === selectedLineId) + 1} selected` : 'No divider selected'}</em>
           </div>
-          <label className="field creator-thickness">
-            <span>Panel gap</span>
-            <input
-              type="range"
-              min="6"
-              max="20"
-              value={dividerThickness}
-              aria-label="Divider thickness"
-              onChange={(event) => onThickness(Number(event.target.value))}
-            />
-            <output>{dividerThickness}px</output>
-          </label>
-          <label className="field">
-            <span>Grid name</span>
-            <input
-              value={draftName}
-              placeholder="My grid"
-              aria-label="Grid name"
-              autoComplete="off"
-              enterKeyHint="done"
-              onChange={(event) => onName(event.target.value)}
-            />
-          </label>
+          <p className="creator-gesture-hint">Drag a line to move it, or drag either endpoint to reshape it. Use two fingers to rotate and resize.</p>
+
+          <section className="creator-control-section" aria-labelledby="divider-tools-heading">
+            <div className="creator-control-heading">
+              <strong id="divider-tools-heading">Divider tools</strong>
+              <span>Add or remove lines</span>
+            </div>
+            <div className="creator-divider-tools">
+              <button type="button" onClick={() => onAddLine('vertical')}>Vertical divider</button>
+              <button type="button" onClick={() => onAddLine('horizontal')}>Horizontal divider</button>
+              <button type="button" onClick={() => onAddLine('diagonal')}>Diagonal divider</button>
+              <button
+                className="is-danger"
+                type="button"
+                disabled={!selectedLineId}
+                onClick={() => selectedLineId && onRemoveLine(selectedLineId)}
+              >
+                Delete selected
+              </button>
+            </div>
+          </section>
+
+          <section className="creator-control-section" aria-labelledby="grid-appearance-heading">
+            <div className="creator-control-heading">
+              <strong id="grid-appearance-heading">Grid appearance</strong>
+              <span>Applied to live and exported comics</span>
+            </div>
+            <div className="creator-border-controls" aria-label="Grid border controls">
+              <ColorField label="Border color" value={borderColor} onChange={onBorderColor} />
+              <RangeField label="Border thickness" value={borderThickness} min={0} max={10} unit="px" onChange={onBorderThickness} />
+            </div>
+            <RangeField label="Panel gap" ariaLabel="Divider thickness" value={dividerThickness} min={6} max={20} unit="px" onChange={onThickness} />
+          </section>
+
+          <section className="creator-control-section" aria-labelledby="grid-details-heading">
+            <div className="creator-control-heading">
+              <strong id="grid-details-heading">Details</strong>
+              <span>Name this grid for your library</span>
+            </div>
+            <label className="field text-field">
+              <span>Grid name</span>
+              <input
+                value={draftName}
+                placeholder="My grid"
+                aria-label="Grid name"
+                autoComplete="off"
+                enterKeyHint="done"
+                onChange={(event) => onName(event.target.value)}
+              />
+            </label>
+          </section>
+
           <div className="creator-actions">
-            <button type="button" onClick={() => onAddLine('diagonal')}>
-              Diagonal divider
-            </button>
-            <button type="button" onClick={() => onAddLine('vertical')}>
-              Vertical divider
-            </button>
-            <button type="button" onClick={() => onAddLine('horizontal')}>
-              Horizontal divider
-            </button>
-            <button type="button" onClick={onReset}>
-              Reset
-            </button>
-            <button type="submit" className="primary" aria-label={editing ? 'Update layout' : 'Save layout'}>
-              {editing ? 'Update grid' : 'Save grid'}
-            </button>
+            <button type="button" onClick={onReset}>Reset grid</button>
           </div>
         </div>
       </div>
@@ -3330,82 +3925,253 @@ function CreatorPanel({
 function StylePanel({
   settings,
   onSettings,
+  onReset,
 }: {
   settings: Settings
   onSettings: (settings: Partial<Settings>) => void
+  onReset: () => void
 }) {
   return (
-    <div className="drawer-stack">
-      <label className="field">
-        <span>Caption</span>
-        <input value={settings.caption} placeholder="Optional title" onChange={(event) => onSettings({ caption: event.target.value })} />
-      </label>
-      <div className="triple-fields">
-        <label className="field">
-          <span>Paper</span>
-          <input type="color" value={settings.background} onChange={(event) => onSettings({ background: event.target.value })} />
+    <div className="drawer-stack style-stack">
+      <SettingsSection title="Caption" description="Add an optional title to the finished comic.">
+        <label className="field text-field">
+          <span>Caption text</span>
+          <input
+            value={settings.caption}
+            placeholder="Add a title…"
+            onChange={(event) => onSettings({ caption: event.target.value })}
+          />
         </label>
-        <label className="field">
-          <span>Border color</span>
-          <input type="color" value={settings.borderColor} onChange={(event) => onSettings({ borderColor: event.target.value })} />
-        </label>
-        <label className="field">
-          <span>Fit</span>
-          <select value={settings.fit} onChange={(event) => onSettings({ fit: event.target.value as PanelFit })}>
-            <option value="cover">Fill</option>
-            <option value="contain">Fit</option>
-          </select>
-        </label>
-      </div>
-      <div className="triple-fields">
-        <label className="field">
-          <span>Gap</span>
-          <input type="range" min="0" max="24" value={settings.gutters} onChange={(event) => onSettings({ gutters: Number(event.target.value) })} />
-        </label>
-        <label className="field">
-          <span>Corner</span>
-          <input type="range" min="0" max="24" value={settings.radius} onChange={(event) => onSettings({ radius: Number(event.target.value) })} />
-        </label>
-        <label className="field">
-          <span>{`Border ${settings.border}px`}</span>
-          <input type="range" min="0" max="10" value={settings.border} onChange={(event) => onSettings({ border: Number(event.target.value) })} />
-        </label>
-      </div>
-      <div className="video-settings">
-        <div>
-          <strong>Story video</strong>
-          <em>Sliding panel reveal, exported for vertical reels when using 9:16.</em>
+        <ColorField
+          label="Caption color"
+          value={settings.captionColor}
+          onChange={(captionColor) => onSettings({ captionColor })}
+        />
+      </SettingsSection>
+
+      <SettingsSection title="Canvas" description="Set the page and line colors.">
+        <div className="color-field-grid">
+          <ColorField label="Paper" value={settings.background} onChange={(background) => onSettings({ background })} />
+          <ColorField label="Panel stroke" value={settings.borderColor} onChange={(borderColor) => onSettings({ borderColor })} />
         </div>
-        <label className="field">
-          <span>{`Duration ${settings.videoDuration}s`}</span>
-          <input
-            aria-label="Video duration"
-            type="range"
-            min="3"
-            max="10"
-            step="1"
-            value={settings.videoDuration}
-            onChange={(event) => onSettings({ videoDuration: Number(event.target.value) })}
-          />
-        </label>
-        <label className="field">
-          <span>{`Speed ${settings.videoSpeed.toFixed(1)}x`}</span>
-          <input
-            aria-label="Video speed"
-            type="range"
-            min="0.6"
-            max="1.8"
-            step="0.1"
-            value={settings.videoSpeed}
-            onChange={(event) => onSettings({ videoSpeed: Number(event.target.value) })}
-          />
-        </label>
-      </div>
+      </SettingsSection>
+
+      <SettingsSection title="Panels" description="Tune spacing and edge treatment across the whole grid.">
+        <div className="fit-segmented" role="group" aria-label="Default photo fit">
+          <button type="button" className={settings.fit === 'cover' ? 'active' : ''} aria-pressed={settings.fit === 'cover'} onClick={() => onSettings({ fit: 'cover' })}>
+            <strong>Fill</strong>
+            <span>Crop to frame</span>
+          </button>
+          <button type="button" className={settings.fit === 'contain' ? 'active' : ''} aria-pressed={settings.fit === 'contain'} onClick={() => onSettings({ fit: 'contain' })}>
+            <strong>Fit</strong>
+            <span>Show whole photo</span>
+          </button>
+        </div>
+        <RangeField label="Panel gap" value={settings.gutters} min={0} max={24} unit="px" onChange={(gutters) => onSettings({ gutters })} />
+        <RangeField label="Corner radius" value={settings.radius} min={0} max={24} unit="px" onChange={(radius) => onSettings({ radius })} />
+        <RangeField label="Stroke width" value={settings.border} min={0} max={10} unit="px" onChange={(border) => onSettings({ border })} />
+      </SettingsSection>
+
+      <button className="settings-reset" type="button" onClick={onReset}>Reset appearance</button>
     </div>
   )
 }
 
-function InstallerScreen({
+function SettingsSection({
+  title,
+  description,
+  children,
+}: {
+  title: string
+  description: string
+  children: React.ReactNode
+}) {
+  return (
+    <section className="settings-section">
+      <div className="settings-section-heading">
+        <strong>{title}</strong>
+        <span>{description}</span>
+      </div>
+      <div className="settings-section-body">{children}</div>
+    </section>
+  )
+}
+
+function RangeField({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  unit,
+  ariaLabel,
+  onChange,
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step?: number
+  unit: string
+  ariaLabel?: string
+  onChange: (value: number) => void
+}) {
+  return (
+    <label className="range-field">
+      <span>
+        <strong>{label}</strong>
+        <output aria-hidden="true">{`${step < 1 ? value.toFixed(1) : value}${unit}`}</output>
+      </span>
+      <input
+        aria-label={ariaLabel ?? label}
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  )
+}
+
+function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="color-field">
+      <span>{label}</span>
+      <span className="color-field-control">
+        <input aria-label={label} type="color" value={value} onChange={(event) => onChange(event.target.value)} />
+        <output aria-hidden="true">{value.toUpperCase()}</output>
+      </span>
+    </label>
+  )
+}
+
+function ExportPanel({
+  settings,
+  capturedCount,
+  panelCount,
+  pageFormat,
+  imageExporting,
+  photoProcessing,
+  videoRendering,
+  videoProgress,
+  videoProgressPhase,
+  readyVideo,
+  onSettings,
+  onDownloadImage,
+  onShareImage,
+  onExportVideo,
+  onDownloadVideo,
+  onShareVideo,
+  onDismissVideo,
+}: {
+  settings: Settings
+  capturedCount: number
+  panelCount: number
+  pageFormat: PageFormat
+  imageExporting: boolean
+  photoProcessing: boolean
+  videoRendering: boolean
+  videoProgress: number
+  videoProgressPhase: StoryVideoRenderPhase
+  readyVideo: ReadyStoryVideo | null
+  onSettings: (settings: Partial<Settings>) => void
+  onDownloadImage: () => Promise<void>
+  onShareImage: () => Promise<void>
+  onExportVideo: () => Promise<void>
+  onDownloadVideo: (video: ReadyStoryVideo) => void
+  onShareVideo: (video: ReadyStoryVideo) => Promise<void>
+  onDismissVideo: () => void
+}) {
+  const exportWidth = 1440
+  const exportHeight = Math.round((exportWidth * pageFormat.height) / pageFormat.width)
+  const isIncomplete = capturedCount < panelCount
+  const imageBusy = imageExporting || photoProcessing
+  return (
+    <div className="export-stack">
+      <section className="export-card export-image-card">
+        <div className="export-card-heading">
+          <span className="export-card-icon" aria-hidden="true"><ActionIcon name="image" /></span>
+          <div>
+            <strong>Shareable image</strong>
+            <span>{`${exportWidth} × ${exportHeight} PNG`}</span>
+          </div>
+        </div>
+        {isIncomplete && (
+          <div className="export-warning" role="status">
+            <strong>{`${panelCount - capturedCount} panel${panelCount - capturedCount === 1 ? '' : 's'} still empty`}</strong>
+            <span>You can export now, but empty panels will remain blank.</span>
+          </div>
+        )}
+        {photoProcessing && (
+          <div className="export-warning" role="status">
+            <strong>Finishing the latest photo</strong>
+            <span>Download and share will unlock as soon as it is safely in the comic.</span>
+          </div>
+        )}
+        <div className="export-image-actions">
+          <button className="primary export-primary" type="button" disabled={imageBusy} onClick={() => void onDownloadImage()}>
+            <ActionIcon name="image" />
+            {imageExporting ? 'Preparing…' : 'Download PNG'}
+          </button>
+          <button className="export-secondary" type="button" disabled={imageBusy} onClick={() => void onShareImage()}>
+            <ActionIcon name="share" />
+            Share PNG
+          </button>
+        </div>
+        <p>Download saves directly. Share opens your device share menu.</p>
+      </section>
+
+      <section className="export-card video-settings">
+        <div className="export-card-heading">
+          <span className="export-card-icon" aria-hidden="true"><ActionIcon name="video" /></span>
+          <div>
+            <strong>Story video</strong>
+            <span>Animated panel reveal for stories and reels</span>
+          </div>
+        </div>
+        <RangeField label="Duration" ariaLabel="Video duration" value={settings.videoDuration} min={3} max={10} unit="s" onChange={(videoDuration) => onSettings({ videoDuration })} />
+        <RangeField label="Reveal speed" ariaLabel="Video speed" value={settings.videoSpeed} min={0.6} max={1.8} step={0.1} unit="×" onChange={(videoSpeed) => onSettings({ videoSpeed })} />
+
+        {videoRendering ? (
+          <div
+            className="video-render-progress"
+            role="progressbar"
+            aria-label="Rendering story video"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(videoProgress * 100)}
+            aria-valuetext={`${videoProgressPhase === 'finalizing' ? 'Finalizing' : 'Rendering'} ${Math.round(videoProgress * 100)}%`}
+          >
+            <span style={{ width: `${Math.round(videoProgress * 100)}%` }} />
+            <em>{`${videoProgressPhase === 'finalizing' ? 'Finalizing' : 'Rendering'} ${Math.round(videoProgress * 100)}%`}</em>
+          </div>
+        ) : readyVideo ? (
+          <div className="video-ready-card" role="region" aria-label="Video ready actions">
+            <span className="sr-status" role="status" aria-live="polite">Story video ready.</span>
+            <div>
+              <strong>Video ready</strong>
+              <em>{`${readyVideo.width} × ${readyVideo.height} ${readyVideo.extension.toUpperCase()}`}</em>
+            </div>
+            <div className="video-ready-actions">
+              <button type="button" onClick={() => onDownloadVideo(readyVideo)}>Download video</button>
+              <button type="button" onClick={() => void onShareVideo(readyVideo)}>Share video</button>
+              <button type="button" aria-label="Dismiss video ready" onClick={onDismissVideo}>×</button>
+            </div>
+          </div>
+        ) : (
+          <button className="primary export-primary" type="button" disabled={photoProcessing || imageExporting} onClick={() => void onExportVideo()}>
+            <ActionIcon name="video" />
+            Export story video
+          </button>
+        )}
+      </section>
+    </div>
+  )
+}
+
+function InstallNudge({
   appContext,
   deferredPrompt,
   onTriggerNativeInstall,
@@ -3418,47 +4184,42 @@ function InstallerScreen({
   const isSafari = appContext.browserName === 'Safari'
 
   return (
-    <section className="installer-screen" aria-label="Install Instacomic">
-      <div className="installer-panel">
-        <div className="installer-kicker">Installer only</div>
-        <h1>Install Instacomic</h1>
-        <p className="installer-copy">The browser page only installs the app. Create comics from the Home Screen app after install.</p>
-
+    <details className="install-nudge">
+      <summary>
+        <span className="install-nudge-icon" aria-hidden="true"><ActionIcon name="install" /></span>
+        <span>
+          <strong>Install for faster access</strong>
+          <em>Optional · the browser editor works too</em>
+        </span>
+        <i aria-hidden="true">›</i>
+      </summary>
+      <div className="install-nudge-body">
+        <p>Keep Instacomic on your Home Screen for a full-screen, app-like editor.</p>
         {deferredPrompt ? (
           <button className="installer-primary" type="button" onClick={() => void onTriggerNativeInstall()}>
             Add to Home Screen
           </button>
         ) : (
-          <a className="installer-primary" href="#installer-steps">
-            Add to Home Screen
-          </a>
-        )}
-
-        {!deferredPrompt && (
           <div className="installer-note" role="status">
-            Use {browserName}'s own menu to finish adding Instacomic to your Home Screen.
+            Use {browserName}'s menu and choose <strong>Add to Home Screen</strong> or <strong>Install app</strong>.
           </div>
         )}
-
-        <div id="installer-steps" className="installer-steps">
-          <h2>{deferredPrompt ? 'If the install prompt does not appear' : 'Add it to your Home Screen'}</h2>
+        <ol className="installer-steps">
           {appContext.isIos ? (
-            <ol>
-              {!isSafari && <li>Open this page from {browserName}'s browser menu or in Safari.</li>}
-              <li>Tap the browser toolbar Share button or menu button.</li>
-              <li>Choose Add to Home Screen from the browser action list.</li>
-              <li>Launch Instacomic from the new Home Screen icon.</li>
-            </ol>
+            <>
+              {!isSafari && <li>Open this page in Safari.</li>}
+              <li>Tap Share in the browser toolbar.</li>
+              <li>Choose Add to Home Screen.</li>
+            </>
           ) : (
-            <ol>
-              <li>Open the browser menu for this page.</li>
+            <>
+              <li>Open the browser menu.</li>
               <li>Choose Install app or Add to Home screen.</li>
-              <li>Launch Instacomic from the installed app icon.</li>
-            </ol>
+            </>
           )}
-        </div>
+        </ol>
       </div>
-    </section>
+    </details>
   )
 }
 
@@ -4661,4 +5422,8 @@ if (!root) {
   throw new Error('Missing app root')
 }
 
-createRoot(root).render(<App />)
+createRoot(root).render(
+  <MotionConfig reducedMotion="user">
+    <App />
+  </MotionConfig>,
+)

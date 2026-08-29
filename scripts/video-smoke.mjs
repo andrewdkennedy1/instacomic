@@ -21,7 +21,7 @@ await page.addInitScript(() => {
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
 await page.getByRole('button', { name: /9:16/ }).tap()
-await page.getByRole('button', { name: 'Start' }).tap()
+await page.getByRole('button', { name: 'Start creating' }).tap()
 await page.locator('.start-screen').waitFor({ state: 'detached' })
 await tapStrip(page, 0.75, 0.31)
 await page.waitForFunction(() => document.querySelector('.live-panel.is-live')?.getAttribute('data-panel-id') === '2')
@@ -35,13 +35,19 @@ await page.setInputFiles('.photo-upload', {
 })
 await page.waitForFunction(() => document.querySelector('[data-panel-id="2"] img'))
 
-await openDrawer(page)
-await page.getByRole('button', { name: 'Style', exact: true }).tap()
-await page.getByText('Story video').waitFor({ state: 'visible' })
-const videoConfigVisible = await page.getByText('Story video').isVisible()
+const headerExport = page.getByRole('button', { name: 'Open export controls' })
+await headerExport.tap()
+const exportDrawer = page.getByRole('dialog', { name: 'Export comic' })
+await exportDrawer.waitFor({ state: 'visible' })
+const exportTab = exportDrawer.getByRole('tab', { name: 'Export', exact: true })
+const exportTabSelected = (await exportTab.getAttribute('aria-selected')) === 'true'
+const storyVideoCard = exportDrawer.locator('.export-card.video-settings')
+await storyVideoCard.getByText('Story video', { exact: true }).waitFor({ state: 'visible' })
+const videoConfigVisible = await storyVideoCard.isVisible()
 await setRangeValue(page, 'Video duration', '3')
 await setRangeValue(page, 'Video speed', '1.8')
-await closeDrawer(page)
+const configuredDuration = await page.getByLabel('Video duration').inputValue()
+const configuredSpeed = await page.getByLabel('Video speed').inputValue()
 
 const captureBarFits = await page.locator('.capture-bar').evaluate((bar) => {
   const barBox = bar.getBoundingClientRect()
@@ -49,8 +55,9 @@ const captureBarFits = await page.locator('.capture-bar').evaluate((bar) => {
   return buttons.every((button) => button.left >= barBox.left - 1 && button.right <= barBox.right + 1)
 })
 
-const downloadPromise = page.waitForEvent('download', { timeout: 45000 })
-await page.getByRole('button', { name: 'Export story video' }).tap()
+const observedDownloads = []
+page.on('download', (download) => observedDownloads.push(download))
+await storyVideoCard.getByRole('button', { name: 'Export story video' }).tap()
 await page.locator('.video-render-progress').waitFor({ state: 'visible', timeout: 5000 })
 await page.evaluate(() => {
   window.__instacomicVideoProgressSamples = []
@@ -73,11 +80,9 @@ await page.waitForFunction(
 )
 const progressBarValue = Number(await page.locator('.video-render-progress').getAttribute('aria-valuenow'))
 const progressText = await page.locator('.video-render-progress em').textContent()
-const download = await downloadPromise
-const downloadPath = await download.path()
-const fileSize = downloadPath ? statSync(downloadPath).size : 0
-const fileIsMp4 = downloadPath ? isMp4File(downloadPath) : false
-await page.locator('.video-ready-card').waitFor({ state: 'visible', timeout: 5000 })
+await page.locator('.video-ready-card').waitFor({ state: 'visible', timeout: 45000 })
+await page.waitForTimeout(200)
+const autoDownloadCount = observedDownloads.length
 const readyCardVisible = await page.locator('.video-ready-card').isVisible()
 const readyActionCount = await page.locator('.video-ready-actions button').count()
 const manualDownloadPromise = page.waitForEvent('download', { timeout: 15000 })
@@ -86,20 +91,26 @@ const manualDownload = await manualDownloadPromise
 const manualDownloadPath = await manualDownload.path()
 const manualFileSize = manualDownloadPath ? statSync(manualDownloadPath).size : 0
 const manualFileIsMp4 = manualDownloadPath ? isMp4File(manualDownloadPath) : false
+const explicitDownloadCount = observedDownloads.length
 const progressSamples = await page.evaluate(() => {
   window.clearInterval(window.__instacomicVideoProgressTimer)
   return window.__instacomicVideoProgressSamples
 })
 const status = await page.locator('#app-status').textContent()
 const result = {
-  suggestedFilename: download.suggestedFilename(),
-  fileSize,
-  fileIsMp4,
+  suggestedFilename: manualDownload.suggestedFilename(),
+  fileSize: manualFileSize,
+  fileIsMp4: manualFileIsMp4,
   manualSuggestedFilename: manualDownload.suggestedFilename(),
   manualFileSize,
   manualFileIsMp4,
+  exportTabSelected,
   videoConfigVisible,
+  configuredDuration,
+  configuredSpeed,
   captureBarFits,
+  autoDownloadCount,
+  explicitDownloadCount,
   progressBarValue,
   progressText,
   sawFinalizing: progressSamples.some((sample) => /Finalizing/i.test(sample.text)),
@@ -117,11 +128,14 @@ const failures = [
   /\.mp4$/.test(result.suggestedFilename) ? null : 'story video export did not produce an MP4 file',
   result.fileSize > 2048 ? null : 'story video export produced an empty or tiny file',
   result.fileIsMp4 ? null : 'story video export did not produce MP4 bytes',
-  result.manualSuggestedFilename === result.suggestedFilename ? null : 'manual video download used a different filename',
   result.manualFileSize > 2048 ? null : 'manual video download fallback produced an empty or tiny file',
   result.manualFileIsMp4 ? null : 'manual video download fallback did not produce MP4 bytes',
-  result.videoConfigVisible ? null : 'story video configuration is not visible in the save drawer',
+  result.exportTabSelected ? null : 'header Export control did not open the Export tab',
+  result.videoConfigVisible ? null : 'story video configuration is not visible in the Export drawer',
+  result.configuredDuration === '3' && result.configuredSpeed === '1.8' ? null : 'story video settings did not update in the Export drawer',
   result.captureBarFits ? null : 'capture bar buttons do not fit after adding video export',
+  result.autoDownloadCount === 0 ? null : 'story video downloaded automatically before the explicit Download action',
+  result.explicitDownloadCount === 1 ? null : 'explicit Download action did not produce exactly one download',
   Number.isFinite(result.progressBarValue) && result.progressBarValue > 0 && result.progressBarValue <= 100
     ? null
     : 'story video progress bar did not expose advancing render progress',
@@ -157,30 +171,4 @@ async function setRangeValue(page, label, value) {
     },
     value,
   )
-}
-
-async function openDrawer(page) {
-  const doneEditing = page.getByRole('button', { name: /Done editing panel/ })
-  if ((await doneEditing.count()) > 0) {
-    await doneEditing.evaluate((button) => button.click()).catch(() => undefined)
-    await doneEditing.waitFor({ state: 'detached' }).catch(() => undefined)
-  }
-  await page.locator('.capture-bar button[aria-label="Controls"]').tap()
-  try {
-    await page.locator('.motion-drawer.is-open').waitFor({ timeout: 1200 })
-  } catch {
-    await page.locator('.capture-bar button[aria-label="Controls"]').evaluate((button) => button.click())
-    await page.locator('.motion-drawer.is-open').waitFor()
-  }
-}
-
-async function closeDrawer(page) {
-  const open = await page.locator('.motion-drawer.is-open').count()
-  if (open > 0) {
-    await page.locator('.motion-drawer.is-open .drawer-grabber').evaluate((button) => button.click())
-  }
-  await page.waitForFunction(() => {
-    const box = document.querySelector('.motion-drawer')?.getBoundingClientRect()
-    return !!box && box.top > window.innerHeight
-  })
 }

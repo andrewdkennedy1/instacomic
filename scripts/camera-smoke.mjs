@@ -23,13 +23,13 @@ await page.addInitScript(() => {
 })
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
-await page.getByRole('button', { name: 'Start' }).tap()
+await page.getByRole('button', { name: 'Start creating' }).tap()
 await tapStrip(page, 0.75, 0.31)
 await page.waitForFunction(() => document.querySelector('.live-frame'))
 await page.waitForFunction(() => document.querySelector('.live-camera')?.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA)
 const liveFrameBefore = await page.locator('[data-panel-id="2"] .live-frame').count()
 await page.locator('.shutter').tap()
-await page.waitForFunction(() => document.querySelector('[data-panel-id="2"] img'))
+await waitForCapturedPanel(page, '2')
 const capturedFrame = await page.locator('[data-panel-id="2"] img').evaluate((image) => {
   const panel = image.closest('.live-panel')?.getBoundingClientRect()
   const box = image.getBoundingClientRect()
@@ -44,11 +44,11 @@ const capturedFrame = await page.locator('[data-panel-id="2"] img').evaluate((im
   }
 })
 await page.locator('.shutter').tap()
-await page.waitForFunction(() => document.querySelector('[data-panel-id="3"] img'))
+await waitForCapturedPanel(page, '3')
 await page.locator('.shutter').tap()
-await page.waitForFunction(() => document.querySelector('[data-panel-id="4"] img'))
+await waitForCapturedPanel(page, '4')
 await page.locator('.shutter').tap()
-await page.waitForFunction(() => document.querySelector('[data-panel-id="5"] img'))
+await waitForCapturedPanel(page, '5')
 
 const result = {
   title: await page.title(),
@@ -85,4 +85,19 @@ if (failures.length > 0) {
 async function tapStrip(page, nx, ny) {
   const box = await page.locator('.live-strip').boundingBox()
   await page.mouse.click(box.x + box.width * nx, box.y + box.height * ny)
+}
+
+async function waitForCapturedPanel(page, panelId) {
+  try {
+    await page.waitForFunction((id) => document.querySelector(`[data-panel-id="${id}"] img`), panelId, { timeout: 15000 })
+  } catch (error) {
+    const state = await page.evaluate(() => ({
+      status: document.querySelector('#app-status')?.textContent?.trim(),
+      activePanel: document.querySelector('.live-panel.is-live')?.getAttribute('data-panel-id'),
+      photoProcessing: document.querySelector('.native-shell')?.getAttribute('data-photo-processing'),
+      cameraReadyState: document.querySelector('.live-camera')?.readyState,
+      shutterDisabled: document.querySelector('.shutter')?.disabled,
+    }))
+    throw new Error(`Panel ${panelId} capture timed out: ${JSON.stringify(state)}`, { cause: error })
+  }
 }

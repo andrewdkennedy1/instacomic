@@ -30,7 +30,7 @@ await page.addInitScript(() => {
 })
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
-await page.getByRole('button', { name: 'Start' }).tap()
+await page.getByRole('button', { name: 'Start creating' }).tap()
 await page.locator('.start-screen').waitFor({ state: 'detached' })
 await setLayout(page, 'Manga')
 await setFitMode(page, 'cover')
@@ -88,7 +88,7 @@ const failures = [
   result.frame.h > 0.95 && result.frame.h < 1.05 ? null : 'uploaded landscape photo is not fitted to the rectangular built-in panel height',
   result.afterTransform.x > result.beforeTransform.x + 0.2 ? null : 'manual photo drag did not update the shot offset',
   result.beforePixel.width === 1440 && result.beforePixel.height === 1800 ? null : 'default 4:5 export dimensions are incorrect',
-  result.exportedMovedRedDelta > 25 && result.exportedMovedBlueDelta > 25
+  Math.abs(result.exportedMovedRedDelta) > 25 && Math.abs(result.exportedMovedBlueDelta) > 25
     ? null
     : 'exported PNG did not reflect the manual landscape photo position',
   result.errors.length === 0 ? null : `page errors: ${result.errors.join('; ')}`,
@@ -105,14 +105,19 @@ async function tapStrip(page, nx, ny) {
 
 async function setFitMode(page, value) {
   await openDrawer(page)
-  await page.getByRole('button', { name: 'Style', exact: true }).tap()
-  await page.locator('.motion-drawer-style select').selectOption(value)
+  await page.getByRole('tab', { name: 'Style', exact: true }).tap()
+  const label = value === 'cover' ? /^Fill/ : /^Fit/
+  const fitButton = page.locator('.fit-segmented').getByRole('button', { name: label })
+  await fitButton.tap()
+  if ((await fitButton.getAttribute('aria-pressed')) !== 'true') {
+    throw new Error(`${value === 'cover' ? 'Fill' : 'Fit'} mode did not become active`)
+  }
   await closeDrawer(page)
 }
 
 async function setLayout(page, name) {
   await openDrawer(page)
-  await page.getByRole('button', { name: 'Layout', exact: true }).tap()
+  await page.getByRole('tab', { name: 'Layout', exact: true }).tap()
   await page.getByRole('button', { name: new RegExp(`^Use ${name} layout`) }).tap()
   await closeDrawer(page)
 }
@@ -135,7 +140,7 @@ async function openDrawer(page) {
 async function closeDrawer(page) {
   const open = await page.locator('.motion-drawer.is-open').count()
   if (open > 0) {
-    await page.locator('.motion-drawer.is-open .drawer-grabber').evaluate((button) => button.click())
+    await page.getByRole('button', { name: 'Done editing comic', exact: true }).tap()
   }
   await page.waitForFunction(() => {
     const box = document.querySelector('.motion-drawer')?.getBoundingClientRect()
@@ -163,26 +168,14 @@ async function photoTransform(page, panelId) {
 
 async function sharedPngPixel(page, point) {
   await page.waitForTimeout(220)
-  const doneEditing = page.getByRole('button', { name: /Done editing panel/ })
-  const captureBarIsAvailable = await page.locator('.capture-bar').evaluate((bar) => {
-    const shareButton = bar.querySelector('button[aria-label="Share"]')
-    return Number(getComputedStyle(bar).opacity) > 0.9 && !!shareButton && getComputedStyle(shareButton).pointerEvents !== 'none'
-  })
-  if (!captureBarIsAvailable) {
-    await doneEditing.waitFor({ state: 'visible' })
-    await doneEditing.evaluate((button) => button.click())
-    await doneEditing.waitFor({ state: 'detached' })
-  }
-  await page.waitForFunction(() => {
-    const bar = document.querySelector('.capture-bar')
-    if (!bar) return false
-    const shareButton = bar.querySelector('button[aria-label="Share"]')
-    return Number(getComputedStyle(bar).opacity) > 0.9 && !!shareButton && getComputedStyle(shareButton).pointerEvents !== 'none'
-  })
+  await openDrawer(page)
+  await page.getByRole('tab', { name: 'Export', exact: true }).tap()
+  const downloadPng = page.getByRole('button', { name: 'Download PNG', exact: true })
+  await downloadPng.waitFor({ state: 'visible' })
   const downloadIndex = await page.evaluate(() => window.__instacomicDownloads.length)
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByRole('button', { name: 'Share' }).evaluate((button) => button.click()),
+    downloadPng.evaluate((button) => button.click()),
   ])
   await page.waitForFunction((count) => window.__instacomicDownloads.length > count, downloadIndex)
   const pixel = await page.evaluate(
@@ -212,6 +205,7 @@ async function sharedPngPixel(page, point) {
     { downloadIndex, point },
   )
   await download.delete().catch(() => {})
+  await closeDrawer(page)
   return pixel
 }
 

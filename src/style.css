@@ -1682,17 +1682,6 @@ input:disabled {
 
 }
 
-@media (orientation: landscape) and (pointer: coarse) and (max-height: 640px) {
-  .native-shell {
-    top: var(--app-height, 100dvh);
-    left: 0;
-    width: var(--app-height, 100dvh);
-    height: 100dvw;
-    transform: rotate(-90deg);
-    transform-origin: top left;
-  }
-}
-
 .start-actions {
   display: flex;
   flex-direction: column;

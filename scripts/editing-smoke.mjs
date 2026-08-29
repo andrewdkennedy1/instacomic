@@ -22,7 +22,7 @@ await page.addInitScript(() => {
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
 await page.getByRole('button', { name: /9:16/ }).tap()
-await page.getByRole('button', { name: 'Start' }).tap()
+await page.getByRole('button', { name: 'Start creating' }).tap()
 await page.locator('.start-screen').waitFor({ state: 'detached' })
 const baselineUndoDisabled = await page.getByRole('button', { name: 'Undo' }).isDisabled()
 const baselineRedoDisabled = await page.getByRole('button', { name: 'Redo' }).isDisabled()
@@ -42,7 +42,7 @@ await page.waitForTimeout(240)
 const duringTrayActivationBox = await page.locator('.live-strip').boundingBox()
 await page.mouse.up()
 
-const tray = page.getByRole('toolbar', { name: 'Panel 1 photo controls' })
+const tray = page.getByRole('group', { name: 'Panel 1 photo controls' })
 await tray.waitFor()
 await page.waitForFunction(() => Number.parseFloat(getComputedStyle(document.querySelector('.capture-bar')).opacity) < 0.05)
 const afterTrayActivationBox = await page.locator('.live-strip').boundingBox()
@@ -177,20 +177,15 @@ const backgroundFlushSaved =
 await dragPanelPhoto(page, 0.28, 0.5, 32, 18)
 const draftTransform = await photoTransform(page, '1')
 await openDrawer(page)
-await page.getByRole('button', { name: 'Style', exact: true }).tap()
-await page
-  .locator('.motion-drawer-style label')
-  .filter({ hasText: 'Paper' })
-  .locator('input[type="color"]')
-  .evaluate((input) => {
+await page.getByRole('tab', { name: 'Style', exact: true }).tap()
+await page.getByLabel('Paper').evaluate((input) => {
     const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
     valueSetter?.call(input, '#ffed5a')
     input.dispatchEvent(new Event('input', { bubbles: true }))
     input.dispatchEvent(new Event('change', { bubbles: true }))
-  })
+})
 await closeDrawer(page)
-const draftBeforeSave = await readDraft(page)
-const savedDraftRecord = await waitForDraftRevision(page, (draftBeforeSave?.revision ?? 0) + 1)
+const savedDraftRecord = await waitForDraftSetting(page, 'background', '#ffed5a')
 await page.waitForFunction(() => document.querySelector('.native-shell')?.getAttribute('data-autosave-state') === 'saved')
 const savedAssetCount = await readAssetCount(page)
 const revisionBeforeIdle = savedDraftRecord.revision
@@ -212,6 +207,58 @@ const restoredFormat = await page.locator('.live-strip').getAttribute('data-page
 const restoredFit = await page.locator('[data-panel-id="1"] img').getAttribute('data-shot-fit')
 const restoredPaper = await page.locator('.live-strip').evaluate((strip) => getComputedStyle(strip).getPropertyValue('--paper').trim())
 const restoredPhotoCount = await page.locator('.live-panel img').count()
+await page.getByRole('button', { name: 'Back to projects' }).tap()
+await page.locator('.start-screen').waitFor()
+await page.waitForFunction(() => {
+  const button = document.querySelector('.recovery-actions .start-button')
+  return button instanceof HTMLButtonElement && !button.disabled
+})
+const homeRecoveryVisible = await page.getByRole('button', { name: 'Continue editing' }).count()
+const editorInertAtHome = await page.locator('.comic-stage').evaluate((stage) => stage.hasAttribute('inert'))
+await page.getByRole('button', { name: 'Continue editing' }).tap()
+await page.locator('.start-screen').waitFor({ state: 'detached' })
+const continuedFromHomePhotoCount = await page.locator('.live-panel img').count()
+const formatHistoryBefore = await historyCount(page, 'undo')
+await openDrawer(page)
+await page.waitForFunction(() => document.activeElement?.classList.contains('drawer-close'))
+const drawerInitialFocusInside = await page.locator('.motion-drawer.is-open').evaluate((drawer) => drawer.contains(document.activeElement))
+const drawerTargetsMeet44 = await page.locator('.motion-drawer.is-open').evaluate((drawer) =>
+  [...drawer.querySelectorAll('.drawer-tabs button, .drawer-close')].every((control) => {
+    const box = control.getBoundingClientRect()
+    return box.width >= 44 && box.height >= 44
+  }),
+)
+await page.getByRole('tab', { name: 'Layout', exact: true }).tap()
+await page.getByRole('tab', { name: 'Layout', exact: true }).press('ArrowRight')
+await page.waitForFunction(() => {
+  const styleTab = [...document.querySelectorAll('[role="tab"]')].find((item) => item.textContent?.trim() === 'Style')
+  return styleTab?.getAttribute('aria-selected') === 'true' && document.activeElement === styleTab
+})
+const drawerKeyboardTabsWork =
+  (await page.getByRole('tab', { name: 'Style', exact: true }).getAttribute('aria-selected')) === 'true' &&
+  (await page.getByRole('tab', { name: 'Style', exact: true }).evaluate((tab) => document.activeElement === tab))
+await page.getByRole('tab', { name: 'Style', exact: true }).press('ArrowLeft')
+await page.getByRole('button', { name: /^4:5/ }).tap()
+const editorFormatChanged = (await page.locator('.live-strip').getAttribute('data-page-format')) === '4:5'
+await closeDrawer(page)
+await page.getByRole('button', { name: 'Undo' }).tap()
+await page.waitForFunction(() => document.querySelector('.live-strip')?.getAttribute('data-page-format') === '9:16')
+const editorFormatUndoRestored =
+  (await page.locator('.live-strip').getAttribute('data-page-format')) === '9:16' &&
+  (await historyCount(page, 'undo')) === formatHistoryBefore
+await openDrawer(page)
+await page.keyboard.press('Escape')
+await waitForDrawerHidden(page)
+const drawerFocusRestored = await page.evaluate(() => document.activeElement?.getAttribute('aria-label') === 'Controls')
+const closedDrawerInert = await page.locator('.motion-drawer').evaluate((drawer) => drawer.hasAttribute('inert') && drawer.getAttribute('aria-hidden') === 'true')
+const coreTargetsMeet44 = await page.evaluate(() =>
+  [...document.querySelectorAll('.editor-header button:not(:disabled), .capture-actions button:not(:disabled)')].every((control) => {
+    const box = control.getBoundingClientRect()
+    return box.width >= 44 && box.height >= 44
+  }),
+)
+await selectPanel(page, '1')
+await page.getByRole('group', { name: 'Panel 1 photo controls' }).waitFor()
 await page.evaluate(() => document.exitFullscreen?.())
 await page.setViewportSize({ width: 320, height: 568 })
 await page.waitForTimeout(220)
@@ -222,8 +269,15 @@ const shortScreenGeometry = await page.evaluate(() => {
   return {
     historyClearsCanvas: !!history && !!strip && history.bottom <= strip.top + 1,
     trayClearsCanvas: !!tray && !!strip && strip.bottom <= tray.top + 1,
+    canvasAspect: strip ? strip.height / strip.width : 0,
   }
 })
+await page.setViewportSize({ width: 1024, height: 768 })
+await page.waitForTimeout(220)
+const tabletGeometry = await responsiveCanvasGeometry(page)
+await page.setViewportSize({ width: 844, height: 390 })
+await page.waitForTimeout(220)
+const landscapeGeometry = await responsiveCanvasGeometry(page)
 await page.setViewportSize({ width: 390, height: 844 })
 
 await page.reload({ waitUntil: 'networkidle' })
@@ -300,7 +354,20 @@ const result = {
   restoredFit,
   restoredPaper,
   restoredPhotoCount,
+  homeRecoveryVisible,
+  editorInertAtHome,
+  continuedFromHomePhotoCount,
+  editorFormatChanged,
+  editorFormatUndoRestored,
+  drawerInitialFocusInside,
+  drawerTargetsMeet44,
+  drawerKeyboardTabsWork,
+  drawerFocusRestored,
+  closedDrawerInert,
+  coreTargetsMeet44,
   shortScreenGeometry,
+  tabletGeometry,
+  landscapeGeometry,
   startNewVisible,
   draftPreservedDuringChoice,
   newComicPhotoCount,
@@ -366,7 +433,22 @@ const failures = [
   result.restoredFit === 'contain' ? null : 'Continue did not restore the per-photo fit',
   result.restoredPaper === '#ffed5a' ? null : 'Continue did not restore saved style settings',
   result.restoredPhotoCount === 1 ? null : 'Continue did not restore the saved photo',
+  result.homeRecoveryVisible === 1 ? null : 'Home did not expose the current saved comic',
+  result.editorInertAtHome ? null : 'editor controls remain interactive behind Home',
+  result.continuedFromHomePhotoCount === 1 ? null : 'continuing from Home did not restore the current comic',
+  result.editorFormatChanged ? null : 'canvas format cannot be changed from the editor',
+  result.editorFormatUndoRestored ? null : 'Undo did not restore the previous canvas format',
+  result.drawerInitialFocusInside ? null : 'drawer did not receive focus when opened',
+  result.drawerTargetsMeet44 ? null : 'drawer controls are smaller than 44px',
+  result.drawerKeyboardTabsWork ? null : 'drawer tabs are not keyboard navigable',
+  result.drawerFocusRestored ? null : 'drawer did not restore focus to its opener',
+  result.closedDrawerInert ? null : 'closed drawer remains exposed to keyboard or assistive technology',
+  result.coreTargetsMeet44 ? null : 'primary editor controls are smaller than 44px',
   result.shortScreenGeometry.historyClearsCanvas && result.shortScreenGeometry.trayClearsCanvas ? null : 'short-screen controls overlap the editable canvas',
+  Math.abs(result.shortScreenGeometry.canvasAspect - 16 / 9) < 0.01 ? null : 'short-screen canvas aspect ratio is distorted',
+  result.tabletGeometry.contained && Math.abs(result.tabletGeometry.aspect - 16 / 9) < 0.01 ? null : 'tablet canvas is distorted or escapes its stage',
+  result.landscapeGeometry.contained && Math.abs(result.landscapeGeometry.aspect - 16 / 9) < 0.01 ? null : 'landscape canvas is distorted or escapes its stage',
+  result.landscapeGeometry.shellTransform === 'none' ? null : 'landscape layout still rotates the entire app shell',
   result.startNewVisible === 1 ? null : 'New comic did not reveal the new-project setup',
   result.draftPreservedDuringChoice ? null : 'New comic erased the saved draft before confirmation',
   result.newComicPhotoCount === 0 ? null : 'Start new retained photos from the saved comic',
@@ -379,6 +461,24 @@ const failures = [
 
 if (failures.length > 0) {
   throw new Error(failures.join('\n'))
+}
+
+async function responsiveCanvasGeometry(page) {
+  return page.evaluate(() => {
+    const stage = document.querySelector('.comic-stage')?.getBoundingClientRect()
+    const strip = document.querySelector('.live-strip')?.getBoundingClientRect()
+    return {
+      aspect: strip ? strip.height / strip.width : 0,
+      contained:
+        !!stage &&
+        !!strip &&
+        strip.left >= stage.left - 1 &&
+        strip.right <= stage.right + 1 &&
+        strip.top >= stage.top - 1 &&
+        strip.bottom <= stage.bottom + 1,
+      shellTransform: getComputedStyle(document.querySelector('.native-shell')).transform,
+    }
+  })
 }
 
 function testImage(name) {
@@ -451,7 +551,7 @@ function createCrcTable() {
 
 async function setLayout(page, name) {
   await openDrawer(page)
-  await page.getByRole('button', { name: 'Layout', exact: true }).tap()
+  await page.getByRole('tab', { name: 'Layout', exact: true }).tap()
   await page.getByRole('button', { name: new RegExp(`^Use ${name} layout`) }).tap()
   await closeDrawer(page)
 }
@@ -480,6 +580,10 @@ async function closeDrawer(page) {
   if ((await page.locator('.motion-drawer.is-open').count()) > 0) {
     await page.locator('.motion-drawer.is-open .drawer-grabber').evaluate((button) => button.click())
   }
+  await waitForDrawerHidden(page)
+}
+
+async function waitForDrawerHidden(page) {
   await page.waitForFunction(() => {
     const box = document.querySelector('.motion-drawer')?.getBoundingClientRect()
     return !!box && box.top > window.innerHeight
@@ -640,4 +744,15 @@ async function waitForDraftRevision(page, minimumRevision) {
     await page.waitForTimeout(100)
   }
   throw new Error(`Draft revision ${minimumRevision} was not saved`)
+}
+
+async function waitForDraftSetting(page, key, expectedValue) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const draft = await readDraft(page)
+    if (draft?.document?.settings?.[key] === expectedValue) {
+      return draft
+    }
+    await page.waitForTimeout(100)
+  }
+  throw new Error(`Draft setting ${key} was not saved as ${expectedValue}`)
 }

@@ -27,20 +27,17 @@ const formatPickerCentered = await page.locator('.format-options').evaluate((pic
 })
 await page.getByRole('button', { name: /4:3/ }).tap()
 const landscapeSelectedFormat = await page.locator('.format-option.active strong').textContent()
-await page.getByRole('button', { name: 'Start' }).tap()
+await page.getByRole('button', { name: 'Start creating' }).tap()
 await page.locator('.start-screen').waitFor({ state: 'detached' })
 const landscapeLiveFormat = await page.locator('.live-strip').getAttribute('data-page-format')
 const landscapeLiveAspect = await page.locator('.live-strip').boundingBox().then((box) => (box ? box.height / box.width : 0))
-const landscapeDownload = await Promise.all([
-  page.waitForEvent('download'),
-  page.getByRole('button', { name: 'Share' }).tap(),
-]).then(([download]) => download)
+const landscapeDownload = await downloadPng(page)
 const landscapeDownloadPath = await landscapeDownload.path()
 const landscapeExportedSize = pngSize(landscapeDownloadPath)
 await page.reload({ waitUntil: 'networkidle' })
 await page.getByRole('button', { name: /9:16/ }).tap()
 const selectedFormat = await page.locator('.format-option.active strong').textContent()
-await page.getByRole('button', { name: 'Start' }).tap()
+await page.getByRole('button', { name: 'Start creating' }).tap()
 await page.locator('.start-screen').waitFor({ state: 'detached' })
 await tapStrip(page, 0.75, 0.31)
 await page.waitForFunction(() => document.querySelector('.live-panel.is-live')?.getAttribute('data-panel-id') === '2')
@@ -71,10 +68,10 @@ await page.setInputFiles('.photo-upload', {
 })
 await page.waitForFunction(() => document.querySelector('[data-panel-id="3"] img'))
 await openDrawer(page)
-await page.getByRole('button', { name: 'Layout', exact: true }).tap()
-await page.getByRole('button', { name: /Story/ }).tap()
+await page.getByRole('tab', { name: 'Layout', exact: true }).tap()
+await page.getByRole('button', { name: /^Use Story layout/ }).tap()
 const photosAfterSmallerTemplate = await page.locator('.live-panel img').count()
-await page.getByRole('button', { name: /Shard/ }).tap()
+await page.getByRole('button', { name: /^Use Shard layout/ }).tap()
 const photosAfterRestoredTemplate = await page.locator('.live-panel img').count()
 const photoAfterRestoredTemplate = await photoTransform(page, '2')
 await closeDrawer(page)
@@ -85,15 +82,13 @@ const stickerElementCount = await page.locator('[data-sticker-id], .sticker').co
 await closeDrawer(page)
 const drawerHidden = await page.locator('.motion-drawer').boundingBox().then((box) => box && box.y > 830)
 
-const download = await Promise.all([
-  page.waitForEvent('download'),
-  page.getByRole('button', { name: 'Share' }).tap(),
-]).then(([download]) => download)
+const download = await downloadPng(page)
 const downloadPath = await download.path()
 const exportedSize = pngSize(downloadPath)
 const manifest = await (await page.request.get(new URL('/manifest.webmanifest', baseUrl).toString())).json()
 const bodyOverflow = await page.evaluate(() => getComputedStyle(document.body).overflow)
 await openDrawer(page)
+await page.getByRole('tab', { name: 'Layout', exact: true }).tap()
 await page.getByRole('button', { name: /New grid/ }).tap()
 await page.locator('.creator-fullscreen').waitFor()
 await waitForDrawerHidden(page)
@@ -108,6 +103,23 @@ const uniformControlBorders = await page.evaluate(() => {
 })
 const creatorHasHorizontalDivider = await page.getByRole('button', { name: 'Horizontal divider' }).count()
 const creatorHasGestureHint = (await page.locator('.creator-gesture-hint').innerText()).includes('two fingers')
+const dividerBeforeWholeLineDrag = Number(await page.locator('.creator-free-line').nth(1).getAttribute('data-divider-y1'))
+await dragCreatorLine(page, 1, 0, 14)
+const dividerAfterWholeLineDrag = Number(await page.locator('.creator-free-line').nth(1).getAttribute('data-divider-y1'))
+const creatorWholeLineMoved = dividerAfterWholeLineDrag > dividerBeforeWholeLineDrag + 1
+await page.getByRole('button', { name: 'Delete selected' }).tap()
+const creatorDividerDeleted = (await page.locator('.creator-free-line').count()) === 1
+await page.getByLabel('Grid name').fill('Unsaved grid')
+await page.getByRole('button', { name: 'Close creator' }).tap()
+const creatorDiscardConfirmation = await page.getByRole('alertdialog', { name: 'Discard your changes?' }).isVisible()
+const creatorBackgroundInert = await page.locator('.creator-panel-host').evaluate((host) => host.hasAttribute('inert'))
+await page.getByRole('button', { name: 'Discard changes' }).tap()
+await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
+await openDrawer(page)
+await page.getByRole('tab', { name: 'Layout', exact: true }).tap()
+await page.getByRole('button', { name: /New grid/ }).tap()
+await page.locator('.creator-fullscreen').waitFor()
+const creatorResetAfterDiscard = (await page.locator('.creator-free-line').count()) === 2 && (await page.getByLabel('Grid name').inputValue()) === ''
 mkdirSync('test-results', { recursive: true })
 await page.screenshot({ path: 'test-results/custom-grid-creator.png', fullPage: true })
 await page.getByLabel('Grid name').fill('Final Layout')
@@ -118,13 +130,13 @@ await page.getByLabel('Border color').evaluate((input) => {
   input.dispatchEvent(new Event('input', { bubbles: true }))
   input.dispatchEvent(new Event('change', { bubbles: true }))
 })
-await page.getByLabel('Border thickness').evaluate((input) => {
+await page.getByRole('slider', { name: 'Border thickness' }).evaluate((input) => {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
   valueSetter?.call(input, '5')
   input.dispatchEvent(new Event('input', { bubbles: true }))
   input.dispatchEvent(new Event('change', { bubbles: true }))
 })
-await page.getByLabel('Divider thickness').evaluate((input) => {
+await page.getByRole('slider', { name: 'Divider thickness' }).evaluate((input) => {
   const range = input
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
   valueSetter?.call(range, '16')
@@ -137,7 +149,14 @@ const dividerVisualThickness = await page.locator('.creator-free-line').first().
   return Number.parseFloat(getComputedStyle(line, '::before').height)
 })
 const creatorTextHasRay = (await page.locator('.creator-stack').innerText()).toLowerCase().includes('ray')
-await dragCreatorHandleToPercent(page, '[data-divider-index="1"][data-handle="start"]', 0.5, 0.48)
+const horizontalStartHandle = page.locator('[data-divider-index="1"][data-handle="start"]')
+await horizontalStartHandle.focus()
+for (let step = 0; step < 25; step += 1) {
+  await horizontalStartHandle.press('Shift+ArrowRight')
+}
+const creatorEndpointKeyboardMoved = Number(
+  await page.locator('.creator-free-line[data-divider-index="1"]').getAttribute('data-divider-x1'),
+)
 await page.getByRole('button', { name: 'Save layout' }).tap()
 await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
 const creatorClosedAfterLayoutSave = await page.locator('.creator-fullscreen').count() === 0
@@ -148,8 +167,8 @@ const editGridButtonVisible = await page.getByRole('button', { name: 'Edit Final
 await page.getByRole('button', { name: 'Edit Final Layout grid' }).tap()
 await page.locator('.creator-fullscreen').waitFor()
 const editBorderColor = await page.getByLabel('Border color').inputValue()
-const editBorderThickness = Number(await page.getByLabel('Border thickness').inputValue())
-await page.getByLabel('Border thickness').evaluate((input) => {
+const editBorderThickness = Number(await page.getByRole('slider', { name: 'Border thickness' }).inputValue())
+await page.getByRole('slider', { name: 'Border thickness' }).evaluate((input) => {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
   valueSetter?.call(input, '6')
   input.dispatchEvent(new Event('input', { bubbles: true }))
@@ -198,7 +217,7 @@ await closeDrawer(page)
 await page.screenshot({ path: 'test-results/instacomic-mobile.png', fullPage: true })
 await page.screenshot({ path: 'docs/instacomic-mobile.png', fullPage: true })
 await openDrawer(page)
-await page.getByRole('button', { name: 'Style', exact: true }).tap()
+await page.getByRole('tab', { name: 'Style', exact: true }).tap()
 const draftRevisionBeforeFinalStyle = await readDraftRevision(page)
 await page
   .locator('.motion-drawer-style label')
@@ -215,10 +234,7 @@ await closeDrawer(page)
 const liveStripImage = decodePngBuffer(await page.locator('.live-strip').screenshot())
 const liveCustomDividerRun = paperRunFromImage(liveStripImage, Math.round(liveStripImage.width * 0.5), Math.round(liveStripImage.height * 0.24), '#ffed5a')
 const liveCustomBezelPixel = pixelAt(liveStripImage, Math.round(liveStripImage.width * 0.5), 0)
-const customDownload = await Promise.all([
-  page.waitForEvent('download'),
-  page.getByRole('button', { name: 'Share' }).tap(),
-]).then(([download]) => download)
+const customDownload = await downloadPng(page)
 const customDownloadPath = await customDownload.path()
 const customExportedSize = pngSize(customDownloadPath)
 const customExportedImage = decodePng(customDownloadPath)
@@ -235,7 +251,7 @@ await page.getByRole('button', { name: 'Continue editing' }).tap()
 await page.locator('.start-screen').waitFor({ state: 'detached' })
 const continuedDraftPhotoCount = await page.locator('.live-panel img').count()
 await openDrawer(page)
-await page.getByRole('button', { name: 'Layout', exact: true }).tap()
+await page.getByRole('tab', { name: 'Layout', exact: true }).tap()
 const savedLayoutCard = page.locator(`[data-layout-option-id="${storedLayoutInfo.activeLayoutId}"]`)
 await savedLayoutCard.waitFor()
 const savedLayoutPreview = savedLayoutCard.locator('[data-layout-preview]')
@@ -263,6 +279,8 @@ const deleteLayoutButton = page.getByRole('button', { name: 'Delete Final Layout
 await deleteLayoutButton.scrollIntoViewIfNeeded()
 const deleteButtonVisible = await deleteLayoutButton.isVisible()
 await deleteLayoutButton.tap()
+const deleteConfirmationVisible = await page.getByRole('group', { name: 'Delete Final Layout layout?' }).isVisible()
+await page.getByRole('button', { name: 'Confirm delete Final Layout layout' }).tap()
 await page.waitForFunction(() => {
   const layouts = JSON.parse(localStorage.getItem('instacomic.customLayouts.v1') ?? '[]')
   return layouts.length === 0 && localStorage.getItem('instacomic.activeLayout.v1') === 'shard'
@@ -312,11 +330,17 @@ const result = {
   uniformControlBorders,
   creatorHasHorizontalDivider,
   creatorHasGestureHint,
+  creatorWholeLineMoved,
+  creatorDividerDeleted,
+  creatorDiscardConfirmation,
+  creatorBackgroundInert,
+  creatorResetAfterDiscard,
   creatorThickness,
   creatorBorderColor,
   creatorBorderThickness,
   dividerVisualThickness,
   creatorTextHasRay,
+  creatorEndpointKeyboardMoved,
   creatorClosedAfterLayoutSave,
   drawerHiddenAfterLayoutSave,
   editGridButtonVisible,
@@ -346,6 +370,7 @@ const result = {
   layoutSectionHeadings,
   builtInPreviewCount,
   deleteButtonVisible,
+  deleteConfirmationVisible,
   deletedLayoutInfo,
   layoutAfterDeleteName,
   errors,
@@ -384,11 +409,17 @@ const failures = [
   result.uniformControlBorders ? null : 'standard editor controls do not use a uniform border width',
   result.creatorHasHorizontalDivider === 1 ? null : 'custom layout maker does not expose horizontal dividers',
   result.creatorHasGestureHint ? null : 'custom layout maker does not explain its two-finger line gesture',
+  result.creatorWholeLineMoved ? null : 'custom grid whole-line dragging does not move the selected divider',
+  result.creatorDividerDeleted ? null : 'custom grid cannot delete one selected divider',
+  result.creatorDiscardConfirmation ? null : 'custom grid changes can be discarded without confirmation',
+  result.creatorBackgroundInert ? null : 'custom grid remains interactive behind the discard confirmation',
+  result.creatorResetAfterDiscard ? null : 'discarding custom grid changes did not restore a clean creator',
   result.creatorThickness === 16 ? null : 'custom layout thickness control did not update state',
   result.creatorBorderColor === '#203040' ? null : 'custom grid border color control did not update state',
   result.creatorBorderThickness === 5 ? null : 'custom grid border thickness control did not update state',
   result.dividerVisualThickness >= 15 ? null : 'custom layout thickness control did not update divider styling',
   result.creatorTextHasRay === false ? null : 'custom layout maker still exposes ray copy',
+  result.creatorEndpointKeyboardMoved >= 49.5 ? null : 'custom layout divider endpoint is not keyboard adjustable',
   result.creatorClosedAfterLayoutSave ? null : 'fullscreen creator did not close after saving a layout',
   result.storedLayoutInfo.count > 0 ? null : 'custom layout was not saved',
   result.storedLayoutInfo.name === 'Final Layout' ? null : 'custom layout name was not saved',
@@ -430,6 +461,7 @@ const failures = [
   result.storedLayoutInfo.snapJunction ? null : 'custom layout did not snap divider endpoint to another divider',
   result.storedLayoutInfo.hasDiagonal ? null : 'custom layout did not preserve connected non-rectangular panels',
   result.deleteButtonVisible ? null : 'custom layout delete button was not visible',
+  result.deleteConfirmationVisible ? null : 'custom layout deletion did not require confirmation',
   result.deletedLayoutInfo.count === 0 ? null : 'custom layout was not deleted from storage',
   result.deletedLayoutInfo.activeLayoutId === 'shard' ? null : 'active layout did not fall back after deleting current custom layout',
   result.deletedLayoutInfo.deleteButtonCount === 0 ? null : 'deleted custom layout card stayed visible',
@@ -673,6 +705,20 @@ async function openDrawer(page) {
   }
 }
 
+async function downloadPng(page) {
+  if ((await page.locator('.motion-drawer.is-open').count()) === 0) {
+    await page.getByRole('button', { name: 'Open export controls' }).tap()
+    await page.locator('.motion-drawer.is-open').waitFor()
+  }
+  await page.getByRole('tab', { name: 'Export', exact: true }).tap()
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Download PNG' }).tap(),
+  ])
+  await closeDrawer(page)
+  return download
+}
+
 async function closeDrawer(page) {
   const open = await page.locator('.motion-drawer.is-open').count()
   if (open > 0) {
@@ -725,13 +771,12 @@ async function waitForDraftRevision(page, minimumRevision) {
   )
 }
 
-async function dragCreatorHandleToPercent(page, selector, targetX, targetY) {
-  const canvas = await page.locator('.creator-canvas').boundingBox()
-  const box = await page.locator(selector).first().boundingBox()
+async function dragCreatorLine(page, index, dx, dy) {
+  const box = await page.locator('.creator-line-hit').nth(index).boundingBox()
   const start = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
-  const end = { x: canvas.x + canvas.width * targetX, y: canvas.y + canvas.height * targetY }
   await page.mouse.move(start.x, start.y)
   await page.mouse.down()
-  await page.mouse.move(end.x, end.y, { steps: 8 })
+  await page.mouse.move(start.x + dx, start.y + dy, { steps: 8 })
   await page.mouse.up()
+  await page.waitForTimeout(80)
 }

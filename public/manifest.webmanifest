@@ -7,8 +7,8 @@
   "display": "fullscreen",
   "display_override": ["fullscreen", "standalone"],
   "orientation": "portrait",
-  "background_color": "#f4ead3",
-  "theme_color": "#f4ead3",
+  "background_color": "#0b0c0f",
+  "theme_color": "#0b0c0f",
   "categories": ["photo", "creativity", "entertainment"],
   "icons": [
     {
@@ -29,7 +29,7 @@
       "name": "New Comic",
       "short_name": "New",
       "description": "Open Instacomic ready to snap a strip.",
-      "url": "/",
+      "url": "/?new=1",
       "icons": [
         {
           "src": "/icons/icon-192.png",

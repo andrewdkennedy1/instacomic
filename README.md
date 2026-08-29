@@ -24,16 +24,18 @@ Instacomic turns a phone camera into a live comic strip editor. Pick a panel, sh
 ## Highlights
 
 - Live camera preview appears inside the selected comic panel.
-- A Start button enters the editor and requests fullscreen when the browser allows it.
+- The full editor works in a browser tab; installation is an optional convenience, and fullscreen is reserved for installed mode.
+- New-comic setup combines canvas format and a visual starting-grid choice, both of which remain editable later.
 - Capture advances forward through the layout, then freezes the final photo instead of covering it with the live preview.
 - Upload an existing image into the active panel when the camera is not the right source.
 - Filled panels open a contextual Replace, Fit, Reset, and Remove toolbar without resizing the canvas; tap Done to return to capture controls, or drag, pinch, and twist to position the photo with snap feedback.
 - Action-level Undo/Redo and automatic on-device draft recovery protect edits between sessions.
-- Custom grids open in a responsive full-screen editor with divider handles, endpoint snapping, persistent border color and thickness controls, and edit-after-save support.
+- Custom grids open in a responsive full-screen editor with selectable whole-line dragging, keyboard nudging, divider deletion, endpoint snapping, persistent border controls, discard protection, and edit-after-save support.
 - The grid library renders faithful panel-and-divider previews for both templates and locally saved custom grids.
-- Style controls cover paper, border color and thickness, gaps, corners, captions, and image fit, with matching live, PNG, and story-video rendering.
-- Story video export renders a sliding panel reveal with duration and speed controls, downloading MP4 output.
-- Share renders automatically and falls back to downloading the PNG when native share is unavailable.
+- Layout, Appearance, and Export live in one accessible sheet that keeps the canvas geometry stable and remains keyboard navigable.
+- Style controls cover paper, stroke color and thickness, gaps, corners, captions, and image fit, with matching live, PNG, and story-video rendering.
+- One Export flow presents image completeness, PNG sharing, video settings, render progress, and explicit Download/Share actions; video rendering never auto-downloads.
+- The responsive canvas preserves its exact format on short phones, tablets, desktop, and landscape without rotating the app shell.
 - Installable PWA shell with manifest icons and offline app caching.
 
 ## Local development
@@ -50,12 +52,14 @@ npm run build
 npm run smoke
 npm run smoke:installer
 npm run smoke:editing
+npm run smoke:save
 npm run smoke:photos
 npm run smoke:camera
 npm run smoke:video
+npm run smoke:ux
 ```
 
-The smoke checks exercise the mobile editor and installer flows, centered start aspect choices, contextual photo actions, coalesced Undo/Redo history, simultaneous pinch zoom and snap rotation, background autosave, Continue/New draft recovery, short-screen control geometry, uniform editor borders, full-screen snapping custom layouts with thickness controls, persisted custom-grid previews, custom layout deletion, share fallback, manifest loading, fake-camera capture through the final panel, and story video rendering.
+The smoke checks exercise browser-first setup and optional installation, exact responsive canvas geometry, labelled export flows, contextual photo actions, coalesced Undo/Redo history, simultaneous pinch zoom and snap rotation, background autosave, Home/Continue/New recovery, photo-safe custom-grid saves, accessible modal and tab behavior, keyboard and pointer grid editing, safe custom-grid deletion/discard, live/export border parity, fake-camera capture through the final panel, and explicit story-video download.
 
 ## Deploy
 
