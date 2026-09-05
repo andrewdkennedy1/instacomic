@@ -29,21 +29,22 @@ try {
     ['x1', 'y1', 'x2', 'y2'].map((key) => Number(line.getAttribute(`data-divider-${key}`))),
   ))
   const original = await lineValues()
-  assert.equal(await page.locator('.creator-free-line').first().evaluate((line) => getComputedStyle(line, '::before').height), '2px')
+  assert.equal(await page.locator('.creator-stack').getAttribute('data-border-thickness'), '0')
+  assert.equal(await page.locator('.creator-free-line').first().evaluate((line) => getComputedStyle(line, '::before').display), 'none', 'disabled outlines still render a dark underlay')
+  assert.equal(await page.locator('.creator-free-line').first().evaluate((line) => getComputedStyle(line, '::before').height), '6px')
   assert.equal(await page.locator('.creator-free-line').first().evaluate((line) => getComputedStyle(line, '::before').borderRadius), '0px')
   assert.equal(await page.locator('.creator-handle').first().evaluate((handle) => getComputedStyle(handle, '::after').content), 'none')
   const canvasBefore = await page.locator('.creator-canvas').boundingBox()
-  for (const tab of ['Adjust', 'Borders', 'Details', 'Dividers']) {
+  for (const tab of ['Style', 'Details', 'Dividers']) {
     await creator.getByRole('tab', { name: tab, exact: true }).click()
     assert.deepEqual(await page.locator('.creator-canvas').boundingBox(), canvasBefore, 'switching tools moves the canvas')
   }
-  await creator.getByRole('tab', { name: 'Adjust', exact: true }).click()
-  await page.getByRole('slider', { name: 'Rotation', exact: true }).fill('0')
-  await page.getByRole('slider', { name: 'Rotation', exact: true }).blur()
-  await page.getByRole('slider', { name: 'Length', exact: true }).fill('50')
-  await page.getByRole('slider', { name: 'Length', exact: true }).blur()
+  await page.getByRole('slider', { name: 'Angle', exact: true }).fill('0')
+  await page.getByRole('slider', { name: 'Angle', exact: true }).blur()
+  await page.getByRole('slider', { name: 'Position', exact: true }).fill('30')
+  await page.getByRole('slider', { name: 'Position', exact: true }).blur()
   const adjusted = (await lineValues())[0]
-  assert.ok(Math.abs(adjusted[2] - adjusted[0] - 50) < 0.2 && adjusted[1] === adjusted[3], 'precision sliders do not match the line geometry')
+  assert.deepEqual(adjusted, [0, 30, 100, 30], 'cut sliders must span the canvas at the requested position')
   await creator.getByRole('button', { name: 'Undo grid edit' }).click()
   await creator.getByRole('button', { name: 'Undo grid edit' }).click()
   assert.deepEqual(await lineValues(), original)
@@ -89,6 +90,9 @@ try {
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [touch(1, x - 8, y + 10), touch(2, x + 35, y + 50)] })
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [touch(2, x + 35, y + 50)] })
   const afterPinch = await lineValues()
+  assert.ok(Math.abs(afterPinch[0][2] - afterPinch[0][0]) > 1, 'two fingers did not rotate the cut')
+  const onEdge = (x, y) => [0, 100].includes(x) || [0, 100].includes(y)
+  assert.ok(onEdge(afterPinch[0][0], afterPinch[0][1]) && onEdge(afterPinch[0][2], afterPinch[0][3]), 'two fingers shortened the cut')
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [touch(1, x - 30, y + 10)] })
   await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
   assert.ok((await lineValues())[0][0] < afterPinch[0][0] - 2, `lifting one finger stopped the drag: ${JSON.stringify({afterPinch, afterDrag: await lineValues()})}`)
@@ -102,7 +106,7 @@ try {
 
   for (const viewport of [{ width: 280, height: 568 }, { width: 390, height: 844 }, { width: 844, height: 390 }, { width: 1280, height: 800 }]) {
     await page.setViewportSize(viewport)
-    for (const tab of ['Dividers', 'Adjust', 'Borders', 'Details']) {
+    for (const tab of ['Dividers', 'Style', 'Details']) {
       await creator.getByRole('tab', { name: tab, exact: true }).click()
       const geometry = await page.evaluate(() => {
         const box = (selector) => document.querySelector(selector).getBoundingClientRect()
@@ -142,8 +146,15 @@ try {
   // Editing a saved grid must also be reversible from the main editor.
   await page.getByRole('button', { name: 'Controls', exact: true }).click()
   await page.getByRole('button', { name: 'Edit My flow grid' }).click()
-  await page.getByRole('tab', { name: 'Borders', exact: true }).click()
-  await page.getByRole('slider', { name: 'Line width' }).fill('14')
+  await page.getByRole('tab', { name: 'Style', exact: true }).click()
+  assert.equal(await page.getByRole('switch', { name: 'Panel outlines' }).getAttribute('aria-checked'), 'false')
+  assert.equal(await page.getByRole('slider', { name: 'Outline width' }).count(), 0)
+  await page.getByRole('switch', { name: 'Panel outlines' }).click()
+  await page.getByRole('slider', { name: 'Outline width' }).fill('7')
+  await page.getByRole('switch', { name: 'Panel outlines' }).click()
+  assert.equal(await page.locator('.creator-stack').getAttribute('data-border-thickness'), '0')
+  await page.getByRole('switch', { name: 'Panel outlines' }).click()
+  assert.equal(await page.getByRole('slider', { name: 'Outline width' }).inputValue(), '7')
   await page.getByRole('button', { name: 'Update layout' }).click()
   await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
   assert.equal(await page.locator('.live-strip').evaluate((strip) => strip.style.getPropertyValue('--border')), '7px')
@@ -163,6 +174,7 @@ try {
     const grids = JSON.parse(localStorage.getItem('instacomic.customLayouts.v1'))
     const grid = grids[0]
     delete grid.panelOrder
+    grid.dividers.forEach(line => { delete line.extent })
     grid.panels = [grid.panels[2], grid.panels[0], grid.panels[3], grid.panels[1]].map((panel, index) => ({ ...panel, id: String(index + 1) }))
     localStorage.setItem('instacomic.customLayouts.v1', JSON.stringify(grids))
     return grid.panels
@@ -171,8 +183,13 @@ try {
   await page.getByRole('button', { name: 'Start creating' }).click()
   await page.getByRole('button', { name: 'Controls', exact: true }).click()
   await page.getByRole('button', { name: 'Edit My flow grid' }).click()
-  await page.getByRole('tab', { name: 'Borders', exact: true }).click()
-  await page.getByRole('slider', { name: 'Line width' }).fill('6')
+  assert.equal(await page.getByRole('button', { name: 'Extend divider to canvas edges' }).count(), 1)
+  await page.getByRole('button', { name: 'Extend divider to canvas edges' }).click()
+  assert.equal(await page.getByRole('slider', { name: 'Angle' }).count(), 1)
+  await page.getByRole('button', { name: 'Undo grid edit' }).click()
+  assert.equal(await page.getByRole('button', { name: 'Extend divider to canvas edges' }).count(), 1)
+  await page.getByRole('tab', { name: 'Style', exact: true }).click()
+  await page.getByRole('slider', { name: 'Outline width' }).fill('3')
   await page.getByRole('button', { name: 'Update layout' }).click()
   await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
   assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('instacomic.customLayouts.v1'))[0].panels), legacyPanels)

@@ -102,7 +102,7 @@ const uniformControlBorders = await page.evaluate(() => {
   return standardSurfaces.length > 0 && Array.from(standardSurfaces).every((element) => getComputedStyle(element).borderTopWidth === expectedBorder)
 })
 const creatorHasHorizontalDivider = await page.getByRole('button', { name: 'Horizontal divider' }).count()
-const creatorHasGestureHint = (await page.locator('.creator-gesture-hint').innerText()).includes('two fingers')
+const creatorHasGestureHint = (await page.locator('.creator-gesture-hint').innerText()).toLowerCase().includes('two fingers')
 const dividerBeforeWholeLineDrag = Number(await page.locator('.creator-free-line').nth(1).getAttribute('data-divider-y1'))
 await dragCreatorLine(page, 1, 0, 14)
 const dividerAfterWholeLineDrag = Number(await page.locator('.creator-free-line').nth(1).getAttribute('data-divider-y1'))
@@ -126,16 +126,17 @@ await page.screenshot({ path: 'test-results/custom-grid-creator.png', fullPage: 
 await page.getByRole('tab', { name: 'Details', exact: true }).tap()
 await page.getByLabel('Grid name').fill('Final Layout')
 await page.getByLabel('Grid name').blur()
-await page.getByRole('tab', { name: 'Borders', exact: true }).tap()
-await page.getByLabel('Border color').evaluate((input) => {
+await page.getByRole('tab', { name: 'Style', exact: true }).tap()
+await page.getByRole('switch', { name: 'Panel outlines' }).tap()
+await page.getByLabel('Outline color').evaluate((input) => {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
   valueSetter?.call(input, '#203040')
   input.dispatchEvent(new Event('input', { bubbles: true }))
   input.dispatchEvent(new Event('change', { bubbles: true }))
 })
-await page.getByRole('slider', { name: 'Line width' }).evaluate((input) => {
+await page.getByRole('slider', { name: 'Outline width' }).evaluate((input) => {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-  valueSetter?.call(input, '10')
+  valueSetter?.call(input, '5')
   input.dispatchEvent(new Event('input', { bubbles: true }))
   input.dispatchEvent(new Event('change', { bubbles: true }))
 })
@@ -155,10 +156,10 @@ const creatorTextHasRay = (await page.locator('.creator-stack').innerText()).toL
 const horizontalStartHandle = page.locator('[data-divider-index="1"][data-handle="start"]')
 await horizontalStartHandle.focus()
 for (let step = 0; step < 25; step += 1) {
-  await horizontalStartHandle.press('Shift+ArrowRight')
+  await horizontalStartHandle.press('Shift+ArrowDown')
 }
 const creatorEndpointKeyboardMoved = Number(
-  await page.locator('.creator-free-line[data-divider-index="1"]').getAttribute('data-divider-x1'),
+  await page.locator('.creator-free-line[data-divider-index="1"]').getAttribute('data-divider-y1'),
 )
 await page.getByRole('button', { name: 'Save layout' }).tap()
 await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
@@ -169,12 +170,12 @@ await openDrawer(page)
 const editGridButtonVisible = await page.getByRole('button', { name: 'Edit Final Layout grid' }).count()
 await page.getByRole('button', { name: 'Edit Final Layout grid' }).tap()
 await page.locator('.creator-fullscreen').waitFor()
-await page.getByRole('tab', { name: 'Borders', exact: true }).tap()
-const editBorderColor = await page.getByLabel('Border color').inputValue()
-const editBorderThickness = Number(await page.getByRole('slider', { name: 'Line width' }).inputValue()) / 2
-await page.getByRole('slider', { name: 'Line width' }).evaluate((input) => {
+await page.getByRole('tab', { name: 'Style', exact: true }).tap()
+const editBorderColor = await page.getByLabel('Outline color').inputValue()
+const editBorderThickness = Number(await page.getByRole('slider', { name: 'Outline width' }).inputValue())
+await page.getByRole('slider', { name: 'Outline width' }).evaluate((input) => {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-  valueSetter?.call(input, '12')
+  valueSetter?.call(input, '6')
   input.dispatchEvent(new Event('input', { bubbles: true }))
   input.dispatchEvent(new Event('change', { bubbles: true }))
 })
@@ -206,9 +207,9 @@ const storedLayoutInfo = await page.evaluate(() => {
     dividers: latest?.dividers?.length ?? 0,
     hasPageFormatId: Object.prototype.hasOwnProperty.call(latest ?? {}, 'pageFormatId'),
     panels: latest?.panels?.length ?? 0,
-    snapJunction: latest?.panels?.some((panel) =>
-      panel.points?.some(([x, y]) => Math.abs(x - 50) < 0.5 && Math.abs(y - 48) < 0.5),
-    ) ?? false,
+    edgeContinuity: latest?.dividers?.every((line) => line.extent === 'canvas' &&
+      (line.x1 === 0 || line.x1 === 100 || line.y1 === 0 || line.y1 === 100) &&
+      (line.x2 === 0 || line.x2 === 100 || line.y2 === 0 || line.y2 === 100)) ?? false,
     hasDiagonal: latest?.panels?.some((panel) =>
       panel.points?.some(([x, y]) => ![0, 100].includes(Math.round(x)) && ![0, 100].includes(Math.round(y))),
     ) ?? false,
@@ -461,8 +462,8 @@ const failures = [
   result.layoutSectionHeadings.join('|') === 'Your grids|Templates' ? null : 'grid library sections are not ordered for saved-grid discovery',
   result.builtInPreviewCount === 8 ? null : 'template previews are missing from the grid library',
   result.drawerHiddenAfterLayoutSave ? null : 'drawer did not close after saving a custom layout',
-  result.storedLayoutInfo.panels === 3 ? null : 'custom snapped layout did not create three panels',
-  result.storedLayoutInfo.snapJunction ? null : 'custom layout did not snap divider endpoint to another divider',
+  result.storedLayoutInfo.panels === 4 ? null : 'two crossing edge-to-edge cuts did not create four panels',
+  result.storedLayoutInfo.edgeContinuity ? null : 'custom layout did not persist edge-to-edge dividers',
   result.storedLayoutInfo.hasDiagonal ? null : 'custom layout did not preserve connected non-rectangular panels',
   result.deleteButtonVisible ? null : 'custom layout delete button was not visible',
   result.deleteConfirmationVisible ? null : 'custom layout deletion did not require confirmation',

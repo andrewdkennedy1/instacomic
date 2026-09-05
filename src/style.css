@@ -400,6 +400,8 @@ select:focus-visible {
   transform: translateY(-50%);
 }
 
+.live-divider-gap.is-unoutlined::before { display: none; }
+
 .live-divider-gap::after {
   content: "";
   position: absolute;

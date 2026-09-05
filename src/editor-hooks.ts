@@ -49,7 +49,10 @@ export function useDialogFocus(ref: RefObject<HTMLElement | null>, open: boolean
     if (!open) return
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const frame = requestAnimationFrame(() => {
-      ref.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus({ preventScroll: true })
+      // Do not steal focus if the user has already reached a dialog control.
+      if (!ref.current?.contains(document.activeElement)) {
+        ref.current?.querySelector<HTMLElement>('button:not(:disabled)')?.focus({ preventScroll: true })
+      }
     })
     function trap(event: KeyboardEvent) {
       const dialog = ref.current

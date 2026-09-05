@@ -30,8 +30,8 @@ Instacomic turns a phone camera into a live comic strip editor. Pick a panel, sh
 - Upload an existing image into the active panel when the camera is not the right source.
 - Filled panels open a contextual Replace, Fit, Reset, and Remove toolbar without resizing the canvas; tap Done to return to capture controls, or drag, pinch, and twist to position the photo with snap feedback.
 - Action-level Undo/Redo and automatic on-device draft recovery protect edits between sessions.
-- Custom grids open in a canvas-first studio with a persistent tool dock, divider/adjust/border/details tabs, rotation and length sliders, clean preview, whole-line dragging, keyboard nudging, optional snapping, and gesture-level Undo/Redo.
-- Plain square-ended dividers keep invisible 44px touch targets and continuous one- and two-finger control; new grids follow reading order, while existing grids retain their photo mapping. Saved-grid updates can also be undone from the main editor.
+- Custom grids use edge-to-edge cuts with angle and position sliders, continuous dragging and two-finger rotation, optional snapping, and gesture-level Undo/Redo. The compact Dividers / Style / Details dock keeps the canvas stable.
+- Spacing is independent of optional panel outlines, which start off. Thin editing guides and invisible 44px touch targets do not appear in exports. Existing saved segments retain their geometry until explicitly extended; saved-grid updates can also be undone from the main editor.
 - A consistent graphite workspace and warm editing sheets carry through setup, capture, grid design, and export. Clean, Paper, and Bold presets provide one-tap appearance starting points.
 - The grid library renders faithful panel-and-divider previews for both templates and locally saved custom grids.
 - Layout, Appearance, and Export live in one accessible sheet that keeps the canvas geometry stable and remains keyboard navigable.
