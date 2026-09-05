@@ -27,7 +27,8 @@ async function checkEdges(page, png, line, gap, label, outer = 0) {
     const length = Math.hypot(dx, dy)
     let checked = 0
     const failures = []
-    for (let y = outer; y < canvas.height - outer; y++) for (let x = outer; x < canvas.width - outer; x++) {
+    // Element screenshots can include a fractional outside pixel on their perimeter.
+    for (let y = outer + 1; y < canvas.height - outer - 1; y++) for (let x = outer + 1; x < canvas.width - outer - 1; x++) {
       if (x > outer + 2 && y > outer + 2 && x < canvas.width - outer - 3 && y < canvas.height - outer - 3) continue
       const distance = Math.abs((x + 0.5 - x1) * dy - (y + 0.5 - y1) * dx) / length
       if (distance > gap / 2 - 3) continue // Exclude only the antialias fringe.
@@ -64,7 +65,7 @@ for (const engine of [chromium, webkit]) {
     await page.getByRole('button', { name: 'Delete selected' }).click()
     await page.getByRole('tab', { name: 'Style', exact: true }).click()
     await page.getByRole('slider', { name: 'Divider thickness' }).fill('24')
-    await page.getByRole('tab', { name: 'Dividers', exact: true }).click()
+    await page.getByRole('tab', { name: 'Adjust', exact: true }).click()
     let line
     for (const angle of [-70, -45, -12, 12, 45, 70]) {
       await page.getByRole('slider', { name: 'Angle', exact: true }).fill(String(angle))
@@ -85,7 +86,7 @@ for (const engine of [chromium, webkit]) {
     await checkEdges(page, readFileSync(await download.path()), line, 72, `${engine.name()} PNG export`)
     await page.getByRole('tab', { name: 'Layout', exact: true }).click()
     await page.getByRole('button', { name: 'Edit Custom 1 grid', exact: true }).click()
-    await page.getByRole('tab', { name: 'Style', exact: true }).click()
+    await page.getByRole('tab', { name: 'Outline', exact: true }).click()
     await page.getByRole('switch', { name: 'Panel outlines' }).click()
     await page.getByRole('slider', { name: 'Outline width' }).fill('6')
     await page.getByRole('button', { name: 'Preview', exact: true }).click()

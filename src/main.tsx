@@ -2844,6 +2844,8 @@ function App() {
                 editing={editingLayoutId !== null}
                 pageFormat={pageFormat}
                 paperColor={settings.background}
+                photoCache={mergeLayoutShotsIntoCache(layout, shots, shotCacheRef.current)}
+                photoFit={settings.fit}
                 readingOrder={!editingLayoutId || customLayouts.find((item) => item.id === editingLayoutId)?.panelOrder === 'reading'}
                 onName={(value) => {
                   setCreatorDirty(true)
@@ -3501,6 +3503,8 @@ function CreatorPanel({
   editing,
   pageFormat,
   paperColor,
+  photoCache,
+  photoFit,
   readingOrder,
   onName,
   onAddLine,
@@ -3523,6 +3527,8 @@ function CreatorPanel({
   editing: boolean
   pageFormat: PageFormat
   paperColor: string
+  photoCache: Array<Shot | undefined>
+  photoFit: PanelFit
   readingOrder: boolean
   onName: (name: string) => void
   onAddLine: (preset: CustomLinePreset) => void
@@ -3555,7 +3561,54 @@ function CreatorPanel({
   const linePointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(new Map())
   const [selectedLineId, setSelectedLineId] = useState<string | null>(draftLines[0]?.id ?? null)
   const previousLineIds = useRef(draftLines.map((line) => line.id))
-  const [toolTab, setToolTab] = useState<'dividers' | 'borders' | 'details'>('dividers')
+  const gridTools = ['dividers', 'adjust', 'borders', 'outlines', 'details'] as const
+  type GridTool = (typeof gridTools)[number]
+  const [toolTab, setToolTab] = useState<GridTool>('dividers')
+  const toolPagerRef = useRef<HTMLDivElement>(null)
+  const pagerSettleRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pagerTouchRef = useRef(false)
+  const activeToolRef = useRef<GridTool>('dividers')
+  function selectTool(tab: GridTool) {
+    if (pagerSettleRef.current) clearTimeout(pagerSettleRef.current)
+    activeToolRef.current = tab
+    setToolTab(tab)
+    const pager = toolPagerRef.current
+    if (pager) pager.scrollTo({ left: gridTools.indexOf(tab) * pager.clientWidth, behavior: 'instant' })
+  }
+  function settleTools() {
+    if (pagerSettleRef.current) clearTimeout(pagerSettleRef.current)
+    pagerSettleRef.current = setTimeout(() => {
+      const pager = toolPagerRef.current
+      if (!pager || pagerTouchRef.current) return
+      const index = Math.round(pager.scrollLeft / Math.max(1, pager.clientWidth))
+      const next = gridTools[index]
+      if (!next) return
+      if (Math.abs(pager.scrollLeft - index * pager.clientWidth) > 1) {
+        pager.scrollTo({
+          left: index * pager.clientWidth,
+          behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+        })
+        return
+      }
+      if (next !== activeToolRef.current) {
+        activeToolRef.current = next
+        setToolTab(next)
+        history.endGroup()
+      }
+    }, 120)
+  }
+  useEffect(() => {
+    const pager = toolPagerRef.current
+    if (!pager) return
+    const observer = new ResizeObserver(() => {
+      pager.scrollTo({ left: gridTools.indexOf(activeToolRef.current) * pager.clientWidth, behavior: 'instant' })
+    })
+    observer.observe(pager)
+    return () => {
+      observer.disconnect()
+      if (pagerSettleRef.current) clearTimeout(pagerSettleRef.current)
+    }
+  }, [])
   const previousOutline = useRef(borderThickness || 1)
   const [previewing, setPreviewing] = useState(false)
   const [snapEnabled, setSnapEnabled] = useState(true)
@@ -3957,8 +4010,18 @@ function CreatorPanel({
                 if (event.target === event.currentTarget) endLinePointer(event)
               }}
             >
-              {previewPanels.map((panel) => (
-                <div key={panel.id} className="creator-panel" style={panelStyle(panel)} />
+              {previewPanels.map((panel, index) => (
+                <div key={panel.id} className="creator-panel" style={panelStyle(panel)}>
+                  {photoCache[index] && (
+                    <img
+                      src={photoCache[index].dataUrl}
+                      alt=""
+                      draggable={false}
+                      data-preview-asset={photoCache[index].assetId}
+                      style={shotImageStyle(panel, photoCache[index], photoCache[index].fit ?? photoFit, pageFormat)}
+                    />
+                  )}
+                </div>
               ))}
               {previewPanels.map((panel, index) => (
                 <span
@@ -4041,7 +4104,7 @@ function CreatorPanel({
         </div>
         <div className="creator-side">
           <div className="creator-tool-tabs" role="tablist" aria-label="Grid tools">
-            {(['dividers', 'borders', 'details'] as const).map((tab, index, tabs) => (
+            {gridTools.map((tab, index, tabs) => (
               <button
                 key={tab}
                 id={`grid-tab-${tab}`}
@@ -4050,7 +4113,7 @@ function CreatorPanel({
                 aria-selected={toolTab === tab}
                 aria-controls={`grid-tools-${tab}`}
                 tabIndex={toolTab === tab ? 0 : -1}
-                onClick={() => setToolTab(tab)}
+                onClick={() => selectTool(tab)}
                 onKeyDown={(event) => {
                   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
                   event.preventDefault()
@@ -4060,21 +4123,45 @@ function CreatorPanel({
                       : event.key === 'End'
                         ? tabs[tabs.length - 1]
                         : tabs[(index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]
-                  setToolTab(next)
+                  selectTool(next)
                   document.getElementById(`grid-tab-${next}`)?.focus()
                 }}
               >
-                {tab === 'dividers' ? 'Dividers' : tab === 'borders' ? 'Style' : 'Details'}
+                {tab === 'dividers'
+                  ? 'Dividers'
+                  : tab === 'adjust'
+                    ? 'Adjust'
+                    : tab === 'borders'
+                      ? 'Style'
+                      : tab === 'outlines'
+                        ? 'Outline'
+                        : 'Details'}
               </button>
             ))}
           </div>
-          <div className="creator-tool-content">
+          <div
+            className="creator-tool-content"
+            ref={toolPagerRef}
+            onScroll={settleTools}
+            onTouchStartCapture={() => {
+              pagerTouchRef.current = true
+            }}
+            onTouchEndCapture={(event) => {
+              pagerTouchRef.current = event.touches.length > 0
+              settleTools()
+            }}
+            onTouchCancelCapture={() => {
+              pagerTouchRef.current = false
+              settleTools()
+            }}
+          >
             <section
               className="creator-control-section"
               id="grid-tools-dividers"
               role="tabpanel"
               aria-labelledby="grid-tab-dividers"
-              hidden={toolTab !== 'dividers'}
+              inert={toolTab !== 'dividers' || undefined}
+              aria-hidden={toolTab !== 'dividers'}
             >
               <div className="creator-control-heading">
                 <strong>Divide the canvas</strong>
@@ -4134,6 +4221,20 @@ function CreatorPanel({
                   <ToolIcon name="remove" />
                 </button>
               </div>
+            </section>
+            <section
+              className="creator-control-section"
+              id="grid-tools-adjust"
+              role="tabpanel"
+              aria-labelledby="grid-tab-adjust"
+              inert={toolTab !== 'adjust' || undefined}
+              aria-hidden={toolTab !== 'adjust'}
+            >
+              <span className="creator-page-caption">
+                {selectedLine
+                  ? `Divider ${draftLines.indexOf(selectedLine) + 1} · Drag on the canvas to select`
+                  : 'Add a divider to start shaping your grid'}
+              </span>
               {selectedLine && (
                 <div className="creator-precision-group">
                   {selectedLine.extent !== 'canvas' ? (
@@ -4177,7 +4278,8 @@ function CreatorPanel({
               id="grid-tools-borders"
               role="tabpanel"
               aria-labelledby="grid-tab-borders"
-              hidden={toolTab !== 'borders'}
+              inert={toolTab !== 'borders' || undefined}
+              aria-hidden={toolTab !== 'borders'}
             >
               <div className="creator-control-heading">
                 <strong id="grid-appearance-heading">Space, not strokes</strong>
@@ -4194,6 +4296,15 @@ function CreatorPanel({
                   onChange={(value) => history.change(() => onThickness(value), 'gap')}
                 />
               </div>
+            </section>
+            <section
+              className="creator-control-section"
+              id="grid-tools-outlines"
+              role="tabpanel"
+              aria-labelledby="grid-tab-outlines"
+              inert={toolTab !== 'outlines' || undefined}
+              aria-hidden={toolTab !== 'outlines'}
+            >
               <div className="creator-outline-group">
                 <button
                   className="creator-switch-row"
@@ -4239,7 +4350,8 @@ function CreatorPanel({
               id="grid-tools-details"
               role="tabpanel"
               aria-labelledby="grid-tab-details"
-              hidden={toolTab !== 'details'}
+              inert={toolTab !== 'details' || undefined}
+              aria-hidden={toolTab !== 'details'}
             >
               <div className="creator-control-heading">
                 <strong id="grid-details-heading">Details</strong>
@@ -4263,6 +4375,12 @@ function CreatorPanel({
                 </button>
               </div>
             </section>
+          </div>
+          <div className="creator-page-indicator" aria-hidden="true">
+            {gridTools.map((tab) => (
+              <i key={tab} className={toolTab === tab ? 'is-current' : ''} />
+            ))}
+            <span>Swipe for more tools</span>
           </div>
         </div>
       </div>

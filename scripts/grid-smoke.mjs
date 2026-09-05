@@ -35,10 +35,11 @@ try {
   assert.equal(await page.locator('.creator-free-line').first().evaluate((line) => getComputedStyle(line, '::before').borderRadius), '0px')
   assert.equal(await page.locator('.creator-handle').first().evaluate((handle) => getComputedStyle(handle, '::after').content), 'none')
   const canvasBefore = await page.locator('.creator-canvas').boundingBox()
-  for (const tab of ['Style', 'Details', 'Dividers']) {
+  for (const tab of ['Adjust', 'Style', 'Outline', 'Details', 'Dividers']) {
     await creator.getByRole('tab', { name: tab, exact: true }).click()
     assert.deepEqual(await page.locator('.creator-canvas').boundingBox(), canvasBefore, 'switching tools moves the canvas')
   }
+  await creator.getByRole('tab', { name: 'Adjust', exact: true }).click()
   await page.getByRole('slider', { name: 'Angle', exact: true }).fill('0')
   await page.getByRole('slider', { name: 'Angle', exact: true }).blur()
   await page.getByRole('slider', { name: 'Position', exact: true }).fill('30')
@@ -106,7 +107,7 @@ try {
 
   for (const viewport of [{ width: 280, height: 568 }, { width: 390, height: 844 }, { width: 844, height: 390 }, { width: 1280, height: 800 }]) {
     await page.setViewportSize(viewport)
-    for (const tab of ['Dividers', 'Style', 'Details']) {
+    for (const tab of ['Dividers', 'Adjust', 'Style', 'Outline', 'Details']) {
       await creator.getByRole('tab', { name: tab, exact: true }).click()
       const geometry = await page.evaluate(() => {
         const box = (selector) => document.querySelector(selector).getBoundingClientRect()
@@ -146,7 +147,7 @@ try {
   // Editing a saved grid must also be reversible from the main editor.
   await page.getByRole('button', { name: 'Controls', exact: true }).click()
   await page.getByRole('button', { name: 'Edit My flow grid' }).click()
-  await page.getByRole('tab', { name: 'Style', exact: true }).click()
+  await page.getByRole('tab', { name: 'Outline', exact: true }).click()
   assert.equal(await page.getByRole('switch', { name: 'Panel outlines' }).getAttribute('aria-checked'), 'false')
   assert.equal(await page.getByRole('slider', { name: 'Outline width' }).count(), 0)
   await page.getByRole('switch', { name: 'Panel outlines' }).click()
@@ -183,12 +184,13 @@ try {
   await page.getByRole('button', { name: 'Start creating' }).click()
   await page.getByRole('button', { name: 'Controls', exact: true }).click()
   await page.getByRole('button', { name: 'Edit My flow grid' }).click()
+  await page.getByRole('tab', { name: 'Adjust', exact: true }).click()
   assert.equal(await page.getByRole('button', { name: 'Extend divider to canvas edges' }).count(), 1)
   await page.getByRole('button', { name: 'Extend divider to canvas edges' }).click()
   assert.equal(await page.getByRole('slider', { name: 'Angle' }).count(), 1)
   await page.getByRole('button', { name: 'Undo grid edit' }).click()
   assert.equal(await page.getByRole('button', { name: 'Extend divider to canvas edges' }).count(), 1)
-  await page.getByRole('tab', { name: 'Style', exact: true }).click()
+  await page.getByRole('tab', { name: 'Outline', exact: true }).click()
   await page.getByRole('slider', { name: 'Outline width' }).fill('3')
   await page.getByRole('button', { name: 'Update layout' }).click()
   await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })

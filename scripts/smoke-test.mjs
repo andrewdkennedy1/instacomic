@@ -126,7 +126,7 @@ await page.screenshot({ path: 'test-results/custom-grid-creator.png', fullPage: 
 await page.getByRole('tab', { name: 'Details', exact: true }).tap()
 await page.getByLabel('Grid name').fill('Final Layout')
 await page.getByLabel('Grid name').blur()
-await page.getByRole('tab', { name: 'Style', exact: true }).tap()
+await page.getByRole('tab', { name: 'Outline', exact: true }).tap()
 await page.getByRole('switch', { name: 'Panel outlines' }).tap()
 await page.getByLabel('Outline color').evaluate((input) => {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
@@ -140,6 +140,7 @@ await page.getByRole('slider', { name: 'Outline width' }).evaluate((input) => {
   input.dispatchEvent(new Event('input', { bubbles: true }))
   input.dispatchEvent(new Event('change', { bubbles: true }))
 })
+await page.getByRole('tab', { name: 'Style', exact: true }).tap()
 await page.getByRole('slider', { name: 'Divider thickness' }).evaluate((input) => {
   const range = input
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
@@ -170,7 +171,7 @@ await openDrawer(page)
 const editGridButtonVisible = await page.getByRole('button', { name: 'Edit Final Layout grid' }).count()
 await page.getByRole('button', { name: 'Edit Final Layout grid' }).tap()
 await page.locator('.creator-fullscreen').waitFor()
-await page.getByRole('tab', { name: 'Style', exact: true }).tap()
+await page.getByRole('tab', { name: 'Outline', exact: true }).tap()
 const editBorderColor = await page.getByLabel('Outline color').inputValue()
 const editBorderThickness = Number(await page.getByRole('slider', { name: 'Outline width' }).inputValue())
 await page.getByRole('slider', { name: 'Outline width' }).evaluate((input) => {
