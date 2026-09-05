@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/instacomic-mobile.png" width="320" alt="Instacomic mobile editor screenshot">
+  <img src="docs/instacomic-grid.png" width="320" alt="Instacomic mobile grid studio">
 </p>
 
 ## What it does
@@ -30,7 +30,9 @@ Instacomic turns a phone camera into a live comic strip editor. Pick a panel, sh
 - Upload an existing image into the active panel when the camera is not the right source.
 - Filled panels open a contextual Replace, Fit, Reset, and Remove toolbar without resizing the canvas; tap Done to return to capture controls, or drag, pinch, and twist to position the photo with snap feedback.
 - Action-level Undo/Redo and automatic on-device draft recovery protect edits between sessions.
-- Custom grids open in a responsive full-screen editor with selectable whole-line dragging, keyboard nudging, divider deletion, endpoint snapping, persistent border controls, discard protection, and edit-after-save support.
+- Custom grids open in a canvas-first studio with a persistent tool dock, divider/border/details tabs, clean preview, selectable whole-line dragging, keyboard nudging, optional snapping, and gesture-level Undo/Redo.
+- Grid handles keep generous touch targets with compact visual markers; new grids follow reading order, while existing grids retain their photo mapping. Saved-grid updates can also be undone from the main editor.
+- A consistent graphite workspace and warm editing sheets carry through setup, capture, grid design, and export. Clean, Paper, and Bold presets provide one-tap appearance starting points.
 - The grid library renders faithful panel-and-divider previews for both templates and locally saved custom grids.
 - Layout, Appearance, and Export live in one accessible sheet that keeps the canvas geometry stable and remains keyboard navigable.
 - Style controls cover paper, stroke color and thickness, gaps, corners, captions, and image fit, with matching live, PNG, and story-video rendering.
@@ -57,6 +59,7 @@ npm run smoke:photos
 npm run smoke:camera
 npm run smoke:video
 npm run smoke:ux
+npm run smoke:grid
 ```
 
 The smoke checks exercise browser-first setup and optional installation, exact responsive canvas geometry, labelled export flows, contextual photo actions, coalesced Undo/Redo history, simultaneous pinch zoom and snap rotation, background autosave, Home/Continue/New recovery, photo-safe custom-grid saves, accessible modal and tab behavior, keyboard and pointer grid editing, safe custom-grid deletion/discard, live/export border parity, fake-camera capture through the final panel, and explicit story-video download.

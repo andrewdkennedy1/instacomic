@@ -32,6 +32,7 @@ try {
   await page.getByRole('button', { name: /New grid/ }).tap()
   await page.locator('.creator-fullscreen').waitFor()
   const newGridPanelCount = await page.locator('.creator-panel').count()
+  await page.getByRole('tab', { name: 'Details', exact: true }).tap()
   await page.getByLabel('Grid name').fill('Four Panel Grid')
   await page.getByRole('button', { name: 'Save layout' }).tap()
   await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })

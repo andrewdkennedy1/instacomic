@@ -2,6 +2,7 @@ import { AnimatePresence, MotionConfig, motion, useDragControls } from 'framer-m
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent, TouchEvent } from 'react'
 import { createRoot } from 'react-dom/client'
+import { useDialogFocus, useDraftHistory } from './editor-hooks'
 import {
   clearDraftData,
   loadDraftAssets,
@@ -36,6 +37,7 @@ type Layout = {
   borderColor?: string
   borderThickness?: number
   dividers?: CustomLine[]
+  panelOrder?: 'reading'
 }
 
 type Shot = {
@@ -106,6 +108,14 @@ type CustomLine = {
   y1: number
   x2: number
   y2: number
+}
+
+type GridDraft = {
+  name: string
+  lines: CustomLine[]
+  thickness: number
+  borderColor: string
+  borderThickness: number
 }
 
 type TouchPoints = {
@@ -629,6 +639,9 @@ function App() {
   const [photoActionsDeferred, setPhotoActionsDeferred] = useState(false)
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const shellRef = useRef<HTMLElement>(null)
+  const creatorRef = useRef<HTMLElement>(null)
+  const discardRef = useRef<HTMLElement>(null)
+  const cameraRequestRef = useRef(0)
   const videoRef = useRef<HTMLVideoElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
@@ -670,6 +683,8 @@ function App() {
     '--page-height': pageFormat.height,
   } as React.CSSProperties
   const creatorCanvasAspect = pageFormatCanvasAspect(pageFormat)
+  useDialogFocus(creatorRef, creatorOpen, '[aria-label="Controls"]')
+  useDialogFocus(discardRef, creatorDiscardConfirmOpen, '[aria-label="Close creator"]')
 
   useEffect(() => {
     function dismissOverlay(event: KeyboardEvent) {
@@ -1376,6 +1391,7 @@ function App() {
   }
 
   function returnHome() {
+    cameraRequestRef.current += 1
     flushPendingSettingsHistory()
     const snapshot = captureProjectSnapshot()
     if (draftSessionReadyRef.current && snapshot.shotCache.some(Boolean)) {
@@ -1508,8 +1524,9 @@ function App() {
   }
 
   async function startCamera(nextFacing = facing) {
+    const request = ++cameraRequestRef.current
     if (!navigator.mediaDevices?.getUserMedia) {
-      setStatus('Camera is not available in this browser.')
+      setStatus('Camera unavailable. Use Photos to add your images.')
       return
     }
 
@@ -1524,11 +1541,18 @@ function App() {
           resizeMode: { ideal: 'none' },
         } as MediaTrackConstraints & { resizeMode: { ideal: string } },
       })
+      if (request !== cameraRequestRef.current) {
+        nextStream.getTracks().forEach((track) => track.stop())
+        return
+      }
       setStream(nextStream)
       setStatus(activePanelIndex >= 0 ? `Live in panel ${activePanelIndex + 1}.` : 'Camera ready. Tap a panel to retake it.')
     } catch (error) {
+      if (request !== cameraRequestRef.current) return
       setStream(null)
-      setStatus(error instanceof Error ? `Camera blocked: ${error.message}` : 'Camera blocked.')
+      setStatus(error instanceof DOMException && error.name === 'NotAllowedError'
+        ? 'Camera access is blocked. Allow it in your browser, or use Photos.'
+        : 'Camera unavailable. Use Photos to add your images.')
     }
   }
 
@@ -1857,7 +1881,9 @@ function App() {
       document.activeElement.blur()
     }
 
-    const panels = panelsFromLines(draftLines)
+    const originalLayout = customLayouts.find((item) => item.id === editingLayoutId)
+    const readingOrder = !editingLayoutId || originalLayout?.panelOrder === 'reading'
+    const panels = panelsFromLines(draftLines, readingOrder)
 
     if (panels.length === 0) {
       setStatus('Move a divider before saving.')
@@ -1868,6 +1894,7 @@ function App() {
       id: editingLayoutId ?? `custom-${Date.now()}`,
       name: draftName.trim() || `Custom ${customLayouts.length + 1}`,
       custom: true,
+      panelOrder: readingOrder ? 'reading' : undefined,
       dividerThickness: draftThickness,
       borderColor: draftBorderColor,
       borderThickness: draftBorderThickness,
@@ -1879,7 +1906,7 @@ function App() {
         ? current.map((item) => (item.id === editingLayoutId ? customLayout : item))
         : [...current, customLayout],
     )
-    const layoutChange = changeLayout(customLayout, !editingLayoutId)
+    const layoutChange = changeLayout(customLayout)
     setDraftName('')
     setDraftLines(createDefaultDraftLines())
     setCreatorDirty(false)
@@ -2389,11 +2416,17 @@ function App() {
           <div className="start-shell">
             <header className="start-hero">
               <div className="start-brand-row">
-                <span className="start-logo" aria-hidden="true">I</span>
+                <img className="start-logo" src="/icons/icon-192.png" alt="" />
                 <div className="start-mark">Instacomic</div>
               </div>
               <h1>Turn moments into a comic.</h1>
               <p>Shoot or add photos panel by panel, arrange the page, then export it ready to share.</p>
+              <div className="start-preview" aria-hidden="true">
+                <div className="start-preview-page" style={{ aspectRatio: `${pageFormat.width} / ${pageFormat.height}` }}>
+                  <LayoutPreview layout={layout} />
+                </div>
+                <div><span>Your story starts here</span><strong>{layout.name} <i>·</i> {pageFormat.id}</strong></div>
+              </div>
             </header>
 
             <div className="start-panel">
@@ -2533,7 +2566,7 @@ function App() {
           </button>
           <div className="editor-context">
             <span>{layout.name}</span>
-            <strong>{activePanelIndex >= 0 ? `Panel ${activePanelIndex + 1} of ${layout.panels.length}` : 'Comic ready'}</strong>
+            <strong>{activePanelIndex >= 0 ? `Panel ${activePanelIndex + 1} of ${layout.panels.length}` : capturedCount === layout.panels.length ? 'Comic ready' : `${capturedCount} of ${layout.panels.length} photos`}</strong>
           </div>
           <div className="history-toolbar" role="group" aria-label="Editing history">
             <button
@@ -2743,6 +2776,7 @@ function App() {
         onOpen={() => setDrawerOpen(true)}
         onClose={() => setDrawerOpen(false)}
         onTab={setDrawerTab}
+        status={status}
       >
         {drawerTab === 'layout' && (
           <LayoutPanel
@@ -2785,13 +2819,14 @@ function App() {
       <AnimatePresence>
         {creatorOpen && (
           <motion.section
+            ref={creatorRef}
             className="creator-fullscreen"
             role="dialog"
             aria-modal="true"
             aria-label={editingLayoutId ? 'Edit custom grid' : 'Create custom grid'}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
             transition={{ duration: 0.18 }}
           >
             <div className="creator-panel-host" inert={creatorDiscardConfirmOpen || undefined}>
@@ -2803,6 +2838,8 @@ function App() {
                 borderThickness={draftBorderThickness}
                 editing={editingLayoutId !== null}
                 pageFormat={pageFormat}
+                paperColor={settings.background}
+                readingOrder={!editingLayoutId || customLayouts.find((item) => item.id === editingLayoutId)?.panelOrder === 'reading'}
                 onName={(value) => {
                   setCreatorDirty(true)
                   setDraftName(value)
@@ -2825,16 +2862,24 @@ function App() {
                 onReset={resetDraftLayout}
                 onSave={saveDraftLayout}
                 onCancel={closeCreator}
+                onDirty={setCreatorDirty}
+                onRestore={(draft) => {
+                  setDraftName(draft.name)
+                  setDraftLines(draft.lines)
+                  setDraftThickness(draft.thickness)
+                  setDraftBorderColor(draft.borderColor)
+                  setDraftBorderThickness(draft.borderThickness)
+                }}
               />
             </div>
             {creatorDiscardConfirmOpen && (
               <div className="creator-discard-backdrop">
-                <section className="creator-discard-dialog" role="alertdialog" aria-modal="true" aria-labelledby="discard-grid-heading" aria-describedby="discard-grid-copy">
+                <section ref={discardRef} className="creator-discard-dialog" role="alertdialog" aria-modal="true" aria-labelledby="discard-grid-heading" aria-describedby="discard-grid-copy">
                   <span>Unsaved grid</span>
                   <strong id="discard-grid-heading">Discard your changes?</strong>
                   <p id="discard-grid-copy">The grid has changes that have not been saved.</p>
                   <div>
-                    <button type="button" autoFocus onClick={() => setCreatorDiscardConfirmOpen(false)}>Keep editing</button>
+                    <button type="button" onClick={() => setCreatorDiscardConfirmOpen(false)}>Keep editing</button>
                     <button className="is-danger" type="button" onClick={discardCreator}>Discard changes</button>
                   </div>
                 </section>
@@ -3014,6 +3059,7 @@ function Drawer({
   onOpen,
   onClose,
   onTab,
+  status,
 }: {
   open: boolean
   tab: DrawerTab
@@ -3022,6 +3068,7 @@ function Drawer({
   onOpen: () => void
   onClose: () => void
   onTab: (tab: DrawerTab) => void
+  status: string
 }) {
   const tabTitle = tab === 'layout' ? 'Layout & canvas' : tab === 'style' ? 'Appearance' : 'Export comic'
   const drawerRef = useRef<HTMLElement>(null)
@@ -3055,13 +3102,13 @@ function Drawer({
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const drawer = drawerRef.current
     const focusableSelector = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'
-    requestAnimationFrame(() => drawer?.querySelector<HTMLElement>('.drawer-close')?.focus())
+    const focusFrame = requestAnimationFrame(() => drawer?.querySelector<HTMLElement>('.drawer-close')?.focus({ preventScroll: true }))
 
     function keepFocusInside(event: KeyboardEvent) {
       if (event.key !== 'Tab' || !drawer) {
         return
       }
-      const focusable = Array.from(drawer.querySelectorAll<HTMLElement>(focusableSelector)).filter((element) => !element.hidden)
+      const focusable = Array.from(drawer.querySelectorAll<HTMLElement>(focusableSelector)).filter((element) => element.tabIndex >= 0 && element.getClientRects().length > 0 && !element.closest('[inert]'))
       const first = focusable[0]
       const last = focusable.at(-1)
       if (!first || !last) {
@@ -3079,7 +3126,8 @@ function Drawer({
     document.addEventListener('keydown', keepFocusInside)
     return () => {
       document.removeEventListener('keydown', keepFocusInside)
-      previousFocusRef.current?.focus()
+      cancelAnimationFrame(focusFrame)
+      previousFocusRef.current?.focus({ preventScroll: true })
     }
   }, [open])
 
@@ -3102,6 +3150,7 @@ function Drawer({
       </AnimatePresence>
       <motion.aside
         ref={drawerRef}
+        initial={false}
         className={`motion-drawer motion-drawer-${tab} ${open ? 'is-open' : ''}`}
         role="dialog"
         aria-modal={open || undefined}
@@ -3174,6 +3223,7 @@ function Drawer({
             {children}
           </motion.div>
         </AnimatePresence>
+        {open && <p className="drawer-feedback" role="status">{status}</p>}
       </motion.aside>
     </>
   )
@@ -3230,14 +3280,14 @@ function LayoutPanel({
         </div>
       </section>
 
-      <div className="current-layout-card" aria-label={`Current layout ${layout.name}`}>
+      {!layout.custom && <div className="current-layout-card" aria-label={`Current layout ${layout.name}`}>
         <LayoutPreview layout={layout} />
         <div>
           <span>Current grid</span>
           <strong>{layout.name}</strong>
           <em>{`${layout.panels.length} panel${layout.panels.length === 1 ? '' : 's'}`}</em>
         </div>
-      </div>
+      </div>}
 
       <section className="layout-section" aria-labelledby="saved-grid-heading">
         <div className="layout-section-heading">
@@ -3442,6 +3492,8 @@ function CreatorPanel({
   borderThickness,
   editing,
   pageFormat,
+  paperColor,
+  readingOrder,
   onName,
   onAddLine,
   onRemoveLine,
@@ -3452,6 +3504,8 @@ function CreatorPanel({
   onReset,
   onSave,
   onCancel,
+  onDirty,
+  onRestore,
 }: {
   draftName: string
   draftLines: CustomLine[]
@@ -3460,6 +3514,8 @@ function CreatorPanel({
   borderThickness: number
   editing: boolean
   pageFormat: PageFormat
+  paperColor: string
+  readingOrder: boolean
   onName: (name: string) => void
   onAddLine: (preset: CustomLinePreset) => void
   onRemoveLine: (lineId: string) => void
@@ -3470,6 +3526,8 @@ function CreatorPanel({
   onReset: () => void
   onSave: () => void
   onCancel: () => void
+  onDirty: (dirty: boolean) => void
+  onRestore: (draft: GridDraft) => void
 }) {
   const canvasRef = useRef<HTMLDivElement>(null)
   const [lineDrag, setLineDrag] = useState<{
@@ -3483,23 +3541,48 @@ function CreatorPanel({
   const lineTouchRef = useRef<LineTouchState | null>(null)
   const linePointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(new Map())
   const [selectedLineId, setSelectedLineId] = useState<string | null>(draftLines[0]?.id ?? null)
-  const previewPanels = useMemo(() => panelsFromLines(draftLines), [draftLines])
+  const previousLineIds = useRef(draftLines.map((line) => line.id))
+  const [toolTab, setToolTab] = useState<'dividers' | 'borders' | 'details'>('dividers')
+  const [previewing, setPreviewing] = useState(false)
+  const [snapEnabled, setSnapEnabled] = useState(true)
+  const history = useDraftHistory<GridDraft>(
+    { name: draftName, lines: draftLines, thickness: dividerThickness, borderColor, borderThickness },
+    onRestore,
+  )
+  useEffect(() => onDirty(history.dirty), [history.dirty, onDirty])
+  const previewPanels = useMemo(() => panelsFromLines(draftLines, readingOrder), [draftLines, readingOrder])
   const canvasAspect = pageFormatCanvasAspect(pageFormat)
   const creatorStyle = {
     '--creator-divider-thickness': `${dividerThickness}px`,
     '--creator-border-color': borderColor,
     '--creator-border-thickness': `${borderThickness}px`,
+    '--creator-paper': paperColor,
     '--creator-handle-size': '44px',
     '--creator-page-width': pageFormat.width,
     '--creator-page-height': pageFormat.height,
   } as React.CSSProperties
 
   useEffect(() => {
+    const added = draftLines.find((line) => !previousLineIds.current.includes(line.id))
+    previousLineIds.current = draftLines.map((line) => line.id)
+    if (added) {
+      setSelectedLineId(added.id)
+      setPreviewing(false)
+      return
+    }
     if (selectedLineId && draftLines.some((line) => line.id === selectedLineId)) {
       return
     }
     setSelectedLineId(draftLines[0]?.id ?? null)
   }, [draftLines, selectedLineId])
+
+  function moveLine(lineId: string, update: Partial<CustomLine>, shouldSnap = true) {
+    history.change(() => onMoveLine(lineId, update, shouldSnap && snapEnabled), 'move')
+  }
+
+  function deleteSelected() {
+    if (selectedLineId) history.change(() => onRemoveLine(selectedLineId))
+  }
 
   function beginLineDrag(event: PointerEvent<HTMLElement>, line: CustomLine, mode: 'line' | 'start' | 'end') {
     event.preventDefault()
@@ -3515,6 +3598,8 @@ function CreatorPanel({
   }
 
   function beginLinePointer(event: PointerEvent<HTMLElement>, line: CustomLine, mode: 'line' | 'start' | 'end') {
+    if (event.button !== 0) return
+    if (linePointersRef.current.size === 0) history.endGroup()
     setSelectedLineId(line.id)
     if (event.pointerType !== 'touch') {
       beginLineDrag(event, line, mode)
@@ -3553,24 +3638,35 @@ function CreatorPanel({
     const dy = ((event.clientY - lineDrag.startY) / rect.height) * 100
 
     if (lineDrag.mode === 'line') {
-      onMoveLine(lineDrag.id, {
-        x1: lineDrag.line.x1 + dx,
-        y1: lineDrag.line.y1 + dy,
-        x2: lineDrag.line.x2 + dx,
-        y2: lineDrag.line.y2 + dy,
+      // Constrain the translation as a whole so a line cannot shrink at an edge.
+      const moveX = clamp(
+        dx,
+        -Math.min(lineDrag.line.x1, lineDrag.line.x2),
+        100 - Math.max(lineDrag.line.x1, lineDrag.line.x2),
+      )
+      const moveY = clamp(
+        dy,
+        -Math.min(lineDrag.line.y1, lineDrag.line.y2),
+        100 - Math.max(lineDrag.line.y1, lineDrag.line.y2),
+      )
+      moveLine(lineDrag.id, {
+        x1: lineDrag.line.x1 + moveX,
+        y1: lineDrag.line.y1 + moveY,
+        x2: lineDrag.line.x2 + moveX,
+        y2: lineDrag.line.y2 + moveY,
       })
       return
     }
 
     if (lineDrag.mode === 'start') {
-      onMoveLine(lineDrag.id, {
+      moveLine(lineDrag.id, {
         x1: lineDrag.line.x1 + dx,
         y1: lineDrag.line.y1 + dy,
       })
       return
     }
 
-    onMoveLine(lineDrag.id, {
+    moveLine(lineDrag.id, {
       x2: lineDrag.line.x2 + dx,
       y2: lineDrag.line.y2 + dy,
     })
@@ -3593,16 +3689,19 @@ function CreatorPanel({
     const dx = direction[0] * step
     const dy = direction[1] * step
     if (mode === 'line') {
-      onMoveLine(line.id, { x1: line.x1 + dx, y1: line.y1 + dy, x2: line.x2 + dx, y2: line.y2 + dy }, false)
+      const moveX = clamp(dx, -Math.min(line.x1, line.x2), 100 - Math.max(line.x1, line.x2))
+      const moveY = clamp(dy, -Math.min(line.y1, line.y2), 100 - Math.max(line.y1, line.y2))
+      moveLine(line.id, { x1: line.x1 + moveX, y1: line.y1 + moveY, x2: line.x2 + moveX, y2: line.y2 + moveY }, false)
     } else if (mode === 'start') {
-      onMoveLine(line.id, { x1: line.x1 + dx, y1: line.y1 + dy }, false)
+      moveLine(line.id, { x1: line.x1 + dx, y1: line.y1 + dy }, false)
     } else {
-      onMoveLine(line.id, { x2: line.x2 + dx, y2: line.y2 + dy }, false)
+      moveLine(line.id, { x2: line.x2 + dx, y2: line.y2 + dy }, false)
     }
   }
 
   function moveLinePointer(event: PointerEvent<HTMLElement>) {
     if (event.pointerType === 'touch') {
+      if (!linePointersRef.current.has(event.pointerId)) return
       linePointersRef.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY })
       const touches = linePointerTouches()
       if (touches && lineTouchRef.current) {
@@ -3696,9 +3795,18 @@ function CreatorPanel({
     const center = touchCenterPercent(touches, activeTouch.rect)
     const scale = clamp(touchDistance(touches) / activeTouch.startDistance, 0.35, 3)
     const rotation = angleDelta(activeTouch.startAngle, touchAngle(touches))
-    onMoveLine(
+    moveLine(
       activeTouch.id,
-      transformLineByTouch(activeTouch.line, activeTouch.startCenterX, activeTouch.startCenterY, center.x, center.y, scale, rotation, canvasAspect),
+      transformLineByTouch(
+        activeTouch.line,
+        activeTouch.startCenterX,
+        activeTouch.startCenterY,
+        center.x,
+        center.y,
+        scale,
+        rotation,
+        canvasAspect,
+      ),
     )
   }
 
@@ -3739,12 +3847,36 @@ function CreatorPanel({
       data-border-thickness={borderThickness}
       data-page-format={pageFormat.id}
       onSubmit={submitLayout}
+      onPointerUpCapture={history.endGroup}
+      onPointerCancelCapture={history.endGroup}
+      onTouchEndCapture={history.endGroup}
+      onBlurCapture={history.endGroup}
+      onKeyUpCapture={(event) => {
+        if (event.key.startsWith('Arrow')) history.endGroup()
+      }}
+      onKeyDown={(event) => {
+        if ((event.target as HTMLElement).matches('input, select, textarea')) return
+        if ((event.ctrlKey || event.metaKey) && ['z', 'y'].includes(event.key.toLowerCase())) {
+          event.preventDefault()
+          event.stopPropagation()
+          if (event.shiftKey || event.key.toLowerCase() === 'y') history.redo()
+          else history.undo()
+        } else if ((event.key === 'Delete' || event.key === 'Backspace') && !previewing) {
+          event.preventDefault()
+          deleteSelected()
+        }
+      }}
     >
       <div className="creator-topbar">
-        <button type="button" autoFocus onClick={onCancel} aria-label="Close creator">
+        <button type="button" onClick={onCancel} aria-label="Close creator">
           Close
         </button>
-        <strong>{editing ? 'Edit grid' : 'Create grid'}</strong>
+        <div className="creator-title">
+          <strong>{editing ? 'Edit grid' : 'Create grid'}</strong>
+          <span>
+            {pageFormat.id} canvas · {history.dirty ? 'Unsaved changes' : 'Make it yours'}
+          </span>
+        </div>
         <button
           type="submit"
           className="primary"
@@ -3756,165 +3888,307 @@ function CreatorPanel({
         </button>
       </div>
       <div className="creator-workbench">
-        <div
-          ref={canvasRef}
-          className="creator-canvas"
-          aria-label="Drag layout divider handles"
-          data-page-format={pageFormat.id}
-          onTouchStart={beginLineTouch}
-          onTouchMove={moveLineFromTouch}
-          onTouchEnd={(event) => {
-            if (event.touches.length < 2) {
-              clearLineTouch()
-            }
-          }}
-          onTouchCancel={clearLineTouch}
-        >
-          {previewPanels.map((panel) => (
-            <div key={panel.id} className="creator-panel" style={panelStyle(panel)} />
-          ))}
-          {draftLines.map((line, index) => (
-            <React.Fragment key={line.id}>
-              <button
-                className={`creator-line-hit ${selectedLineId === line.id ? 'is-selected' : ''}`}
-                style={lineSegmentStyle(line, canvasAspect)}
-                type="button"
-                aria-label={`Move divider ${index + 1}`}
-                data-divider-id={line.id}
-                onPointerDown={(event) => beginLinePointer(event, line, 'line')}
-                onPointerMove={moveLinePointer}
-                onPointerUp={endLinePointer}
-                onPointerCancel={endLinePointer}
-                onKeyDown={(event) => nudgeLine(event, line, 'line')}
-              />
-              <span
-                className={`creator-free-line ${selectedLineId === line.id ? 'is-selected' : ''} ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
-                style={lineSegmentStyle(line, canvasAspect)}
-                aria-hidden="true"
-                data-divider-id={line.id}
-                data-divider-index={index}
-                data-divider-x1={line.x1.toFixed(2)}
-                data-divider-y1={line.y1.toFixed(2)}
-                data-divider-x2={line.x2.toFixed(2)}
-                data-divider-y2={line.y2.toFixed(2)}
-              />
-              <button
-                className={`creator-handle creator-handle-start ${selectedLineId === line.id ? 'is-selected' : ''} ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
-                style={lineHandleStyle(line.x1, line.y1)}
-                type="button"
-                aria-label={`Move divider ${index + 1} start`}
-                data-divider-id={line.id}
-                data-divider-index={index}
-                data-handle="start"
-                onPointerDown={(event) => beginLinePointer(event, line, 'start')}
-                onPointerMove={moveLinePointer}
-                onPointerUp={endLinePointer}
-                onPointerCancel={endLinePointer}
-                onKeyDown={(event) => nudgeLine(event, line, 'start')}
-                onTouchStart={(event) => {
-                  if (event.touches.length > 1) {
-                    beginLineTouch(event)
-                  }
-                }}
-                onTouchMove={moveLineFromTouch}
-                onTouchEnd={(event) => {
-                  if (event.touches.length < 2) {
-                    clearLineTouch()
-                  }
-                }}
-                onTouchCancel={clearLineTouch}
-              />
-              <button
-                className={`creator-handle creator-handle-end ${selectedLineId === line.id ? 'is-selected' : ''} ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
-                style={lineHandleStyle(line.x2, line.y2)}
-                type="button"
-                aria-label={`Move divider ${index + 1} end`}
-                data-divider-id={line.id}
-                data-divider-index={index}
-                data-handle="end"
-                onPointerDown={(event) => beginLinePointer(event, line, 'end')}
-                onPointerMove={moveLinePointer}
-                onPointerUp={endLinePointer}
-                onPointerCancel={endLinePointer}
-                onKeyDown={(event) => nudgeLine(event, line, 'end')}
-                onTouchStart={(event) => {
-                  if (event.touches.length > 1) {
-                    beginLineTouch(event)
-                  }
-                }}
-                onTouchMove={moveLineFromTouch}
-                onTouchEnd={(event) => {
-                  if (event.touches.length < 2) {
-                    clearLineTouch()
-                  }
-                }}
-                onTouchCancel={clearLineTouch}
-              />
-            </React.Fragment>
-          ))}
-        </div>
-        <div className="creator-side">
-          <div className="creator-inspector-heading">
-            <div>
-              <span>Grid structure</span>
-              <strong>{`${previewPanels.length} panel${previewPanels.length === 1 ? '' : 's'} · ${draftLines.length} divider${draftLines.length === 1 ? '' : 's'}`}</strong>
-            </div>
-            <em>{selectedLineId ? `Divider ${draftLines.findIndex((line) => line.id === selectedLineId) + 1} selected` : 'No divider selected'}</em>
-          </div>
-          <p className="creator-gesture-hint">Drag a line to move it, or drag either endpoint to reshape it. Use two fingers to rotate and resize.</p>
-
-          <section className="creator-control-section" aria-labelledby="divider-tools-heading">
-            <div className="creator-control-heading">
-              <strong id="divider-tools-heading">Divider tools</strong>
-              <span>Add or remove lines</span>
-            </div>
-            <div className="creator-divider-tools">
-              <button type="button" onClick={() => onAddLine('vertical')}>Vertical divider</button>
-              <button type="button" onClick={() => onAddLine('horizontal')}>Horizontal divider</button>
-              <button type="button" onClick={() => onAddLine('diagonal')}>Diagonal divider</button>
-              <button
-                className="is-danger"
-                type="button"
-                disabled={!selectedLineId}
-                onClick={() => selectedLineId && onRemoveLine(selectedLineId)}
-              >
-                Delete selected
+        <div className="creator-stage">
+          <div className="creator-stage-toolbar">
+            <span>{previewPanels.length} panels</span>
+            <div role="group" aria-label="Grid editing history">
+              <button type="button" aria-label="Undo grid edit" disabled={!history.canUndo} onClick={history.undo}>
+                <ToolIcon name="undo" />
+              </button>
+              <button type="button" aria-label="Redo grid edit" disabled={!history.canRedo} onClick={history.redo}>
+                <ToolIcon name="redo" />
               </button>
             </div>
-          </section>
+            <button
+              type="button"
+              className="creator-preview-toggle"
+              aria-pressed={previewing}
+              onClick={() => setPreviewing(!previewing)}
+            >
+              {previewing ? 'Edit grid' : 'Preview'}
+            </button>
+          </div>
+          <div className="creator-canvas-zone">
+            <div
+              ref={canvasRef}
+              className={`creator-canvas ${previewing ? 'is-previewing' : ''}`}
+              aria-label="Drag layout divider handles"
+              data-page-format={pageFormat.id}
+              inert={previewing || undefined}
+              onTouchStart={beginLineTouch}
+              onTouchMove={moveLineFromTouch}
+              onTouchEnd={(event) => {
+                if (event.touches.length < 2) {
+                  clearLineTouch()
+                }
+              }}
+              onTouchCancel={clearLineTouch}
+            >
+              {previewPanels.map((panel) => (
+                <div key={panel.id} className="creator-panel" style={panelStyle(panel)} />
+              ))}
+              {previewPanels.map((panel, index) => (
+                <span
+                  key={`number-${panel.id}`}
+                  className="creator-panel-number"
+                  style={panelCenterStyle(panel)}
+                  aria-hidden="true"
+                >
+                  {index + 1}
+                </span>
+              ))}
+              {draftLines.map((line, index) => (
+                <React.Fragment key={line.id}>
+                  <button
+                    className={`creator-line-hit ${selectedLineId === line.id ? 'is-selected' : ''}`}
+                    style={lineSegmentStyle(line, canvasAspect)}
+                    type="button"
+                    aria-label={`Move divider ${index + 1}`}
+                    data-divider-id={line.id}
+                    aria-pressed={selectedLineId === line.id}
+                    onFocus={() => setSelectedLineId(line.id)}
+                    onPointerDown={(event) => beginLinePointer(event, line, 'line')}
+                    onPointerMove={moveLinePointer}
+                    onPointerUp={endLinePointer}
+                    onPointerCancel={endLinePointer}
+                    onKeyDown={(event) => nudgeLine(event, line, 'line')}
+                  />
+                  <span
+                    className={`creator-free-line ${selectedLineId === line.id ? 'is-selected' : ''} ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
+                    style={lineSegmentStyle(line, canvasAspect)}
+                    aria-hidden="true"
+                    data-divider-id={line.id}
+                    data-divider-index={index}
+                    data-divider-x1={line.x1.toFixed(2)}
+                    data-divider-y1={line.y1.toFixed(2)}
+                    data-divider-x2={line.x2.toFixed(2)}
+                    data-divider-y2={line.y2.toFixed(2)}
+                  />
+                  <button
+                    className={`creator-handle creator-handle-start ${selectedLineId === line.id ? 'is-selected' : ''} ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
+                    style={lineHandleStyle(line.x1, line.y1)}
+                    type="button"
+                    aria-label={`Move divider ${index + 1} start`}
+                    data-divider-id={line.id}
+                    data-divider-index={index}
+                    data-handle="start"
+                    onPointerDown={(event) => beginLinePointer(event, line, 'start')}
+                    onPointerMove={moveLinePointer}
+                    onPointerUp={endLinePointer}
+                    onPointerCancel={endLinePointer}
+                    onKeyDown={(event) => nudgeLine(event, line, 'start')}
+                    onTouchStart={(event) => {
+                      if (event.touches.length > 1) {
+                        beginLineTouch(event)
+                      }
+                    }}
+                    onTouchMove={moveLineFromTouch}
+                    onTouchEnd={(event) => {
+                      if (event.touches.length < 2) {
+                        clearLineTouch()
+                      }
+                    }}
+                    onTouchCancel={clearLineTouch}
+                  />
+                  <button
+                    className={`creator-handle creator-handle-end ${selectedLineId === line.id ? 'is-selected' : ''} ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
+                    style={lineHandleStyle(line.x2, line.y2)}
+                    type="button"
+                    aria-label={`Move divider ${index + 1} end`}
+                    data-divider-id={line.id}
+                    data-divider-index={index}
+                    data-handle="end"
+                    onPointerDown={(event) => beginLinePointer(event, line, 'end')}
+                    onPointerMove={moveLinePointer}
+                    onPointerUp={endLinePointer}
+                    onPointerCancel={endLinePointer}
+                    onKeyDown={(event) => nudgeLine(event, line, 'end')}
+                    onTouchStart={(event) => {
+                      if (event.touches.length > 1) {
+                        beginLineTouch(event)
+                      }
+                    }}
+                    onTouchMove={moveLineFromTouch}
+                    onTouchEnd={(event) => {
+                      if (event.touches.length < 2) {
+                        clearLineTouch()
+                      }
+                    }}
+                    onTouchCancel={clearLineTouch}
+                  />
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+          <p className="creator-gesture-hint">
+            {previewing
+              ? 'Your finished grid. Tap Edit grid to keep shaping it.'
+              : 'Drag a divider or its endpoints. Use two fingers to rotate and resize.'}
+          </p>
+        </div>
+        <div className="creator-side">
+          <div className="creator-tool-tabs" role="tablist" aria-label="Grid tools">
+            {(['dividers', 'borders', 'details'] as const).map((tab, index, tabs) => (
+              <button
+                key={tab}
+                id={`grid-tab-${tab}`}
+                type="button"
+                role="tab"
+                aria-selected={toolTab === tab}
+                aria-controls={`grid-tools-${tab}`}
+                tabIndex={toolTab === tab ? 0 : -1}
+                onClick={() => setToolTab(tab)}
+                onKeyDown={(event) => {
+                  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+                  event.preventDefault()
+                  const next =
+                    event.key === 'Home'
+                      ? tabs[0]
+                      : event.key === 'End'
+                        ? tabs[2]
+                        : tabs[(index + (event.key === 'ArrowRight' ? 1 : 2)) % 3]
+                  setToolTab(next)
+                  document.getElementById(`grid-tab-${next}`)?.focus()
+                }}
+              >
+                {tab === 'dividers' ? 'Dividers' : tab === 'borders' ? 'Borders' : 'Details'}
+              </button>
+            ))}
+          </div>
+          <div className="creator-tool-content">
+            <section
+              className="creator-control-section"
+              id="grid-tools-dividers"
+              role="tabpanel"
+              aria-labelledby="grid-tab-dividers"
+              hidden={toolTab !== 'dividers'}
+            >
+              <div className="creator-control-heading">
+                <strong>Shape your story</strong>
+                <span>Add a divider, then drag it into place</span>
+              </div>
+              <div className="creator-divider-tools">
+                {(['vertical', 'horizontal', 'diagonal'] as const).map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    aria-label={`${preset[0].toUpperCase()}${preset.slice(1)} divider`}
+                    onClick={() => history.change(() => onAddLine(preset))}
+                  >
+                    <span className={`divider-tool-icon is-${preset}`} aria-hidden="true">
+                      <i />
+                    </span>
+                    {preset[0].toUpperCase()}
+                    {preset.slice(1)}
+                  </button>
+                ))}
+              </div>
+              <div className="creator-selection-row">
+                <label>
+                  <span className="sr-status">Selected divider</span>
+                  <select
+                    aria-label="Selected divider"
+                    value={selectedLineId ?? ''}
+                    disabled={!draftLines.length}
+                    onChange={(event) => {
+                      setSelectedLineId(event.target.value)
+                      setPreviewing(false)
+                    }}
+                  >
+                    {!draftLines.length && <option value="">No dividers</option>}
+                    {draftLines.map((line, index) => (
+                      <option key={line.id} value={line.id}>
+                        Divider {index + 1}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  className="creator-snap-toggle"
+                  type="button"
+                  aria-pressed={snapEnabled}
+                  onClick={() => setSnapEnabled(!snapEnabled)}
+                >
+                  Snap {snapEnabled ? 'on' : 'off'}
+                </button>
+                <button
+                  className="is-danger"
+                  type="button"
+                  aria-label="Delete selected"
+                  disabled={!selectedLineId}
+                  onClick={deleteSelected}
+                >
+                  <ToolIcon name="remove" />
+                </button>
+              </div>
+            </section>
 
-          <section className="creator-control-section" aria-labelledby="grid-appearance-heading">
-            <div className="creator-control-heading">
-              <strong id="grid-appearance-heading">Grid appearance</strong>
-              <span>Applied to live and exported comics</span>
-            </div>
-            <div className="creator-border-controls" aria-label="Grid border controls">
-              <ColorField label="Border color" value={borderColor} onChange={onBorderColor} />
-              <RangeField label="Border thickness" value={borderThickness} min={0} max={10} unit="px" onChange={onBorderThickness} />
-            </div>
-            <RangeField label="Panel gap" ariaLabel="Divider thickness" value={dividerThickness} min={6} max={20} unit="px" onChange={onThickness} />
-          </section>
-
-          <section className="creator-control-section" aria-labelledby="grid-details-heading">
-            <div className="creator-control-heading">
-              <strong id="grid-details-heading">Details</strong>
-              <span>Name this grid for your library</span>
-            </div>
-            <label className="field text-field">
-              <span>Grid name</span>
-              <input
-                value={draftName}
-                placeholder="My grid"
-                aria-label="Grid name"
-                autoComplete="off"
-                enterKeyHint="done"
-                onChange={(event) => onName(event.target.value)}
+            <section
+              className="creator-control-section"
+              id="grid-tools-borders"
+              role="tabpanel"
+              aria-labelledby="grid-tab-borders"
+              hidden={toolTab !== 'borders'}
+            >
+              <div className="creator-control-heading">
+                <strong id="grid-appearance-heading">Grid appearance</strong>
+                <span>A little space makes a difference</span>
+              </div>
+              <div className="creator-border-controls" aria-label="Grid border controls">
+                <ColorField
+                  label="Border color"
+                  value={borderColor}
+                  onChange={(value) => history.change(() => onBorderColor(value), 'color')}
+                />
+                <RangeField
+                  label="Border thickness"
+                  value={borderThickness}
+                  min={0}
+                  max={10}
+                  unit="px"
+                  onChange={(value) => history.change(() => onBorderThickness(value), 'border')}
+                />
+              </div>
+              <RangeField
+                label="Panel gap"
+                ariaLabel="Divider thickness"
+                value={dividerThickness}
+                min={0}
+                max={24}
+                unit="px"
+                onChange={(value) => history.change(() => onThickness(value), 'gap')}
               />
-            </label>
-          </section>
+            </section>
 
-          <div className="creator-actions">
-            <button type="button" onClick={onReset}>Reset grid</button>
+            <section
+              className="creator-control-section"
+              id="grid-tools-details"
+              role="tabpanel"
+              aria-labelledby="grid-tab-details"
+              hidden={toolTab !== 'details'}
+            >
+              <div className="creator-control-heading">
+                <strong id="grid-details-heading">Details</strong>
+                <span>Name this grid for your library</span>
+              </div>
+              <label className="field text-field">
+                <span>Grid name</span>
+                <input
+                  value={draftName}
+                  placeholder="My grid"
+                  aria-label="Grid name"
+                  autoComplete="off"
+                  enterKeyHint="done"
+                  maxLength={48}
+                  onChange={(event) => history.change(() => onName(event.target.value), 'name')}
+                />
+              </label>
+              <div className="creator-actions">
+                <button type="button" onClick={() => history.change(onReset)}>
+                  Reset grid
+                </button>
+              </div>
+            </section>
           </div>
         </div>
       </div>
@@ -3931,8 +4205,35 @@ function StylePanel({
   onSettings: (settings: Partial<Settings>) => void
   onReset: () => void
 }) {
+  const presets = [
+    { name: 'Clean', background: '#ffffff', borderColor: '#111111', border: 0, gutters: 8, radius: 0 },
+    { name: 'Paper', background: '#f3ede2', borderColor: '#51483e', border: 1, gutters: 12, radius: 4 },
+    { name: 'Bold', background: '#111111', borderColor: '#111111', border: 3, gutters: 6, radius: 0 },
+  ]
   return (
     <div className="drawer-stack style-stack">
+      <SettingsSection title="Start with a look" description="One tap to set the mood. Fine-tune anything below.">
+        <div className="style-presets" role="group" aria-label="Appearance presets">
+          {presets.map(({ name, ...preset }) => (
+            <button
+              key={name}
+              type="button"
+              aria-pressed={Object.entries(preset).every(([key, value]) => settings[key as keyof Settings] === value)}
+              onClick={() => onSettings(preset)}
+            >
+              <span
+                className="style-preset-preview"
+                style={{ background: preset.background, color: preset.borderColor }}
+                aria-hidden="true"
+              >
+                <i />
+                <i />
+              </span>
+              {name}
+            </button>
+          ))}
+        </div>
+      </SettingsSection>
       <SettingsSection title="Caption" description="Add an optional title to the finished comic.">
         <label className="field text-field">
           <span>Caption text</span>
@@ -3952,27 +4253,64 @@ function StylePanel({
       <SettingsSection title="Canvas" description="Set the page and line colors.">
         <div className="color-field-grid">
           <ColorField label="Paper" value={settings.background} onChange={(background) => onSettings({ background })} />
-          <ColorField label="Panel stroke" value={settings.borderColor} onChange={(borderColor) => onSettings({ borderColor })} />
+          <ColorField
+            label="Panel stroke"
+            value={settings.borderColor}
+            onChange={(borderColor) => onSettings({ borderColor })}
+          />
         </div>
       </SettingsSection>
 
       <SettingsSection title="Panels" description="Tune spacing and edge treatment across the whole grid.">
         <div className="fit-segmented" role="group" aria-label="Default photo fit">
-          <button type="button" className={settings.fit === 'cover' ? 'active' : ''} aria-pressed={settings.fit === 'cover'} onClick={() => onSettings({ fit: 'cover' })}>
+          <button
+            type="button"
+            className={settings.fit === 'cover' ? 'active' : ''}
+            aria-pressed={settings.fit === 'cover'}
+            onClick={() => onSettings({ fit: 'cover' })}
+          >
             <strong>Fill</strong>
             <span>Crop to frame</span>
           </button>
-          <button type="button" className={settings.fit === 'contain' ? 'active' : ''} aria-pressed={settings.fit === 'contain'} onClick={() => onSettings({ fit: 'contain' })}>
+          <button
+            type="button"
+            className={settings.fit === 'contain' ? 'active' : ''}
+            aria-pressed={settings.fit === 'contain'}
+            onClick={() => onSettings({ fit: 'contain' })}
+          >
             <strong>Fit</strong>
             <span>Show whole photo</span>
           </button>
         </div>
-        <RangeField label="Panel gap" value={settings.gutters} min={0} max={24} unit="px" onChange={(gutters) => onSettings({ gutters })} />
-        <RangeField label="Corner radius" value={settings.radius} min={0} max={24} unit="px" onChange={(radius) => onSettings({ radius })} />
-        <RangeField label="Stroke width" value={settings.border} min={0} max={10} unit="px" onChange={(border) => onSettings({ border })} />
+        <RangeField
+          label="Panel gap"
+          value={settings.gutters}
+          min={0}
+          max={24}
+          unit="px"
+          onChange={(gutters) => onSettings({ gutters })}
+        />
+        <RangeField
+          label="Corner radius"
+          value={settings.radius}
+          min={0}
+          max={24}
+          unit="px"
+          onChange={(radius) => onSettings({ radius })}
+        />
+        <RangeField
+          label="Stroke width"
+          value={settings.border}
+          min={0}
+          max={10}
+          unit="px"
+          onChange={(border) => onSettings({ border })}
+        />
       </SettingsSection>
 
-      <button className="settings-reset" type="button" onClick={onReset}>Reset appearance</button>
+      <button className="settings-reset" type="button" onClick={onReset}>
+        Reset appearance
+      </button>
     </div>
   )
 }
@@ -4655,8 +4993,8 @@ function panelStyle(panel: Panel) {
     width: `${panel.w * 100}%`,
     height: `${panel.h * 100}%`,
     clipPath: panel.points ? pointsToClipPath(panel.points) : undefined,
-    '--chip-x': `${center.x * 100}%`,
-    '--chip-y': `${center.y * 100}%`,
+    '--chip-x': `${((center.x - panel.x) / panel.w) * 100}%`,
+    '--chip-y': `${((center.y - panel.y) / panel.h) * 100}%`,
   }
 }
 
@@ -5090,7 +5428,7 @@ function transformLineByTouch(
   return { x1: start.x, y1: start.y, x2: end.x, y2: end.y }
 }
 
-function panelsFromLines(lines: CustomLine[]) {
+function panelsFromLines(lines: CustomLine[], readingOrder = true) {
   let polygons: Array<Array<[number, number]>> = [
     [
       [0, 0],
@@ -5132,6 +5470,14 @@ function panelsFromLines(lines: CustomLine[]) {
       h: 1,
       points: simplifyPolygon(points).map(([x, y]) => [Number(x.toFixed(2)), Number(y.toFixed(2))] as [number, number]),
     }))
+    .sort((first, second) => {
+      // Existing grids keep their panel-to-photo mapping when edited.
+      if (!readingOrder) return 0
+      const a = panelCentroid(first)
+      const b = panelCentroid(second)
+      return Math.round(a.y * 10) - Math.round(b.y * 10) || a.x - b.x
+    })
+    .map((panel, index) => ({ ...panel, id: String(index + 1) }))
 }
 
 function lineSegmentSplitsPolygon(polygon: Array<[number, number]>, line: CustomLine) {

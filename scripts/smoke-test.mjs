@@ -109,6 +109,7 @@ const dividerAfterWholeLineDrag = Number(await page.locator('.creator-free-line'
 const creatorWholeLineMoved = dividerAfterWholeLineDrag > dividerBeforeWholeLineDrag + 1
 await page.getByRole('button', { name: 'Delete selected' }).tap()
 const creatorDividerDeleted = (await page.locator('.creator-free-line').count()) === 1
+await page.getByRole('tab', { name: 'Details', exact: true }).tap()
 await page.getByLabel('Grid name').fill('Unsaved grid')
 await page.getByRole('button', { name: 'Close creator' }).tap()
 const creatorDiscardConfirmation = await page.getByRole('alertdialog', { name: 'Discard your changes?' }).isVisible()
@@ -122,8 +123,10 @@ await page.locator('.creator-fullscreen').waitFor()
 const creatorResetAfterDiscard = (await page.locator('.creator-free-line').count()) === 2 && (await page.getByLabel('Grid name').inputValue()) === ''
 mkdirSync('test-results', { recursive: true })
 await page.screenshot({ path: 'test-results/custom-grid-creator.png', fullPage: true })
+await page.getByRole('tab', { name: 'Details', exact: true }).tap()
 await page.getByLabel('Grid name').fill('Final Layout')
 await page.getByLabel('Grid name').blur()
+await page.getByRole('tab', { name: 'Borders', exact: true }).tap()
 await page.getByLabel('Border color').evaluate((input) => {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
   valueSetter?.call(input, '#203040')
@@ -166,6 +169,7 @@ await openDrawer(page)
 const editGridButtonVisible = await page.getByRole('button', { name: 'Edit Final Layout grid' }).count()
 await page.getByRole('button', { name: 'Edit Final Layout grid' }).tap()
 await page.locator('.creator-fullscreen').waitFor()
+await page.getByRole('tab', { name: 'Borders', exact: true }).tap()
 const editBorderColor = await page.getByLabel('Border color').inputValue()
 const editBorderThickness = Number(await page.getByRole('slider', { name: 'Border thickness' }).inputValue())
 await page.getByRole('slider', { name: 'Border thickness' }).evaluate((input) => {
@@ -215,7 +219,7 @@ mkdirSync('test-results', { recursive: true })
 mkdirSync('docs', { recursive: true })
 await closeDrawer(page)
 await page.screenshot({ path: 'test-results/instacomic-mobile.png', fullPage: true })
-await page.screenshot({ path: 'docs/instacomic-mobile.png', fullPage: true })
+await page.screenshot({ path: 'test-results/instacomic-mobile.png', fullPage: true })
 await openDrawer(page)
 await page.getByRole('tab', { name: 'Style', exact: true }).tap()
 const draftRevisionBeforeFinalStyle = await readDraftRevision(page)
