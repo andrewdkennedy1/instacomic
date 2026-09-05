@@ -395,7 +395,7 @@ select:focus-visible {
   top: 50%;
   width: 100%;
   height: calc(var(--gutter) + (var(--border) * 2));
-  border-radius: 999px;
+  border-radius: 0;
   background: var(--ink);
   transform: translateY(-50%);
 }
@@ -407,7 +407,7 @@ select:focus-visible {
   top: 50%;
   width: 100%;
   height: var(--gutter);
-  border-radius: 999px;
+  border-radius: 0;
   background: var(--paper);
   transform: translateY(-50%);
 }
@@ -1437,7 +1437,7 @@ select:focus-visible {
   right: 0;
   left: 0;
   height: calc(var(--creator-divider-thickness) + (var(--creator-border-thickness) * 2));
-  border-radius: 999px;
+  border-radius: 0;
   background: var(--creator-border-color);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.16);
   transform: translateY(-50%);
@@ -1450,7 +1450,7 @@ select:focus-visible {
   right: 0;
   left: 0;
   height: var(--creator-divider-thickness);
-  border-radius: 999px;
+  border-radius: 0;
   background: #f2f2f7;
   transform: translateY(-50%);
 }

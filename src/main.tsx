@@ -622,7 +622,7 @@ function App() {
   const [customLayouts, setCustomLayouts] = useState<Layout[]>([])
   const [draftLines, setDraftLines] = useState<CustomLine[]>(() => createDefaultDraftLines())
   const [draftName, setDraftName] = useState('')
-  const [draftThickness, setDraftThickness] = useState(9)
+  const [draftThickness, setDraftThickness] = useState(0)
   const [draftBorderColor, setDraftBorderColor] = useState(DEFAULT_CUSTOM_GRID_BORDER_COLOR)
   const [draftBorderThickness, setDraftBorderThickness] = useState(DEFAULT_CUSTOM_GRID_BORDER_THICKNESS)
   const [editingLayoutId, setEditingLayoutId] = useState<string | null>(null)
@@ -1827,13 +1827,12 @@ function App() {
 
   function openCreator() {
     const currentBorderColor = layoutBorderColor(layout) ?? settings.borderColor
-    const currentBorderThickness = layoutBorderThickness(layout) ?? settings.border
     setEditingLayoutId(null)
     setDraftName('')
     setDraftLines(createDefaultDraftLines())
-    setDraftThickness(9)
+    setDraftThickness(0)
     setDraftBorderColor(currentBorderColor.toLowerCase() === '#ffffff' ? DEFAULT_CUSTOM_GRID_BORDER_COLOR : currentBorderColor)
-    setDraftBorderThickness(currentBorderThickness > 0 ? currentBorderThickness : DEFAULT_CUSTOM_GRID_BORDER_THICKNESS)
+    setDraftBorderThickness(1)
     setCreatorDirty(false)
     setCreatorDiscardConfirmOpen(false)
     setCreatorOpen(true)
@@ -3530,19 +3529,24 @@ function CreatorPanel({
   onRestore: (draft: GridDraft) => void
 }) {
   const canvasRef = useRef<HTMLDivElement>(null)
-  const [lineDrag, setLineDrag] = useState<{
+  const [lineDrag, setLineDragState] = useState<{
     id: string
     mode: 'line' | 'start' | 'end'
     startX: number
     startY: number
     line: CustomLine
   } | null>(null)
+  const lineDragRef = useRef<typeof lineDrag>(null)
+  function setLineDrag(next: typeof lineDrag) {
+    lineDragRef.current = next
+    setLineDragState(next)
+  }
   const [lineTouch, setLineTouch] = useState<LineTouchState | null>(null)
   const lineTouchRef = useRef<LineTouchState | null>(null)
   const linePointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(new Map())
   const [selectedLineId, setSelectedLineId] = useState<string | null>(draftLines[0]?.id ?? null)
   const previousLineIds = useRef(draftLines.map((line) => line.id))
-  const [toolTab, setToolTab] = useState<'dividers' | 'borders' | 'details'>('dividers')
+  const [toolTab, setToolTab] = useState<'dividers' | 'adjust' | 'borders' | 'details'>('dividers')
   const [previewing, setPreviewing] = useState(false)
   const [snapEnabled, setSnapEnabled] = useState(true)
   const history = useDraftHistory<GridDraft>(
@@ -3615,7 +3619,8 @@ function CreatorPanel({
     const touches = linePointerTouches()
     if (rect && touches) {
       setLineDrag(null)
-      startLineTouch(line, touches, rect)
+      const activeLine = draftLines.find((item) => item.id === selectedLineId) ?? line
+      startLineTouch(activeLine, touches, rect)
       return
     }
 
@@ -3630,6 +3635,7 @@ function CreatorPanel({
 
   function moveLineFromPointer(event: PointerEvent<HTMLElement>) {
     const rect = canvasRef.current?.getBoundingClientRect()
+    const lineDrag = lineDragRef.current
     if (!rect || !lineDrag) {
       return
     }
@@ -3730,33 +3736,73 @@ function CreatorPanel({
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
     linePointersRef.current.delete(event.pointerId)
-    if (linePointersRef.current.size < 2) {
-      clearLineTouch()
+    const activeLine = draftLines.find((line) => line.id === (lineTouchRef.current?.id ?? lineDrag?.id))
+    lineTouchRef.current = null
+    setLineTouch(null)
+    const remaining = Array.from(linePointersRef.current.values())[0]
+    if (remaining && activeLine) {
+      setLineDrag({
+        id: activeLine.id,
+        mode: 'line',
+        startX: remaining.clientX,
+        startY: remaining.clientY,
+        line: activeLine,
+      })
     }
     if (linePointersRef.current.size === 0) {
       setLineDrag(null)
+      history.endGroup()
     }
   }
 
-  function beginLineTouch(event: TouchEvent<HTMLElement>) {
-    if (event.touches.length < 2 || draftLines.length === 0) {
-      return
-    }
-
+  function beginCanvasPointer(event: PointerEvent<HTMLElement>) {
     const rect = canvasRef.current?.getBoundingClientRect()
-    if (!rect) {
-      return
-    }
+    if (!rect) return
+    const x = ((event.clientX - rect.left) / rect.width) * 100
+    const y = ((event.clientY - rect.top) / rect.height) * 100
+    const continuing = linePointersRef.current.size === 1
+    const line = continuing
+      ? draftLines.find((item) => item.id === selectedLineId)
+      : nearestLineToPoint(draftLines, x, y, canvasAspect)
+    if (line && !continuing && (lineDistanceToPoint(line, x, y, canvasAspect) * rect.width) / 100 > 22) return
+    if (line) beginLinePointer(event, line, 'line')
+  }
 
-    const center = touchCenterPercent(event.touches, rect)
-    const line = nearestLineToPoint(draftLines, center.x, center.y, canvasAspect)
-    if (!line) {
-      return
-    }
+  const selectedLine = draftLines.find((line) => line.id === selectedLineId)
+  const selectedAngle = selectedLine
+    ? (Math.atan2((selectedLine.y2 - selectedLine.y1) * canvasAspect, selectedLine.x2 - selectedLine.x1) * 180) /
+      Math.PI
+    : 0
+  const selectedLength = selectedLine
+    ? Math.hypot(selectedLine.x2 - selectedLine.x1, (selectedLine.y2 - selectedLine.y1) * canvasAspect)
+    : 0
 
-    event.preventDefault()
-    event.stopPropagation()
-    startLineTouch(line, event.touches, rect)
+  function maxLineLength(angle: number) {
+    if (!selectedLine) return 1
+    const cx = (selectedLine.x1 + selectedLine.x2) / 2
+    const cy = (selectedLine.y1 + selectedLine.y2) / 2
+    const radians = (angle * Math.PI) / 180
+    const dx = Math.cos(radians)
+    const dy = Math.sin(radians) / canvasAspect
+    return (
+      2 *
+      Math.min(
+        Math.abs(dx) < 0.00001 ? Infinity : Math.min(cx, 100 - cx) / Math.abs(dx),
+        Math.abs(dy) < 0.00001 ? Infinity : Math.min(cy, 100 - cy) / Math.abs(dy),
+      )
+    )
+  }
+
+  const lengthPercent = Math.round((selectedLength / Math.max(1, maxLineLength(selectedAngle))) * 100)
+
+  function reshapeSelected(angle: number, percent: number) {
+    if (!selectedLine) return
+    const cx = (selectedLine.x1 + selectedLine.x2) / 2
+    const cy = (selectedLine.y1 + selectedLine.y2) / 2
+    const dx = Math.cos((angle * Math.PI) / 180)
+    const dy = Math.sin((angle * Math.PI) / 180) / canvasAspect
+    const half = (maxLineLength(angle) * percent) / 200
+    moveLine(selectedLine.id, { x1: cx - dx * half, y1: cy - dy * half, x2: cx + dx * half, y2: cy + dy * half }, false)
   }
 
   function startLineTouch(line: CustomLine, touches: TouchPoints, rect: DOMRect) {
@@ -3774,16 +3820,6 @@ function CreatorPanel({
     }
     lineTouchRef.current = nextTouch
     setLineTouch(nextTouch)
-  }
-
-  function moveLineFromTouch(event: TouchEvent<HTMLElement>) {
-    if (!lineTouchRef.current || event.touches.length < 2) {
-      return
-    }
-
-    event.preventDefault()
-    event.stopPropagation()
-    updateLineTouch(event.touches)
   }
 
   function updateLineTouch(touches: TouchPoints) {
@@ -3808,12 +3844,6 @@ function CreatorPanel({
         canvasAspect,
       ),
     )
-  }
-
-  function clearLineTouch() {
-    lineTouchRef.current = null
-    linePointersRef.current.clear()
-    setLineTouch(null)
   }
 
   function linePointerTouches(): TouchPoints | null {
@@ -3847,9 +3877,12 @@ function CreatorPanel({
       data-border-thickness={borderThickness}
       data-page-format={pageFormat.id}
       onSubmit={submitLayout}
-      onPointerUpCapture={history.endGroup}
-      onPointerCancelCapture={history.endGroup}
-      onTouchEndCapture={history.endGroup}
+      onPointerUpCapture={(event) => {
+        if (!canvasRef.current?.contains(event.target as Node)) history.endGroup()
+      }}
+      onPointerCancelCapture={(event) => {
+        if (!canvasRef.current?.contains(event.target as Node)) history.endGroup()
+      }}
       onBlurCapture={history.endGroup}
       onKeyUpCapture={(event) => {
         if (event.key.startsWith('Arrow')) history.endGroup()
@@ -3915,14 +3948,16 @@ function CreatorPanel({
               aria-label="Drag layout divider handles"
               data-page-format={pageFormat.id}
               inert={previewing || undefined}
-              onTouchStart={beginLineTouch}
-              onTouchMove={moveLineFromTouch}
-              onTouchEnd={(event) => {
-                if (event.touches.length < 2) {
-                  clearLineTouch()
-                }
+              onPointerDown={beginCanvasPointer}
+              onPointerMove={(event) => {
+                if (event.target === event.currentTarget) moveLinePointer(event)
               }}
-              onTouchCancel={clearLineTouch}
+              onPointerUp={(event) => {
+                if (event.target === event.currentTarget) endLinePointer(event)
+              }}
+              onPointerCancel={(event) => {
+                if (event.target === event.currentTarget) endLinePointer(event)
+              }}
             >
               {previewPanels.map((panel) => (
                 <div key={panel.id} className="creator-panel" style={panelStyle(panel)} />
@@ -3977,18 +4012,6 @@ function CreatorPanel({
                     onPointerUp={endLinePointer}
                     onPointerCancel={endLinePointer}
                     onKeyDown={(event) => nudgeLine(event, line, 'start')}
-                    onTouchStart={(event) => {
-                      if (event.touches.length > 1) {
-                        beginLineTouch(event)
-                      }
-                    }}
-                    onTouchMove={moveLineFromTouch}
-                    onTouchEnd={(event) => {
-                      if (event.touches.length < 2) {
-                        clearLineTouch()
-                      }
-                    }}
-                    onTouchCancel={clearLineTouch}
                   />
                   <button
                     className={`creator-handle creator-handle-end ${selectedLineId === line.id ? 'is-selected' : ''} ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
@@ -4003,18 +4026,6 @@ function CreatorPanel({
                     onPointerUp={endLinePointer}
                     onPointerCancel={endLinePointer}
                     onKeyDown={(event) => nudgeLine(event, line, 'end')}
-                    onTouchStart={(event) => {
-                      if (event.touches.length > 1) {
-                        beginLineTouch(event)
-                      }
-                    }}
-                    onTouchMove={moveLineFromTouch}
-                    onTouchEnd={(event) => {
-                      if (event.touches.length < 2) {
-                        clearLineTouch()
-                      }
-                    }}
-                    onTouchCancel={clearLineTouch}
                   />
                 </React.Fragment>
               ))}
@@ -4028,7 +4039,7 @@ function CreatorPanel({
         </div>
         <div className="creator-side">
           <div className="creator-tool-tabs" role="tablist" aria-label="Grid tools">
-            {(['dividers', 'borders', 'details'] as const).map((tab, index, tabs) => (
+            {(['dividers', 'adjust', 'borders', 'details'] as const).map((tab, index, tabs) => (
               <button
                 key={tab}
                 id={`grid-tab-${tab}`}
@@ -4045,13 +4056,19 @@ function CreatorPanel({
                     event.key === 'Home'
                       ? tabs[0]
                       : event.key === 'End'
-                        ? tabs[2]
-                        : tabs[(index + (event.key === 'ArrowRight' ? 1 : 2)) % 3]
+                        ? tabs[3]
+                        : tabs[(index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]
                   setToolTab(next)
                   document.getElementById(`grid-tab-${next}`)?.focus()
                 }}
               >
-                {tab === 'dividers' ? 'Dividers' : tab === 'borders' ? 'Borders' : 'Details'}
+                {tab === 'dividers'
+                  ? 'Dividers'
+                  : tab === 'adjust'
+                    ? 'Adjust'
+                    : tab === 'borders'
+                      ? 'Borders'
+                      : 'Details'}
               </button>
             ))}
           </div>
@@ -4125,14 +4142,47 @@ function CreatorPanel({
 
             <section
               className="creator-control-section"
+              id="grid-tools-adjust"
+              role="tabpanel"
+              aria-labelledby="grid-tab-adjust"
+              hidden={toolTab !== 'adjust'}
+            >
+              <div className="creator-control-heading">
+                <strong>{selectedLine ? `Divider ${draftLines.indexOf(selectedLine) + 1}` : 'Select a divider'}</strong>
+                <span>Drag to move. Fine-tune here.</span>
+              </div>
+              {selectedLine && (
+                <>
+                  <RangeField
+                    label="Rotation"
+                    value={Math.round(selectedAngle)}
+                    min={-180}
+                    max={180}
+                    unit="°"
+                    onChange={(angle) => reshapeSelected(angle, lengthPercent)}
+                  />
+                  <RangeField
+                    label="Length"
+                    value={lengthPercent}
+                    min={10}
+                    max={100}
+                    unit="%"
+                    onChange={(length) => reshapeSelected(selectedAngle, length)}
+                  />
+                </>
+              )}
+            </section>
+
+            <section
+              className="creator-control-section"
               id="grid-tools-borders"
               role="tabpanel"
               aria-labelledby="grid-tab-borders"
               hidden={toolTab !== 'borders'}
             >
               <div className="creator-control-heading">
-                <strong id="grid-appearance-heading">Grid appearance</strong>
-                <span>A little space makes a difference</span>
+                <strong id="grid-appearance-heading">Lines & spacing</strong>
+                <span>Square ends. No rounding.</span>
               </div>
               <div className="creator-border-controls" aria-label="Grid border controls">
                 <ColorField
@@ -4141,12 +4191,13 @@ function CreatorPanel({
                   onChange={(value) => history.change(() => onBorderColor(value), 'color')}
                 />
                 <RangeField
-                  label="Border thickness"
-                  value={borderThickness}
+                  label="Line width"
+                  value={borderThickness * 2}
                   min={0}
-                  max={10}
+                  max={20}
+                  step={2}
                   unit="px"
-                  onChange={(value) => history.change(() => onBorderThickness(value), 'border')}
+                  onChange={(value) => history.change(() => onBorderThickness(value / 2), 'border')}
                 />
               </div>
               <RangeField
@@ -4158,6 +4209,18 @@ function CreatorPanel({
                 unit="px"
                 onChange={(value) => history.change(() => onThickness(value), 'gap')}
               />
+              <button
+                className="settings-reset"
+                type="button"
+                onClick={() =>
+                  history.change(() => {
+                    onThickness(0)
+                    onBorderThickness(1)
+                  })
+                }
+              >
+                Use plain lines
+              </button>
             </section>
 
             <section
@@ -4965,7 +5028,7 @@ function drawDividerGap(
   const y2 = outer + (line.y2 / 100) * innerHeight
 
   context.save()
-  context.lineCap = 'round'
+  context.lineCap = 'butt'
   if (borderWidth > 0) {
     context.strokeStyle = borderColor
     context.lineWidth = gutter + borderWidth * 2

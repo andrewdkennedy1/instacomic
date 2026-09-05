@@ -133,9 +133,9 @@ await page.getByLabel('Border color').evaluate((input) => {
   input.dispatchEvent(new Event('input', { bubbles: true }))
   input.dispatchEvent(new Event('change', { bubbles: true }))
 })
-await page.getByRole('slider', { name: 'Border thickness' }).evaluate((input) => {
+await page.getByRole('slider', { name: 'Line width' }).evaluate((input) => {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-  valueSetter?.call(input, '5')
+  valueSetter?.call(input, '10')
   input.dispatchEvent(new Event('input', { bubbles: true }))
   input.dispatchEvent(new Event('change', { bubbles: true }))
 })
@@ -171,10 +171,10 @@ await page.getByRole('button', { name: 'Edit Final Layout grid' }).tap()
 await page.locator('.creator-fullscreen').waitFor()
 await page.getByRole('tab', { name: 'Borders', exact: true }).tap()
 const editBorderColor = await page.getByLabel('Border color').inputValue()
-const editBorderThickness = Number(await page.getByRole('slider', { name: 'Border thickness' }).inputValue())
-await page.getByRole('slider', { name: 'Border thickness' }).evaluate((input) => {
+const editBorderThickness = Number(await page.getByRole('slider', { name: 'Line width' }).inputValue()) / 2
+await page.getByRole('slider', { name: 'Line width' }).evaluate((input) => {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-  valueSetter?.call(input, '6')
+  valueSetter?.call(input, '12')
   input.dispatchEvent(new Event('input', { bubbles: true }))
   input.dispatchEvent(new Event('change', { bubbles: true }))
 })
