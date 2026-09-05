@@ -2020,6 +2020,7 @@ button:disabled { cursor: default; }
 .start-section-heading em { max-width: 105px; }
 .capture-bar { border-color: #ffffff14; background: #232526; }
 .live-strip { border-radius: 5px; }
+.live-strip.is-custom, .live-strip.is-custom::after { border-radius: 0; }
 .live-panel { background: #f2f1ee; }
 .panel-placeholder { color: #777c82; }
 .panel-placeholder { inset: auto; top: var(--chip-y); left: var(--chip-x); width: max-content; max-width: 90%; transform: translate(-50%, -50%); pointer-events: none; }

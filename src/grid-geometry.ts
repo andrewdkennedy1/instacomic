@@ -1,6 +1,26 @@
 /** A cut is an infinite line clipped to the canvas, not a resizable stroke. */
 export type Cut = { x1: number; y1: number; x2: number; y2: number }
 
+/** Paint beyond the clipping rectangle so the *whole stroke*, not just its
+ * centerline, reaches the edge. Keep editing endpoints on the canvas itself.
+ * Legacy segments only extend ends that already meet a canvas edge. */
+export function cutPaintSpan(line: Cut, aspect: number, infinite = false): Cut {
+  const dx = line.x2 - line.x1
+  const dy = (line.y2 - line.y1) * aspect
+  const length = Math.hypot(dx, dy)
+  if (length < 1e-9) return line
+  const extension = 2 * Math.hypot(100, 100 * aspect)
+  const ex = dx / length * extension
+  const ey = dy / length * extension / aspect
+  const edge = (x: number, y: number) => Math.min(Math.abs(x), Math.abs(x - 100), Math.abs(y), Math.abs(y - 100)) < 0.001
+  const start = infinite || edge(line.x1, line.y1)
+  const end = infinite || edge(line.x2, line.y2)
+  return {
+    x1: line.x1 - (start ? ex : 0), y1: line.y1 - (start ? ey : 0),
+    x2: line.x2 + (end ? ex : 0), y2: line.y2 + (end ? ey : 0),
+  }
+}
+
 export function cutControls(line: Cut, aspect: number) {
   let angle = (Math.atan2((line.y2 - line.y1) * aspect, line.x2 - line.x1) * 180) / Math.PI
   if (angle > 90) angle -= 180

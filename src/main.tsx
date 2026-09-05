@@ -2,8 +2,8 @@ import { AnimatePresence, MotionConfig, motion, useDragControls } from 'framer-m
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent, TouchEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import { useDialogFocus, useDraftHistory } from './editor-hooks'
-import { cutAt, cutControls, extendCut } from './grid-geometry'
+import { useContentAspect, useDialogFocus, useDraftHistory } from './editor-hooks'
+import { cutAt, cutControls, cutPaintSpan, extendCut } from './grid-geometry'
 import {
   clearDraftData,
   loadDraftAssets,
@@ -685,6 +685,7 @@ function App() {
     '--page-height': pageFormat.height,
   } as React.CSSProperties
   const creatorCanvasAspect = pageFormatCanvasAspect(pageFormat)
+  const liveCanvasAspect = useContentAspect(stripRef, creatorCanvasAspect)
   useDialogFocus(creatorRef, creatorOpen, '[aria-label="Controls"]')
   useDialogFocus(discardRef, creatorDiscardConfirmOpen, '[aria-label="Close creator"]')
 
@@ -2687,12 +2688,11 @@ function App() {
           ))}
 
           {layout.dividers?.map((divider, index) => (
-            <span
-              key={`${divider.id}-${index}`}
+            <div key={`${divider.id}-${index}`} className="live-divider-clip" aria-hidden="true"><span
               className={`live-divider-gap ${settings.border === 0 ? 'is-unoutlined' : ''}`}
-              style={lineSegmentStyle(divider, creatorCanvasAspect)}
+              style={lineSegmentStyle(divider, liveCanvasAspect, true)}
               aria-hidden="true"
-            />
+            /></div>
           ))}
 
           {rotationSnap && layout.panels.find((panel) => panel.id === rotationSnap.panelId) && (
@@ -3446,15 +3446,17 @@ function LayoutPreview({ layout }: { layout: Layout }) {
             />
           ),
         )}
-        {layout.dividers?.map((divider, index) => (
+        {layout.dividers?.map((divider, index) => {
+          const paint = cutPaintSpan(divider, 1, divider.extent === 'canvas')
+          return (
           <React.Fragment key={`${divider.id}-${index}`}>
             {borderWidth > 0 && (
               <line
                 className="layout-preview-divider-border"
-                x1={divider.x1}
-                y1={divider.y1}
-                x2={divider.x2}
-                y2={divider.y2}
+                x1={paint.x1}
+                y1={paint.y1}
+                x2={paint.x2}
+                y2={paint.y2}
                 strokeWidth={dividerWidth + borderWidth * 2}
                 vectorEffect="non-scaling-stroke"
               />
@@ -3462,15 +3464,16 @@ function LayoutPreview({ layout }: { layout: Layout }) {
             <line
               className="layout-preview-divider"
               data-preview-divider={divider.id}
-              x1={divider.x1}
-              y1={divider.y1}
-              x2={divider.x2}
-              y2={divider.y2}
+              x1={paint.x1}
+              y1={paint.y1}
+              x2={paint.x2}
+              y2={paint.y2}
               strokeWidth={dividerWidth}
               vectorEffect="non-scaling-stroke"
             />
           </React.Fragment>
-        ))}
+          )
+        })}
         {borderWidth > 0 && (
           <rect
             className="layout-preview-outline"
@@ -3562,7 +3565,7 @@ function CreatorPanel({
   )
   useEffect(() => onDirty(history.dirty), [history.dirty, onDirty])
   const previewPanels = useMemo(() => panelsFromLines(draftLines, readingOrder), [draftLines, readingOrder])
-  const canvasAspect = pageFormatCanvasAspect(pageFormat)
+  const canvasAspect = useContentAspect(canvasRef, pageFormatCanvasAspect(pageFormat))
   const creatorStyle = {
     '--creator-divider-thickness': `${dividerThickness}px`,
     '--creator-border-color': borderColor,
@@ -3986,7 +3989,7 @@ function CreatorPanel({
                   <div className="creator-cut-clip" aria-hidden="true">
                     <span
                       className={`creator-free-line ${selectedLineId === line.id ? 'is-selected' : ''} ${lineDrag?.id === line.id || lineTouch?.id === line.id ? 'is-active' : ''}`}
-                      style={lineSegmentStyle(line, canvasAspect)}
+                      style={lineSegmentStyle(line, canvasAspect, true)}
                       aria-hidden="true"
                       data-divider-id={line.id}
                       data-divider-index={index}
@@ -5032,12 +5035,16 @@ function drawDividerGap(
 ) {
   const innerWidth = width - outer * 2
   const innerHeight = panelHeight - outer * 2
-  const x1 = outer + (line.x1 / 100) * innerWidth
-  const y1 = outer + (line.y1 / 100) * innerHeight
-  const x2 = outer + (line.x2 / 100) * innerWidth
-  const y2 = outer + (line.y2 / 100) * innerHeight
+  const paint = cutPaintSpan(line, innerHeight / innerWidth, line.extent === 'canvas')
+  const x1 = outer + (paint.x1 / 100) * innerWidth
+  const y1 = outer + (paint.y1 / 100) * innerHeight
+  const x2 = outer + (paint.x2 / 100) * innerWidth
+  const y2 = outer + (paint.y2 / 100) * innerHeight
 
   context.save()
+  context.beginPath()
+  context.rect(outer, outer, innerWidth, innerHeight)
+  context.clip()
   context.lineCap = 'butt'
   if (borderWidth > 0) {
     context.strokeStyle = borderColor
@@ -5413,7 +5420,8 @@ function customPointDistance(first: CustomPoint, second: CustomPoint, canvasAspe
   return Math.hypot(first.x - second.x, (first.y - second.y) * canvasAspect)
 }
 
-function lineSegmentStyle(line: CustomLine, canvasAspect: number) {
+function lineSegmentStyle(source: CustomLine, canvasAspect: number, painting = false) {
+  const line = painting ? cutPaintSpan(source, canvasAspect, source.extent === 'canvas') : source
   const dx = line.x2 - line.x1
   const dy = (line.y2 - line.y1) * canvasAspect
   return {

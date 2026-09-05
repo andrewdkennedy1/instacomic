@@ -1,6 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 
+/** Absolute divider geometry uses the padding box, inside the visible border. */
+export function useContentAspect(ref: RefObject<HTMLElement | null>, fallback: number) {
+  const [aspect, setAspect] = useState(fallback)
+  useEffect(() => {
+    const element = ref.current
+    if (!element) return
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect
+      const style = getComputedStyle(element)
+      const innerWidth = width + parseFloat(style.paddingLeft) + parseFloat(style.paddingRight)
+      const innerHeight = height + parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+      if (innerWidth > 0 && innerHeight > 0) setAspect(innerHeight / innerWidth)
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [ref])
+  return aspect
+}
+
 /** Keep one history entry per gesture, held key, or field edit. */
 export function useDraftHistory<T>(value: T, restore: (value: T) => void) {
   const initial = useRef(JSON.stringify(value))
