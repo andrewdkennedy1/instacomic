@@ -128,15 +128,17 @@ await page.screenshot({ path: 'test-results/custom-grid-creator.png', fullPage: 
 await page.getByRole('tab', { name: 'Details', exact: true }).tap()
 await page.getByLabel('Grid name').fill('Final Layout')
 await page.getByLabel('Grid name').blur()
-await page.getByRole('tab', { name: 'Outline', exact: true }).tap()
-await page.getByRole('switch', { name: 'Panel outlines' }).tap()
-await page.getByLabel('Outline color').evaluate((input) => {
+await page.getByRole('tab', { name: 'Border', exact: true }).tap()
+await page.getByRole('switch', { name: 'Outside border' }).tap()
+await page.getByRole('tab', { name: 'Style', exact: true }).tap()
+await page.getByLabel('Line color').evaluate((input) => {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
   valueSetter?.call(input, '#203040')
   input.dispatchEvent(new Event('input', { bubbles: true }))
   input.dispatchEvent(new Event('change', { bubbles: true }))
 })
-await page.getByRole('slider', { name: 'Outline width' }).evaluate((input) => {
+await page.getByRole('tab', { name: 'Border', exact: true }).tap()
+await page.getByRole('slider', { name: 'Outside border width' }).evaluate((input) => {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
   valueSetter?.call(input, '5')
   input.dispatchEvent(new Event('input', { bubbles: true }))
@@ -153,7 +155,7 @@ const creatorThickness = Number(await page.locator('.creator-stack').getAttribut
 const creatorBorderColor = await page.locator('.creator-stack').getAttribute('data-border-color')
 const creatorBorderThickness = Number(await page.locator('.creator-stack').getAttribute('data-border-thickness'))
 const dividerVisualThickness = await page.locator('.creator-free-line').first().evaluate((line) => {
-  return Number.parseFloat(getComputedStyle(line, '::before').height)
+  return Number.parseFloat(getComputedStyle(line, '::after').height)
 })
 const creatorTextHasRay = (await page.locator('.creator-stack').innerText()).toLowerCase().includes('ray')
 const horizontalStartHandle = page.locator('[data-divider-index="1"][data-handle="start"]')
@@ -173,10 +175,13 @@ await openDrawer(page)
 const editGridButtonVisible = await page.getByRole('button', { name: 'Edit Final Layout grid' }).count()
 await page.getByRole('button', { name: 'Edit Final Layout grid' }).tap()
 await page.locator('.creator-fullscreen').waitFor()
-await page.getByRole('tab', { name: 'Outline', exact: true }).tap()
-const editBorderColor = await page.getByLabel('Outline color').inputValue()
-const editBorderThickness = Number(await page.getByRole('slider', { name: 'Outline width' }).inputValue())
-await page.getByRole('slider', { name: 'Outline width' }).evaluate((input) => {
+await page.getByRole('tab', { name: 'Border', exact: true }).tap()
+await page.getByRole('tab', { name: 'Style', exact: true }).tap()
+const editBorderColor = await page.getByLabel('Line color').inputValue()
+await page.getByRole('tab', { name: 'Border', exact: true }).tap()
+const editBorderThickness = Number(await page.getByRole('slider', { name: 'Outside border width' }).inputValue())
+await page.getByRole('tab', { name: 'Border', exact: true }).tap()
+await page.getByRole('slider', { name: 'Outside border width' }).evaluate((input) => {
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
   valueSetter?.call(input, '6')
   input.dispatchEvent(new Event('input', { bubbles: true }))
@@ -225,10 +230,12 @@ await closeDrawer(page)
 await page.screenshot({ path: 'test-results/instacomic-mobile.png', fullPage: true })
 await page.screenshot({ path: 'test-results/instacomic-mobile.png', fullPage: true })
 await openDrawer(page)
-await page.getByRole('tab', { name: 'Style', exact: true }).tap()
+await page.getByRole('tab', { name: 'Layout', exact: true }).tap()
 const draftRevisionBeforeFinalStyle = await readDraftRevision(page)
+await page.getByRole('button', { name: 'Edit Final Layout grid' }).click()
+await page.getByRole('tab', { name: 'Style', exact: true }).click()
 await page
-  .locator('.motion-drawer-style label')
+  .locator('.style-stack label')
   .filter({ hasText: 'Paper' })
   .locator('input[type="color"]')
   .evaluate((input) => {
@@ -239,14 +246,16 @@ await page
     color.dispatchEvent(new Event('change', { bubbles: true }))
   })
 await closeDrawer(page)
+await page.getByRole('button', { name: 'Update layout' }).click()
+await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
 const liveStripImage = decodePngBuffer(await page.locator('.live-strip').screenshot())
-const liveCustomDividerRun = paperRunFromImage(liveStripImage, Math.round(liveStripImage.width * 0.5), Math.round(liveStripImage.height * 0.24), '#ffed5a')
+const liveCustomDividerRun = paperRunFromImage(liveStripImage, Math.round(liveStripImage.width * 0.5), Math.round(liveStripImage.height * 0.24), '#203040')
 const liveCustomBezelPixel = pixelAt(liveStripImage, Math.round(liveStripImage.width * 0.5), 0)
 const customDownload = await downloadPng(page)
 const customDownloadPath = await customDownload.path()
 const customExportedSize = pngSize(customDownloadPath)
 const customExportedImage = decodePng(customDownloadPath)
-const customDividerRun = paperRunFromImage(customExportedImage, Math.round(customExportedSize.width * 0.5), Math.round(customExportedSize.height * 0.24), '#ffed5a')
+const customDividerRun = paperRunFromImage(customExportedImage, Math.round(customExportedSize.width * 0.5), Math.round(customExportedSize.height * 0.24), '#203040')
 const customBezelPixel = pixelAt(customExportedImage, Math.round(customExportedSize.width * 0.5), 3)
 await waitForDraftRevision(page, draftRevisionBeforeFinalStyle + 1)
 await page.locator('.native-shell[data-autosave-state="saved"]').waitFor()
@@ -280,7 +289,7 @@ const savedPreviewDividerRun = paperRunFromImage(
   savedPreviewImage,
   Math.round(savedPreviewImage.width * 0.5),
   Math.round(savedPreviewImage.height * 0.24),
-  '#ffffff',
+  '#203040',
 )
 await page.screenshot({ path: 'test-results/custom-grid-gallery.png', fullPage: true })
 const deleteLayoutButton = page.getByRole('button', { name: 'Delete Final Layout layout' })

@@ -6,7 +6,7 @@ const baseUrl = process.env.SMOKE_BASE_URL ?? 'http://127.0.0.1:4174'
 mkdirSync('test-results', { recursive: true })
 
 // Inspect actual raster pixels inside the cut, along all four canvas edges.
-// Magenta paper against neutral panels makes a missing triangular wedge obvious.
+// Magenta lines against neutral panels makes a missing triangular wedge obvious.
 async function checkEdges(page, png, line, gap, label, outer = 0) {
   const result = await page.evaluate(async ({ png, line, gap, outer }) => {
     const image = new Image()
@@ -55,7 +55,7 @@ for (const engine of [chromium, webkit]) {
     await page.getByRole('button', { name: 'Start creating' }).click()
     await page.getByRole('button', { name: 'Controls', exact: true }).click()
     await page.getByRole('tab', { name: 'Style', exact: true }).click()
-    await page.locator('.motion-drawer-style label').filter({ hasText: 'Paper' }).locator('input[type="color"]').evaluate(input => {
+    await page.locator('.motion-drawer-style label').filter({ hasText: 'Line color' }).locator('input[type="color"]').evaluate(input => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '#ff00ff')
       input.dispatchEvent(new Event('input', { bubbles: true }))
       input.dispatchEvent(new Event('change', { bubbles: true }))
@@ -86,9 +86,9 @@ for (const engine of [chromium, webkit]) {
     await checkEdges(page, readFileSync(await download.path()), line, 72, `${engine.name()} PNG export`)
     await page.getByRole('tab', { name: 'Layout', exact: true }).click()
     await page.getByRole('button', { name: 'Edit Custom 1 grid', exact: true }).click()
-    await page.getByRole('tab', { name: 'Outline', exact: true }).click()
-    await page.getByRole('switch', { name: 'Panel outlines' }).click()
-    await page.getByRole('slider', { name: 'Outline width' }).fill('6')
+    await page.getByRole('tab', { name: 'Border', exact: true }).click()
+    await page.getByRole('switch', { name: 'Outside border' }).click()
+    await page.getByRole('slider', { name: 'Outside border width' }).fill('6')
     await page.getByRole('button', { name: 'Preview', exact: true }).click()
     await checkEdges(page, await page.locator('.creator-cut-clip').screenshot(), line, 24, `${engine.name()} outlined editor`)
     await page.getByRole('button', { name: 'Update layout', exact: true }).click()

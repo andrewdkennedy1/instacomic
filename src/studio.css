@@ -54,7 +54,7 @@ em { font-style: normal; }
 @keyframes ui-pulse { 50% { opacity: 0.45; } }
 
 /* Project setup: a live specimen beside a compact, sequential form. */
-.native-shell { position: fixed; inset: 0; width: 100%; height: var(--app-height, 100dvh); overflow: hidden; background: var(--ui-workspace); touch-action: auto; user-select: none; }
+.native-shell { position: fixed; inset: 0; width: 100%; height: var(--app-height, 100dvh); overflow: clip; background: var(--ui-workspace); touch-action: auto; user-select: none; }
 .native-shell.is-home > .comic-stage, .native-shell.is-home > .capture-bar { visibility: hidden; }
 .start-screen { position: absolute; inset: 0; z-index: 100; overflow-y: auto; overflow-x: hidden; padding: 0 max(24px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left)); background: var(--ui-surface); touch-action: pan-y; user-select: text; scrollbar-width: thin; }
 .start-shell { width: min(100%, var(--content-width)); margin-inline: auto; }
@@ -618,4 +618,8 @@ em { font-style: normal; }
   .live-panel.is-live, [aria-pressed='true'], [aria-selected='true'] { outline: 2px solid Highlight; outline-offset: -2px; }
   .creator-switch { border: 1px solid ButtonText; }
   .creator-switch::after { background: ButtonText; }
+}
+
+@media (max-width: 760px) {
+  .style-stack.is-embedded > .settings-section:first-child .settings-section-heading { display: none; }
 }

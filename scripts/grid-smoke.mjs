@@ -30,9 +30,9 @@ try {
   ))
   const original = await lineValues()
   assert.equal(await page.locator('.creator-stack').getAttribute('data-border-thickness'), '0')
-  assert.equal(await page.locator('.creator-free-line').first().evaluate((line) => getComputedStyle(line, '::before').display), 'none', 'disabled outlines still render a dark underlay')
-  assert.equal(await page.locator('.creator-free-line').first().evaluate((line) => getComputedStyle(line, '::before').height), '6px')
-  assert.equal(await page.locator('.creator-free-line').first().evaluate((line) => getComputedStyle(line, '::before').borderRadius), '0px')
+  assert.equal(await page.locator('.creator-free-line').first().evaluate((line) => getComputedStyle(line, '::before').content), 'none', 'divider still has a separate outline layer')
+  assert.equal(await page.locator('.creator-free-line').first().evaluate((line) => getComputedStyle(line, '::after').height), '6px')
+  assert.equal(await page.locator('.creator-free-line').first().evaluate((line) => getComputedStyle(line, '::after').borderRadius), '0px')
   const selectedHandle = await page.locator('.creator-handle.is-selected').first().evaluate(handle => {
     const target = handle.getBoundingClientRect()
     const cue = getComputedStyle(handle, '::after')
@@ -41,7 +41,7 @@ try {
   assert.ok(selectedHandle.width >= 44 && selectedHandle.height >= 44, 'divider end handles must remain touch friendly')
   assert.ok(selectedHandle.visible && selectedHandle.cueWidth >= 6 && selectedHandle.cueWidth <= 14, 'selected endpoints need a small, visible editing cue')
   const canvasBefore = await page.locator('.creator-canvas').boundingBox()
-  for (const tab of ['Adjust', 'Style', 'Outline', 'Details', 'Dividers']) {
+  for (const tab of ['Adjust', 'Style', 'Border', 'Details', 'Dividers']) {
     await creator.getByRole('tab', { name: tab, exact: true }).click()
     assert.deepEqual(await page.locator('.creator-canvas').boundingBox(), canvasBefore, 'switching tools moves the canvas')
   }
@@ -113,7 +113,7 @@ try {
 
   for (const viewport of [{ width: 280, height: 568 }, { width: 390, height: 844 }, { width: 844, height: 390 }, { width: 1280, height: 800 }]) {
     await page.setViewportSize(viewport)
-    for (const tab of ['Dividers', 'Adjust', 'Style', 'Outline', 'Details']) {
+    for (const tab of ['Dividers', 'Adjust', 'Style', 'Border', 'Details']) {
       await creator.getByRole('tab', { name: tab, exact: true }).click()
       const geometry = await page.evaluate(() => {
         const box = (selector) => document.querySelector(selector).getBoundingClientRect()
@@ -153,15 +153,15 @@ try {
   // Editing a saved grid must also be reversible from the main editor.
   await page.getByRole('button', { name: 'Controls', exact: true }).click()
   await page.getByRole('button', { name: 'Edit My flow grid' }).click()
-  await page.getByRole('tab', { name: 'Outline', exact: true }).click()
-  assert.equal(await page.getByRole('switch', { name: 'Panel outlines' }).getAttribute('aria-checked'), 'false')
-  assert.equal(await page.getByRole('slider', { name: 'Outline width' }).count(), 0)
-  await page.getByRole('switch', { name: 'Panel outlines' }).click()
-  await page.getByRole('slider', { name: 'Outline width' }).fill('7')
-  await page.getByRole('switch', { name: 'Panel outlines' }).click()
+  await page.getByRole('tab', { name: 'Border', exact: true }).click()
+  assert.equal(await page.getByRole('switch', { name: 'Outside border' }).getAttribute('aria-checked'), 'false')
+  assert.equal(await page.getByRole('slider', { name: 'Outside border width' }).count(), 0)
+  await page.getByRole('switch', { name: 'Outside border' }).click()
+  await page.getByRole('slider', { name: 'Outside border width' }).fill('7')
+  await page.getByRole('switch', { name: 'Outside border' }).click()
   assert.equal(await page.locator('.creator-stack').getAttribute('data-border-thickness'), '0')
-  await page.getByRole('switch', { name: 'Panel outlines' }).click()
-  assert.equal(await page.getByRole('slider', { name: 'Outline width' }).inputValue(), '7')
+  await page.getByRole('switch', { name: 'Outside border' }).click()
+  assert.equal(await page.getByRole('slider', { name: 'Outside border width' }).inputValue(), '7')
   await page.getByRole('button', { name: 'Update layout' }).click()
   await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
   assert.equal(await page.locator('.live-strip').evaluate((strip) => strip.style.getPropertyValue('--border')), '7px')
@@ -171,8 +171,11 @@ try {
   assert.equal(await page.locator('.live-strip').evaluate((strip) => strip.style.getPropertyValue('--border')), '7px')
 
   await page.getByRole('button', { name: 'Controls', exact: true }).click()
+  await page.getByRole('button', { name: 'Edit My flow grid', exact: true }).click()
   await page.getByRole('tab', { name: 'Style', exact: true }).click()
   await page.getByRole('button', { name: 'Paper', exact: true }).click()
+  await page.getByRole('button', { name: 'Update layout', exact: true }).click()
+  await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
   assert.equal(await page.locator('.live-strip').evaluate((strip) => strip.style.getPropertyValue('--paper')), '#f3ede2')
   await page.screenshot({ path: 'test-results/studio-style.png' })
 
@@ -196,8 +199,8 @@ try {
   assert.equal(await page.getByRole('slider', { name: 'Angle' }).count(), 1)
   await page.getByRole('button', { name: 'Undo grid edit' }).click()
   assert.equal(await page.getByRole('button', { name: 'Extend divider to canvas edges' }).count(), 1)
-  await page.getByRole('tab', { name: 'Outline', exact: true }).click()
-  await page.getByRole('slider', { name: 'Outline width' }).fill('3')
+  await page.getByRole('tab', { name: 'Border', exact: true }).click()
+  await page.getByRole('slider', { name: 'Outside border width' }).fill('3')
   await page.getByRole('button', { name: 'Update layout' }).click()
   await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
   assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('instacomic.customLayouts.v1'))[0].panels), legacyPanels)

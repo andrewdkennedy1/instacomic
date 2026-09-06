@@ -39,6 +39,7 @@ type Layout = {
   borderThickness?: number
   dividers?: CustomLine[]
   panelOrder?: 'reading'
+  appearance?: CanvasAppearance
 }
 
 type Shot = {
@@ -112,10 +113,18 @@ type CustomLine = {
   y2: number
 }
 
+type CanvasAppearance = Pick<Settings, 'background' | 'radius' | 'caption' | 'captionColor' | 'fit'>
+
+function canvasAppearance(settings: Settings): CanvasAppearance {
+  const { background, radius, caption, captionColor, fit } = settings
+  return { background, radius, caption, captionColor, fit }
+}
+
 type GridDraft = {
   name: string
   lines: CustomLine[]
   thickness: number
+  appearance: CanvasAppearance
   borderColor: string
   borderThickness: number
 }
@@ -315,11 +324,25 @@ function layoutBorderColor(layout: Layout) {
   return layout.custom ? DEFAULT_CUSTOM_GRID_BORDER_COLOR : null
 }
 
+function layoutAppearance(layout: Layout): Partial<CanvasAppearance> {
+  const appearance = layout.appearance
+  if (!appearance || typeof appearance !== 'object') return {}
+  const color = (value: unknown) => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)
+  return {
+    ...(color(appearance.background) ? { background: appearance.background } : {}),
+    ...(color(appearance.captionColor) ? { captionColor: appearance.captionColor } : {}),
+    ...(Number.isFinite(appearance.radius) ? { radius: clamp(appearance.radius, 0, 24) } : {}),
+    ...(typeof appearance.caption === 'string' ? { caption: appearance.caption } : {}),
+    ...(appearance.fit === 'contain' || appearance.fit === 'cover' ? { fit: appearance.fit } : {}),
+  }
+}
+
 function layoutStyleSettings(layout: Layout): Partial<Settings> {
   const gutters = layoutDividerThickness(layout)
   const border = layoutBorderThickness(layout)
   const borderColor = layoutBorderColor(layout)
   return {
+    ...layoutAppearance(layout),
     ...(gutters !== null ? { gutters } : {}),
     ...(border !== null ? { border } : {}),
     ...(borderColor !== null ? { borderColor } : {}),
@@ -624,6 +647,8 @@ function App() {
   const [customLayouts, setCustomLayouts] = useState<Layout[]>([])
   const [draftLines, setDraftLines] = useState<CustomLine[]>(() => createDefaultDraftLines())
   const [draftName, setDraftName] = useState('')
+  const [draftAppearance, setDraftAppearance] = useState<CanvasAppearance>(() => canvasAppearance(defaultSettings))
+  const [creatorStartsWithStyle, setCreatorStartsWithStyle] = useState(false)
   const [draftThickness, setDraftThickness] = useState(0)
   const [draftBorderColor, setDraftBorderColor] = useState(DEFAULT_CUSTOM_GRID_BORDER_COLOR)
   const [draftBorderThickness, setDraftBorderThickness] = useState(DEFAULT_CUSTOM_GRID_BORDER_THICKNESS)
@@ -1835,10 +1860,12 @@ function App() {
   function openCreator() {
     const currentBorderColor = layoutBorderColor(layout) ?? settings.borderColor
     setEditingLayoutId(null)
+    setCreatorStartsWithStyle(false)
+    setDraftAppearance(canvasAppearance(settings))
     setDraftName('')
     setDraftLines(createDefaultDraftLines())
     setDraftThickness(6)
-    setDraftBorderColor(currentBorderColor.toLowerCase() === '#ffffff' ? DEFAULT_CUSTOM_GRID_BORDER_COLOR : currentBorderColor)
+    setDraftBorderColor(currentBorderColor)
     setDraftBorderThickness(0)
     setCreatorDirty(false)
     setCreatorDiscardConfirmOpen(false)
@@ -1847,13 +1874,15 @@ function App() {
     setDrawerTab('layout')
   }
 
-  function editCustomLayout(layoutId: string) {
+  function editCustomLayout(layoutId: string, showStyle = false) {
     const targetLayout = customLayouts.find((item) => item.id === layoutId)
     if (!targetLayout) {
       return
     }
 
     setEditingLayoutId(targetLayout.id)
+    setCreatorStartsWithStyle(showStyle)
+    setDraftAppearance(canvasAppearance({ ...settings, ...layoutAppearance(targetLayout) }))
     setDraftName(targetLayout.name)
     setDraftLines(targetLayout.dividers?.map((divider) => ({ ...divider })) ?? createDefaultDraftLines())
     setDraftThickness(layoutDividerThickness(targetLayout) ?? 9)
@@ -1904,6 +1933,7 @@ function App() {
       dividerThickness: draftThickness,
       borderColor: draftBorderColor,
       borderThickness: draftBorderThickness,
+      appearance: draftAppearance,
       dividers: draftLines.map((line) => ({ ...line })),
       panels,
     }
@@ -2222,6 +2252,11 @@ function App() {
     if (finishedPhotoGesture) {
       setPhotoActionsDeferred(false)
     }
+  }
+
+  function openCanvasStyle() {
+    if (layout.custom) editCustomLayout(layout.id, true)
+    else openDrawer('style')
   }
 
   function openDrawer(tab?: DrawerTab) {
@@ -2608,7 +2643,7 @@ function App() {
           </div>
           <nav className="editor-tools" aria-label="Studio tools">
             <button type="button" onClick={() => openDrawer('layout')}><ActionIcon name="layout" />Layout</button>
-            <button type="button" onClick={() => openDrawer('style')}><ActionIcon name="style" />Style</button>
+            <button type="button" onClick={openCanvasStyle}><ActionIcon name="style" />{layout.custom ? 'Canvas' : 'Style'}</button>
           </nav>
           <button className="header-export" type="button" aria-label="Open export controls" onClick={() => openDrawer('export')}>
             <ActionIcon name="export" />
@@ -2673,7 +2708,7 @@ function App() {
             <button
               key={panel.id}
               className={`live-panel ${panel.id === activePanelId ? 'is-live' : ''} ${shots[panel.id] ? 'is-shot' : ''}`}
-              style={panelStyle(panel)}
+              style={panelStyle(panel, !layout.custom)}
               type="button"
               data-panel-id={panel.id}
               onClick={() => selectPanel(panel.id)}
@@ -2710,7 +2745,7 @@ function App() {
 
           {layout.dividers?.map((divider, index) => (
             <div key={`${divider.id}-${index}`} className="live-divider-clip" aria-hidden="true"><span
-              className={`live-divider-gap ${settings.border === 0 ? 'is-unoutlined' : ''}`}
+              className="live-divider-gap"
               style={lineSegmentStyle(divider, liveCanvasAspect, true)}
               aria-hidden="true"
             /></div>
@@ -2748,7 +2783,7 @@ function App() {
             <ActionIcon name={capturedCount === layout.panels.length ? 'check' : 'camera'} />
             <div><strong>{capturedCount === layout.panels.length ? 'A story worth sharing.' : 'Start with what’s in front of you.'}</strong><p>{capturedCount === layout.panels.length ? 'Fine-tune your photos, add a caption, or export your comic.' : 'Select a panel, then take a photo or add one from your library.'}</p></div>
           </div>
-          <button className="inspector-style" type="button" onClick={() => openDrawer('style')}>Give it your signature style <ActionIcon name="arrow" /></button>
+          <button className="inspector-style" type="button" onClick={openCanvasStyle}>{layout.custom ? 'Edit your canvas' : 'Give it your signature style'} <ActionIcon name="arrow" /></button>
         </aside>
       )}
 
@@ -2812,9 +2847,9 @@ function App() {
             <ActionIcon name="layout" />
             <span>Layout</span>
           </button>
-          <button className="round-action capture-tool" type="button" onClick={() => openDrawer('style')} aria-label="Open appearance controls">
+          <button className="round-action capture-tool" type="button" onClick={openCanvasStyle} aria-label="Open appearance controls">
             <ActionIcon name="style" />
-            <span>Style</span>
+            <span>{layout.custom ? 'Canvas' : 'Style'}</span>
           </button>
         </div>
       </nav>
@@ -2826,6 +2861,7 @@ function App() {
         onOpen={() => setDrawerOpen(true)}
         onClose={() => setDrawerOpen(false)}
         onTab={setDrawerTab}
+        customCanvas={!!layout.custom}
         status={status}
       >
         {drawerTab === 'layout' && (
@@ -2888,9 +2924,12 @@ function App() {
                 borderThickness={draftBorderThickness}
                 editing={editingLayoutId !== null}
                 pageFormat={pageFormat}
-                paperColor={settings.background}
+                paperColor={draftAppearance.background}
+                appearance={draftAppearance}
+                startsWithStyle={creatorStartsWithStyle}
+                onAppearance={setDraftAppearance}
                 photoCache={mergeLayoutShotsIntoCache(layout, shots, shotCacheRef.current)}
-                photoFit={settings.fit}
+                photoFit={draftAppearance.fit}
                 readingOrder={!editingLayoutId || customLayouts.find((item) => item.id === editingLayoutId)?.panelOrder === 'reading'}
                 onName={(value) => {
                   setCreatorDirty(true)
@@ -2916,6 +2955,7 @@ function App() {
                 onCancel={closeCreator}
                 onDirty={setCreatorDirty}
                 onRestore={(draft) => {
+                  setDraftAppearance(draft.appearance)
                   setDraftName(draft.name)
                   setDraftLines(draft.lines)
                   setDraftThickness(draft.thickness)
@@ -3048,6 +3088,7 @@ function Drawer({
   onClose,
   onTab,
   status,
+  customCanvas,
 }: {
   open: boolean
   tab: DrawerTab
@@ -3057,13 +3098,14 @@ function Drawer({
   onClose: () => void
   onTab: (tab: DrawerTab) => void
   status: string
+  customCanvas: boolean
 }) {
   const tabTitle = tab === 'layout' ? 'Layout & canvas' : tab === 'style' ? 'Appearance' : 'Export comic'
   const drawerRef = useRef<HTMLElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
   const drawerTabs: Array<{ id: DrawerTab; label: string }> = [
     { id: 'layout', label: 'Layout' },
-    { id: 'style', label: 'Style' },
+    ...(!customCanvas ? [{ id: 'style' as const, label: 'Style' }] : []),
     { id: 'export', label: 'Export' },
   ]
 
@@ -3169,7 +3211,7 @@ function Drawer({
             Done
           </button>
         </div>
-        <div className="drawer-tabs" role="tablist" aria-label="Comic controls">
+        <div className="drawer-tabs" style={{ gridTemplateColumns: `repeat(${drawerTabs.length}, 1fr)` }} role="tablist" aria-label="Comic controls">
           {drawerTabs.map((item) => (
             <button
               key={item.id}
@@ -3376,9 +3418,10 @@ function LayoutPreview({ layout, specimen = false }: { layout: Layout; specimen?
   const dividerWidth = layout.custom ? (layout.dividerThickness ?? 9) / 4 : 2.25
   const borderWidth = layoutBorderThickness(layout) ?? 0.8
   const borderColor = layoutBorderColor(layout) ?? '#939787'
-  const panelStrokeWidth = layout.custom ? borderWidth : 0.8
+  const panelStrokeWidth = layout.custom ? 0 : 0.8
   const previewStyle = {
     '--layout-preview-border': borderColor,
+    '--layout-preview-divider': layout.custom ? borderColor : '#fff',
   } as React.CSSProperties
 
   return (
@@ -3417,17 +3460,6 @@ function LayoutPreview({ layout, specimen = false }: { layout: Layout; specimen?
           const paint = cutPaintSpan(divider, 1, divider.extent === 'canvas')
           return (
           <React.Fragment key={`${divider.id}-${index}`}>
-            {borderWidth > 0 && (
-              <line
-                className="layout-preview-divider-border"
-                x1={paint.x1}
-                y1={paint.y1}
-                x2={paint.x2}
-                y2={paint.y2}
-                strokeWidth={dividerWidth + borderWidth * 2}
-                vectorEffect="non-scaling-stroke"
-              />
-            )}
             <line
               className="layout-preview-divider"
               data-preview-divider={divider.id}
@@ -3448,7 +3480,7 @@ function LayoutPreview({ layout, specimen = false }: { layout: Layout; specimen?
             y={borderWidth / 2}
             width={100 - borderWidth}
             height={100 - borderWidth}
-            rx="4"
+            rx={layout.custom ? (layoutAppearance(layout).radius ?? 0) / 4 : 4}
             fill="none"
             strokeWidth={borderWidth}
             vectorEffect="non-scaling-stroke"
@@ -3468,6 +3500,9 @@ function CreatorPanel({
   editing,
   pageFormat,
   paperColor,
+  appearance,
+  onAppearance,
+  startsWithStyle,
   photoCache,
   photoFit,
   readingOrder,
@@ -3492,6 +3527,9 @@ function CreatorPanel({
   editing: boolean
   pageFormat: PageFormat
   paperColor: string
+  appearance: CanvasAppearance
+  onAppearance: (appearance: CanvasAppearance) => void
+  startsWithStyle: boolean
   photoCache: Array<Shot | undefined>
   photoFit: PanelFit
   readingOrder: boolean
@@ -3528,11 +3566,11 @@ function CreatorPanel({
   const previousLineIds = useRef(draftLines.map((line) => line.id))
   const gridTools = ['dividers', 'adjust', 'borders', 'outlines', 'details'] as const
   type GridTool = (typeof gridTools)[number]
-  const [toolTab, setToolTab] = useState<GridTool>('dividers')
+  const [toolTab, setToolTab] = useState<GridTool>(startsWithStyle ? 'borders' : 'dividers')
   const toolPagerRef = useRef<HTMLDivElement>(null)
   const pagerSettleRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pagerTouchRef = useRef(false)
-  const activeToolRef = useRef<GridTool>('dividers')
+  const activeToolRef = useRef<GridTool>(startsWithStyle ? 'borders' : 'dividers')
   function selectTool(tab: GridTool) {
     if (pagerSettleRef.current) clearTimeout(pagerSettleRef.current)
     activeToolRef.current = tab
@@ -3575,10 +3613,11 @@ function CreatorPanel({
     }
   }, [])
   const previousOutline = useRef(borderThickness || 1)
+  useEffect(() => { if (borderThickness > 0) previousOutline.current = borderThickness }, [borderThickness])
   const [previewing, setPreviewing] = useState(false)
   const [snapEnabled, setSnapEnabled] = useState(true)
   const history = useDraftHistory<GridDraft>(
-    { name: draftName, lines: draftLines, thickness: dividerThickness, borderColor, borderThickness },
+    { name: draftName, lines: draftLines, thickness: dividerThickness, borderColor, borderThickness, appearance },
     onRestore,
   )
   useEffect(() => onDirty(history.dirty), [history.dirty, onDirty])
@@ -3589,6 +3628,7 @@ function CreatorPanel({
     '--creator-border-color': borderColor,
     '--creator-border-thickness': `${borderThickness}px`,
     '--creator-paper': paperColor,
+    '--creator-radius': `${appearance.radius}px`,
     '--creator-handle-size': '44px',
     '--creator-page-width': pageFormat.width,
     '--creator-page-height': pageFormat.height,
@@ -3988,6 +4028,7 @@ function CreatorPanel({
                   )}
                 </div>
               ))}
+              {appearance.caption.trim() && <div className="strip-caption creator-caption" style={{ color: appearance.captionColor }}>{appearance.caption}</div>}
               {previewPanels.map((panel, index) => (
                 <span
                   key={`number-${panel.id}`}
@@ -4099,7 +4140,7 @@ function CreatorPanel({
                     : tab === 'borders'
                       ? 'Style'
                       : tab === 'outlines'
-                        ? 'Outline'
+                        ? 'Border'
                         : 'Details'}
               </button>
             ))}
@@ -4246,21 +4287,24 @@ function CreatorPanel({
               inert={toolTab !== 'borders' || undefined}
               aria-hidden={toolTab !== 'borders'}
             >
-              <div className="creator-control-heading">
-                <strong id="grid-appearance-heading">Give each moment room</strong>
-                <span>Adjust the space between your panels.</span>
-              </div>
-              <div className="creator-precision-group">
-                <RangeField
-                  label="Spacing"
-                  ariaLabel="Divider thickness"
-                  value={dividerThickness}
-                  min={0}
-                  max={24}
-                  unit="px"
-                  onChange={(value) => history.change(() => onThickness(value), 'gap')}
-                />
-              </div>
+              <StylePanel
+                embedded
+                settings={{ ...defaultSettings, ...appearance, gutters: dividerThickness, border: borderThickness, borderColor }}
+                onSettings={(update) => history.change(() => {
+                  const { gutters, border, borderColor: color, ...visual } = update
+                  if (gutters !== undefined) onThickness(gutters)
+                  // Presets never toggle the independently controlled outside frame.
+                  void border
+                  if (color !== undefined) onBorderColor(color)
+                  onAppearance({ ...appearance, ...visual })
+                }, Object.keys(update).sort().join(','))}
+                onReset={() => history.change(() => {
+                  onThickness(defaultSettings.gutters)
+                  onBorderThickness(0)
+                  onBorderColor(defaultSettings.borderColor)
+                  onAppearance(canvasAppearance(defaultSettings))
+                })}
+              />
             </section>
             <section
               className="creator-control-section"
@@ -4275,7 +4319,7 @@ function CreatorPanel({
                   className="creator-switch-row"
                   type="button"
                   role="switch"
-                  aria-label="Panel outlines"
+                  aria-label="Outside border"
                   aria-checked={borderThickness > 0}
                   onClick={() => {
                     if (borderThickness > 0) previousOutline.current = borderThickness
@@ -4285,26 +4329,22 @@ function CreatorPanel({
                   }}
                 >
                   <span>
-                    <strong>Panel outlines</strong>
-                    <small>Add an edge around your panels</small>
+                    <strong>Outside border</strong>
+                    <small>Frame the canvas using the divider color</small>
                   </span>
                   <span className="creator-switch" aria-hidden="true" />
                 </button>
                 {borderThickness > 0 && (
                   <div className="creator-outline-options">
                     <RangeField
-                      label="Outline width"
+                      label="Outside border width"
                       value={borderThickness}
                       min={1}
                       max={10}
                       unit="px"
                       onChange={(value) => history.change(() => onBorderThickness(value), 'border')}
                     />
-                    <ColorField
-                      label="Outline color"
-                      value={borderColor}
-                      onChange={(value) => history.change(() => onBorderColor(value), 'color')}
-                    />
+
                   </div>
                 )}
               </div>
@@ -4357,25 +4397,100 @@ function StylePanel({
   settings,
   onSettings,
   onReset,
+  embedded = false,
 }: {
+  embedded?: boolean
   settings: Settings
   onSettings: (settings: Partial<Settings>) => void
   onReset: () => void
 }) {
+  const previousBorder = useRef(settings.border || 2)
+  useEffect(() => { if (settings.border > 0) previousBorder.current = settings.border }, [settings.border])
   const presets = [
     { name: 'Clean', background: '#ffffff', borderColor: '#111111', border: 0, gutters: 8, radius: 0 },
     { name: 'Paper', background: '#f3ede2', borderColor: '#51483e', border: 1, gutters: 12, radius: 4 },
     { name: 'Bold', background: '#111111', borderColor: '#111111', border: 3, gutters: 6, radius: 0 },
   ]
   return (
-    <div className="drawer-stack style-stack">
+    <div className={`drawer-stack style-stack ${embedded ? 'is-embedded' : ''}`}>
+      <SettingsSection title="Canvas" description="Set the page and line colors.">
+        <div className="color-field-grid">
+          <ColorField label="Paper" value={settings.background} onChange={(background) => onSettings({ background })} />
+          <ColorField
+            label="Line color"
+            value={settings.borderColor}
+            onChange={(borderColor) => onSettings({ borderColor })}
+          />
+        </div>
+        <RangeField
+          label="Divider width"
+          ariaLabel={embedded ? 'Divider thickness' : 'Divider width'}
+          value={settings.gutters}
+          min={0}
+          max={24}
+          unit="px"
+          onChange={(gutters) => onSettings({ gutters })}
+        />
+      </SettingsSection>
+      <SettingsSection title="Panels" description="Tune spacing and edge treatment across the whole grid.">
+        <div className="fit-segmented" role="group" aria-label="Default photo fit">
+          <button
+            type="button"
+            className={settings.fit === 'cover' ? 'active' : ''}
+            aria-pressed={settings.fit === 'cover'}
+            onClick={() => onSettings({ fit: 'cover' })}
+          >
+            <strong>Fill</strong>
+            <span>Crop to frame</span>
+          </button>
+          <button
+            type="button"
+            className={settings.fit === 'contain' ? 'active' : ''}
+            aria-pressed={settings.fit === 'contain'}
+            onClick={() => onSettings({ fit: 'contain' })}
+          >
+            <strong>Fit</strong>
+            <span>Show whole photo</span>
+          </button>
+        </div>
+
+        <RangeField
+          label="Corner radius"
+          value={settings.radius}
+          min={0}
+          max={24}
+          unit="px"
+          onChange={(radius) => onSettings({ radius })}
+        />
+        {!embedded && <>
+        <button
+          className="creator-switch-row"
+          type="button"
+          role="switch"
+          aria-label="Outside border"
+          aria-checked={settings.border > 0}
+          onClick={() => onSettings({ border: settings.border > 0 ? 0 : previousBorder.current })}
+        >
+          <span><strong>Outside border</strong><small>Frame the canvas using the divider color</small></span>
+          <span className="creator-switch" aria-hidden="true" />
+        </button>
+        {settings.border > 0 && <RangeField
+          label="Outside border width"
+          value={settings.border}
+          min={1}
+          max={10}
+          unit="px"
+          onChange={(border) => onSettings({ border })}
+        />}
+        </>}
+      </SettingsSection>
       <SettingsSection title="Start with a look" description="One tap to set the mood. Fine-tune anything below.">
         <div className="style-presets" role="group" aria-label="Appearance presets">
           {presets.map(({ name, ...preset }) => (
             <button
               key={name}
               type="button"
-              aria-pressed={Object.entries(preset).every(([key, value]) => settings[key as keyof Settings] === value)}
+              aria-pressed={Object.entries(preset).every(([key, value]) => (embedded && key === 'border') || settings[key as keyof Settings] === value)}
               onClick={() => onSettings(preset)}
             >
               <span
@@ -4404,64 +4519,6 @@ function StylePanel({
           label="Caption color"
           value={settings.captionColor}
           onChange={(captionColor) => onSettings({ captionColor })}
-        />
-      </SettingsSection>
-
-      <SettingsSection title="Canvas" description="Set the page and line colors.">
-        <div className="color-field-grid">
-          <ColorField label="Paper" value={settings.background} onChange={(background) => onSettings({ background })} />
-          <ColorField
-            label="Panel stroke"
-            value={settings.borderColor}
-            onChange={(borderColor) => onSettings({ borderColor })}
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection title="Panels" description="Tune spacing and edge treatment across the whole grid.">
-        <div className="fit-segmented" role="group" aria-label="Default photo fit">
-          <button
-            type="button"
-            className={settings.fit === 'cover' ? 'active' : ''}
-            aria-pressed={settings.fit === 'cover'}
-            onClick={() => onSettings({ fit: 'cover' })}
-          >
-            <strong>Fill</strong>
-            <span>Crop to frame</span>
-          </button>
-          <button
-            type="button"
-            className={settings.fit === 'contain' ? 'active' : ''}
-            aria-pressed={settings.fit === 'contain'}
-            onClick={() => onSettings({ fit: 'contain' })}
-          >
-            <strong>Fit</strong>
-            <span>Show whole photo</span>
-          </button>
-        </div>
-        <RangeField
-          label="Panel gap"
-          value={settings.gutters}
-          min={0}
-          max={24}
-          unit="px"
-          onChange={(gutters) => onSettings({ gutters })}
-        />
-        <RangeField
-          label="Corner radius"
-          value={settings.radius}
-          min={0}
-          max={24}
-          unit="px"
-          onChange={(radius) => onSettings({ radius })}
-        />
-        <RangeField
-          label="Stroke width"
-          value={settings.border}
-          min={0}
-          max={10}
-          unit="px"
-          onChange={(border) => onSettings({ border })}
         />
       </SettingsSection>
 
@@ -4665,7 +4722,7 @@ async function renderToPng(
     throw new Error('Canvas is unavailable.')
   }
 
-  context.fillStyle = settings.background
+  context.fillStyle = layout.custom ? settings.background : settings.borderColor
   context.fillRect(0, 0, canvas.width, canvas.height)
   const gutter = settings.gutters * 3
   const outer = settings.border * 3
@@ -4683,7 +4740,7 @@ async function renderToPng(
   }
 
   for (const divider of layout.dividers ?? []) {
-    drawDividerGap(context, divider, width, panelHeight, outer, gutter, settings.background, settings.border * 3, settings.borderColor)
+    drawDividerGap(context, divider, width, panelHeight, outer, gutter, settings.borderColor)
   }
 
   if (settings.caption.trim()) {
@@ -4823,7 +4880,7 @@ function drawStoryVideoFrame(
   progress: number,
 ) {
   context.clearRect(0, 0, width, panelHeight)
-  context.fillStyle = settings.background
+  context.fillStyle = layout.custom ? settings.background : settings.borderColor
   context.fillRect(0, 0, width, panelHeight)
   const styleScale = width / 480
   const gutter = settings.gutters * styleScale
@@ -4850,8 +4907,6 @@ function drawStoryVideoFrame(
         panelHeight,
         outer,
         gutter,
-        settings.background,
-        settings.border * styleScale,
         settings.borderColor,
       )
     }
@@ -4934,7 +4989,7 @@ function drawOuterBezel(
   context.save()
   context.lineWidth = lineWidth
   context.strokeStyle = settings.borderColor
-  drawRoundedRect(context, inset, inset, width - inset * 2, panelHeight - inset * 2, Math.max(10, settings.radius * 3))
+  drawRoundedRect(context, inset, inset, width - inset * 2, panelHeight - inset * 2, settings.radius * (width / 480))
   context.stroke()
   context.restore()
 }
@@ -4982,10 +5037,14 @@ function drawPanel(
   styleScale = 3,
 ) {
   const bounds = panelBounds(panel)
-  const x = outer + bounds.x * (width - outer * 2) + gutter / 2
-  const y = outer + bounds.y * (panelHeight - outer * 2) + gutter / 2
-  const w = bounds.w * (width - outer * 2) - gutter
-  const h = bounds.h * (panelHeight - outer * 2) - gutter
+  const leftGap = panel.points || bounds.x > 0 ? gutter / 2 : 0
+  const topGap = panel.points || bounds.y > 0 ? gutter / 2 : 0
+  const rightGap = panel.points || bounds.x + bounds.w < 0.9999 ? gutter / 2 : 0
+  const bottomGap = panel.points || bounds.y + bounds.h < 0.9999 ? gutter / 2 : 0
+  const x = outer + bounds.x * (width - outer * 2) + leftGap
+  const y = outer + bounds.y * (panelHeight - outer * 2) + topGap
+  const w = bounds.w * (width - outer * 2) - leftGap - rightGap
+  const h = bounds.h * (panelHeight - outer * 2) - topGap - bottomGap
 
   context.save()
   if (panel.points) {
@@ -4993,26 +5052,15 @@ function drawPanel(
   } else {
     drawRoundedRect(context, x, y, w, h, settings.radius * styleScale)
   }
-  context.fillStyle = '#ffffff'
+  context.fillStyle = settings.background
   context.fill()
   context.clip()
   if (image) {
     drawImageFit(context, image, x, y, w, h, shot?.fit ?? settings.fit, shot ?? createShot('', ''))
   } else {
-    drawEmptyPanel(context, x, y, w, h)
+    drawEmptyPanel(context, x, y, w, h, settings.background)
   }
   context.restore()
-
-  if (settings.border > 0) {
-    context.lineWidth = Math.max(2, settings.border * styleScale)
-    context.strokeStyle = settings.borderColor
-    if (panel.points) {
-      drawPanelPolygon(context, panel, width, panelHeight, outer)
-    } else {
-      drawRoundedRect(context, x, y, w, h, settings.radius * styleScale)
-    }
-    context.stroke()
-  }
 }
 
 function drawPanelPolygon(
@@ -5042,8 +5090,6 @@ function drawDividerGap(
   outer: number,
   gutter: number,
   color: string,
-  borderWidth: number,
-  borderColor: string,
 ) {
   const innerWidth = width - outer * 2
   const innerHeight = panelHeight - outer * 2
@@ -5058,14 +5104,6 @@ function drawDividerGap(
   context.rect(outer, outer, innerWidth, innerHeight)
   context.clip()
   context.lineCap = 'butt'
-  if (borderWidth > 0) {
-    context.strokeStyle = borderColor
-    context.lineWidth = gutter + borderWidth * 2
-    context.beginPath()
-    context.moveTo(x1, y1)
-    context.lineTo(x2, y2)
-    context.stroke()
-  }
   if (gutter > 0) {
     context.strokeStyle = color
     context.lineWidth = gutter
@@ -5077,13 +5115,17 @@ function drawDividerGap(
   context.restore()
 }
 
-function panelStyle(panel: Panel) {
+function panelStyle(panel: Panel, insetRect = false) {
   const center = panelCentroid(panel)
+  const leftGap = panel.x > 0 ? 'var(--gutter) / 2' : '0px'
+  const topGap = panel.y > 0 ? 'var(--gutter) / 2' : '0px'
+  const horizontalGap = (Number(panel.x > 0) + Number(panel.x + panel.w < 0.9999)) / 2
+  const verticalGap = (Number(panel.y > 0) + Number(panel.y + panel.h < 0.9999)) / 2
   return {
-    left: `${panel.x * 100}%`,
-    top: `${panel.y * 100}%`,
-    width: `${panel.w * 100}%`,
-    height: `${panel.h * 100}%`,
+    left: insetRect && !panel.points ? `calc(${panel.x * 100}% + ${leftGap})` : `${panel.x * 100}%`,
+    top: insetRect && !panel.points ? `calc(${panel.y * 100}% + ${topGap})` : `${panel.y * 100}%`,
+    width: insetRect && !panel.points ? `calc(${panel.w * 100}% - var(--gutter) * ${horizontalGap})` : `${panel.w * 100}%`,
+    height: insetRect && !panel.points ? `calc(${panel.h * 100}% - var(--gutter) * ${verticalGap})` : `${panel.h * 100}%`,
     clipPath: panel.points ? pointsToClipPath(panel.points) : undefined,
     '--chip-x': `${((center.x - panel.x) / panel.w) * 100}%`,
     '--chip-y': `${((center.y - panel.y) / panel.h) * 100}%`,
@@ -5230,8 +5272,8 @@ function drawRoundedRect(context: CanvasRenderingContext2D, x: number, y: number
   context.closePath()
 }
 
-function drawEmptyPanel(context: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
-  context.fillStyle = '#f2f2f7'
+function drawEmptyPanel(context: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, paper: string) {
+  context.fillStyle = paper
   context.fillRect(x, y, w, h)
 }
 

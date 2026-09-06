@@ -40,7 +40,7 @@ for (const engine of [chromium, webkit]) {
     const canvas = await page.locator('.creator-canvas').boundingBox()
     assert.ok((await page.locator('.creator-side').boundingBox()).height <= 225)
     assert.ok(canvas.height > 380, 'Compact dock did not release canvas space')
-    for (const name of ['Adjust', 'Style', 'Outline', 'Details', 'Dividers']) {
+    for (const name of ['Adjust', 'Style', 'Border', 'Details', 'Dividers']) {
       await page.getByRole('tab', { name, exact: true }).click()
       assert.deepEqual(await page.locator('.creator-canvas').boundingBox(), canvas, 'Paging shifted the canvas')
       assert.equal(await page.getByRole('tabpanel').count(), 1, 'Offscreen controls are accessible')
