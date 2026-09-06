@@ -40,11 +40,37 @@ for (const engine of [chromium, webkit]) {
     const canvas = await page.locator('.creator-canvas').boundingBox()
     assert.ok((await page.locator('.creator-side').boundingBox()).height <= 225)
     assert.ok(canvas.height > 380, 'Compact dock did not release canvas space')
-    for (const name of ['Adjust', 'Style', 'Border', 'Details', 'Dividers']) {
+    for (const name of ['Adjust', 'Style', 'Border', 'Photos', 'Caption', 'Details', 'Dividers']) {
       await page.getByRole('tab', { name, exact: true }).click()
       assert.deepEqual(await page.locator('.creator-canvas').boundingBox(), canvas, 'Paging shifted the canvas')
       assert.equal(await page.getByRole('tabpanel').count(), 1, 'Offscreen controls are accessible')
     }
+    for (const viewport of [{ width: 280, height: 568 }, { width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1440, height: 900 }, { width: 844, height: 390 }]) {
+      await page.setViewportSize(viewport)
+      const stableCanvas = await page.locator('.creator-canvas').boundingBox()
+      for (const name of ['Style', 'Border', 'Photos', 'Caption', 'Details', 'Dividers', 'Adjust']) {
+        await page.getByRole('tab', { name, exact: true }).click()
+        if (name === 'Border' && await page.getByRole('switch', { name: 'Outside border', exact: true }).getAttribute('aria-checked') === 'false') {
+          await page.getByRole('switch', { name: 'Outside border', exact: true }).click()
+        }
+        const geometry = await page.getByRole('tabpanel').evaluate(panel => {
+          const dock = document.querySelector('.creator-side').getBoundingClientRect()
+          const canvas = document.querySelector('.creator-canvas').getBoundingClientRect()
+          return { drawerHeight: dock.height, overflow: panel.scrollHeight - panel.clientHeight,
+            visible: canvas.bottom <= dock.top || canvas.right <= dock.left,
+            inViewport: dock.bottom <= innerHeight && dock.right <= innerWidth }
+        })
+        assert.ok(geometry.drawerHeight <= 225 && geometry.overflow <= 2 && geometry.visible && geometry.inViewport,
+          `${engine.name()} ${viewport.width} ${name}: ${JSON.stringify(geometry)}`)
+        const currentCanvas = await page.locator('.creator-canvas').boundingBox()
+        for (const key of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(currentCanvas[key] - stableCanvas[key]) < 1, `Paging shifted ${key}`)
+        assert.equal(await preview.getAttribute('src'), originalPhoto.src)
+      }
+      await page.getByRole('tab', { name: 'Style', exact: true }).click()
+      await page.screenshot({ path: `test-results/compact-style-${viewport.width}-${engine.name()}.png` })
+    }
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.getByRole('tab', { name: 'Dividers', exact: true }).click()
     if (engine === chromium) {
       const cdp = await page.context().newCDPSession(page)
       const box = await page.locator('.creator-tool-content').boundingBox()

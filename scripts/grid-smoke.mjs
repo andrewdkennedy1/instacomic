@@ -41,7 +41,7 @@ try {
   assert.ok(selectedHandle.width >= 44 && selectedHandle.height >= 44, 'divider end handles must remain touch friendly')
   assert.ok(selectedHandle.visible && selectedHandle.cueWidth >= 6 && selectedHandle.cueWidth <= 14, 'selected endpoints need a small, visible editing cue')
   const canvasBefore = await page.locator('.creator-canvas').boundingBox()
-  for (const tab of ['Adjust', 'Style', 'Border', 'Details', 'Dividers']) {
+  for (const tab of ['Adjust', 'Style', 'Border', 'Photos', 'Caption', 'Details', 'Dividers']) {
     await creator.getByRole('tab', { name: tab, exact: true }).click()
     assert.deepEqual(await page.locator('.creator-canvas').boundingBox(), canvasBefore, 'switching tools moves the canvas')
   }
@@ -113,7 +113,7 @@ try {
 
   for (const viewport of [{ width: 280, height: 568 }, { width: 390, height: 844 }, { width: 844, height: 390 }, { width: 1280, height: 800 }]) {
     await page.setViewportSize(viewport)
-    for (const tab of ['Dividers', 'Adjust', 'Style', 'Border', 'Details']) {
+    for (const tab of ['Dividers', 'Adjust', 'Style', 'Border', 'Photos', 'Caption', 'Details']) {
       await creator.getByRole('tab', { name: tab, exact: true }).click()
       const geometry = await page.evaluate(() => {
         const box = (selector) => document.querySelector(selector).getBoundingClientRect()
@@ -172,7 +172,7 @@ try {
 
   await page.getByRole('button', { name: 'Controls', exact: true }).click()
   await page.getByRole('button', { name: 'Edit My flow grid', exact: true }).click()
-  await page.getByRole('tab', { name: 'Style', exact: true }).click()
+  await page.getByRole('tab', { name: 'Photos', exact: true }).click()
   await page.getByRole('button', { name: 'Paper', exact: true }).click()
   await page.getByRole('button', { name: 'Update layout', exact: true }).click()
   await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })

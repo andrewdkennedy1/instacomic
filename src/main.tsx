@@ -3564,7 +3564,7 @@ function CreatorPanel({
   const linePointersRef = useRef<Map<number, { clientX: number; clientY: number }>>(new Map())
   const [selectedLineId, setSelectedLineId] = useState<string | null>(draftLines[0]?.id ?? null)
   const previousLineIds = useRef(draftLines.map((line) => line.id))
-  const gridTools = ['dividers', 'adjust', 'borders', 'outlines', 'details'] as const
+  const gridTools = ['dividers', 'adjust', 'borders', 'outlines', 'photos', 'caption', 'details'] as const
   type GridTool = (typeof gridTools)[number]
   const [toolTab, setToolTab] = useState<GridTool>(startsWithStyle ? 'borders' : 'dividers')
   const toolPagerRef = useRef<HTMLDivElement>(null)
@@ -3612,6 +3612,9 @@ function CreatorPanel({
       if (pagerSettleRef.current) clearTimeout(pagerSettleRef.current)
     }
   }, [])
+  useEffect(() => {
+    document.getElementById(`grid-tab-${toolTab}`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [toolTab])
   const previousOutline = useRef(borderThickness || 1)
   useEffect(() => { if (borderThickness > 0) previousOutline.current = borderThickness }, [borderThickness])
   const [previewing, setPreviewing] = useState(false)
@@ -4141,7 +4144,7 @@ function CreatorPanel({
                       ? 'Style'
                       : tab === 'outlines'
                         ? 'Border'
-                        : 'Details'}
+                        : tab === 'photos' ? 'Photos' : tab === 'caption' ? 'Caption' : 'Details'}
               </button>
             ))}
           </div>
@@ -4287,24 +4290,12 @@ function CreatorPanel({
               inert={toolTab !== 'borders' || undefined}
               aria-hidden={toolTab !== 'borders'}
             >
-              <StylePanel
-                embedded
-                settings={{ ...defaultSettings, ...appearance, gutters: dividerThickness, border: borderThickness, borderColor }}
-                onSettings={(update) => history.change(() => {
-                  const { gutters, border, borderColor: color, ...visual } = update
-                  if (gutters !== undefined) onThickness(gutters)
-                  // Presets never toggle the independently controlled outside frame.
-                  void border
-                  if (color !== undefined) onBorderColor(color)
-                  onAppearance({ ...appearance, ...visual })
-                }, Object.keys(update).sort().join(','))}
-                onReset={() => history.change(() => {
-                  onThickness(defaultSettings.gutters)
-                  onBorderThickness(0)
-                  onBorderColor(defaultSettings.borderColor)
-                  onAppearance(canvasAppearance(defaultSettings))
-                })}
-              />
+              <div className="color-field-grid">
+                <ColorField label="Paper" value={appearance.background} onChange={(background) => history.change(() => onAppearance({ ...appearance, background }), 'paper')} />
+                <ColorField label="Line color" value={borderColor} onChange={(color) => history.change(() => onBorderColor(color), 'color')} />
+              </div>
+              <RangeField label="Divider width" ariaLabel="Divider thickness" value={dividerThickness} min={0} max={24} unit="px"
+                onChange={(width) => history.change(() => onThickness(width), 'gap')} />
             </section>
             <section
               className="creator-control-section"
@@ -4337,7 +4328,8 @@ function CreatorPanel({
                 {borderThickness > 0 && (
                   <div className="creator-outline-options">
                     <RangeField
-                      label="Outside border width"
+                      label="Width"
+                      ariaLabel="Outside border width"
                       value={borderThickness}
                       min={1}
                       max={10}
@@ -4348,6 +4340,40 @@ function CreatorPanel({
                   </div>
                 )}
               </div>
+              <RangeField label="Corners" ariaLabel="Corner radius" value={appearance.radius} min={0} max={24} unit="px"
+                onChange={(radius) => history.change(() => onAppearance({ ...appearance, radius }), 'radius')} />
+            </section>
+
+            <section className="creator-control-section" id="grid-tools-photos" role="tabpanel" aria-labelledby="grid-tab-photos"
+              inert={toolTab !== 'photos' || undefined} aria-hidden={toolTab !== 'photos'}>
+              <div className="fit-segmented" role="group" aria-label="Default photo fit">
+                {(['cover', 'contain'] as const).map((fit) => <button key={fit} type="button" aria-pressed={appearance.fit === fit}
+                  className={appearance.fit === fit ? 'active' : ''} onClick={() => history.change(() => onAppearance({ ...appearance, fit }))}>
+                  <strong>{fit === 'cover' ? 'Fill' : 'Fit'}</strong><span>{fit === 'cover' ? 'Crop to frame' : 'Show whole photo'}</span>
+                </button>)}
+              </div>
+              <div className="style-presets" role="group" aria-label="Appearance presets">
+                {[
+                  { name: 'Clean', background: '#ffffff', borderColor: '#111111', gutters: 8, radius: 0 },
+                  { name: 'Paper', background: '#f3ede2', borderColor: '#51483e', gutters: 12, radius: 4 },
+                  { name: 'Bold', background: '#111111', borderColor: '#111111', gutters: 6, radius: 0 },
+                ].map((preset) => <button key={preset.name} type="button"
+                  aria-pressed={appearance.background === preset.background && borderColor === preset.borderColor && dividerThickness === preset.gutters && appearance.radius === preset.radius}
+                  onClick={() => history.change(() => {
+                    onAppearance({ ...appearance, background: preset.background, radius: preset.radius })
+                    onBorderColor(preset.borderColor)
+                    onThickness(preset.gutters)
+                  })}>{preset.name}</button>)}
+              </div>
+            </section>
+            <section className="creator-control-section" id="grid-tools-caption" role="tabpanel" aria-labelledby="grid-tab-caption"
+              inert={toolTab !== 'caption' || undefined} aria-hidden={toolTab !== 'caption'}>
+              <label className="field text-field creator-caption-field"><span>Caption</span>
+                <input aria-label="Caption text" value={appearance.caption} placeholder="Add a title…"
+                  onChange={(event) => history.change(() => onAppearance({ ...appearance, caption: event.target.value }), 'caption')} />
+              </label>
+              <ColorField label="Caption color" value={appearance.captionColor}
+                onChange={(captionColor) => history.change(() => onAppearance({ ...appearance, captionColor }), 'caption-color')} />
             </section>
 
             <section
@@ -4378,6 +4404,12 @@ function CreatorPanel({
                 <button type="button" onClick={() => history.change(onReset)}>
                   Reset grid
                 </button>
+                <button type="button" onClick={() => history.change(() => {
+                  onThickness(defaultSettings.gutters)
+                  onBorderThickness(0)
+                  onBorderColor(defaultSettings.borderColor)
+                  onAppearance(canvasAppearance(defaultSettings))
+                })}>Reset appearance</button>
               </div>
             </section>
           </div>
@@ -4397,9 +4429,7 @@ function StylePanel({
   settings,
   onSettings,
   onReset,
-  embedded = false,
 }: {
-  embedded?: boolean
   settings: Settings
   onSettings: (settings: Partial<Settings>) => void
   onReset: () => void
@@ -4412,7 +4442,7 @@ function StylePanel({
     { name: 'Bold', background: '#111111', borderColor: '#111111', border: 3, gutters: 6, radius: 0 },
   ]
   return (
-    <div className={`drawer-stack style-stack ${embedded ? 'is-embedded' : ''}`}>
+    <div className="drawer-stack style-stack">
       <SettingsSection title="Canvas" description="Set the page and line colors.">
         <div className="color-field-grid">
           <ColorField label="Paper" value={settings.background} onChange={(background) => onSettings({ background })} />
@@ -4424,7 +4454,7 @@ function StylePanel({
         </div>
         <RangeField
           label="Divider width"
-          ariaLabel={embedded ? 'Divider thickness' : 'Divider width'}
+          ariaLabel="Divider width"
           value={settings.gutters}
           min={0}
           max={24}
@@ -4462,7 +4492,6 @@ function StylePanel({
           unit="px"
           onChange={(radius) => onSettings({ radius })}
         />
-        {!embedded && <>
         <button
           className="creator-switch-row"
           type="button"
@@ -4482,7 +4511,6 @@ function StylePanel({
           unit="px"
           onChange={(border) => onSettings({ border })}
         />}
-        </>}
       </SettingsSection>
       <SettingsSection title="Start with a look" description="One tap to set the mood. Fine-tune anything below.">
         <div className="style-presets" role="group" aria-label="Appearance presets">
@@ -4490,7 +4518,7 @@ function StylePanel({
             <button
               key={name}
               type="button"
-              aria-pressed={Object.entries(preset).every(([key, value]) => (embedded && key === 'border') || settings[key as keyof Settings] === value)}
+              aria-pressed={Object.entries(preset).every(([key, value]) => settings[key as keyof Settings] === value)}
               onClick={() => onSettings(preset)}
             >
               <span

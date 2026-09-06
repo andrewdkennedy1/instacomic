@@ -7,7 +7,7 @@ The studio uses an editorial type hierarchy, warm ivory controls, a charcoal art
 - **Setup:** a live layout specimen, format and starting-grid choices, then Start creating. A recovered draft replaces the setup form with Continue and a clearly explained new-comic action. Installation stays optional.
 - **Studio:** desktop offers direct Layout and Style access plus a panel navigator. Mobile uses a five-action capture dock. Selecting a photo replaces that dock with its editing tools without resizing the artwork.
 - **Controls:** one modal sheet for Layout and Export. Built-in templates also have a Style tab; custom grids open their Style controls inside the grid editor. Desktop anchors it beside the artwork; mobile uses a bottom sheet. Sections use spacing and separators instead of nested cards. Done, Escape, the backdrop, and dragging the title area dismiss the sheet.
-- **Grid creator:** a full canvas and five tool pages. Desktop places the inspector on the right; mobile reserves a fixed bottom dock with swipe navigation. Small endpoint cues retain 44px hit targets and disappear in Preview.
+- **Grid creator:** a full canvas and seven compact tool pages. Phone, tablet and desktop reserve the same 224px bottom drawer with swipe navigation; short landscape places that compact drawer beside the artwork. Each page fits without vertical scrolling and switching tools leaves the preview fixed. Small endpoint cues retain 44px hit targets and disappear in Preview.
 - **Export:** completeness information precedes the image actions. Story-video settings and progress follow as a separate section. Existing explicit download and share behavior remains intact.
 
 ## Source ownership

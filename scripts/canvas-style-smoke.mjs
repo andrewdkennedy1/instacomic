@@ -33,6 +33,7 @@ for (const engine of [chromium, webkit]) {
     await setColor('Line color', '#8c243d')
     await setColor('Paper', '#d4e3ca')
     await page.getByRole('slider', { name: 'Divider thickness', exact: true }).fill('18')
+    await page.getByRole('tab', { name: 'Caption', exact: true }).click()
     await page.getByLabel('Caption text', { exact: true }).fill('A day to remember')
     await page.getByRole('tab', { name: 'Border', exact: true }).click()
     const dividerPaint = () => page.locator('.creator-free-line').first().evaluate(line => {
@@ -78,6 +79,7 @@ for (const engine of [chromium, webkit]) {
     // verify the actual saved grid record, editing, and cancellation above.
     await page.getByRole('button', { name: 'Open appearance controls', exact: true }).click()
     assert.equal(await page.getByLabel('Line color', { exact: true }).inputValue(), '#8c243d')
+    await page.getByRole('tab', { name: 'Caption', exact: true }).click()
     assert.equal(await page.getByLabel('Caption text', { exact: true }).inputValue(), 'A day to remember')
     assert.equal(await page.locator('.creator-fullscreen').evaluate(e => Math.round(e.getBoundingClientRect().top)), 0, 'Focus scrolled the workbench out of view')
     await page.waitForFunction(() => getComputedStyle(document.querySelector('.creator-fullscreen')).opacity === '1')
