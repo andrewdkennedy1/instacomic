@@ -32,7 +32,7 @@ Instacomic turns a phone camera into a live comic strip editor. Pick a panel, sh
 - Action-level Undo/Redo and automatic on-device draft recovery protect edits between sessions.
 - Custom grids use edge-to-edge cuts with angle and position sliders, continuous dragging and two-finger rotation, optional snapping, and gesture-level Undo/Redo. A compact swipeable dock groups Dividers, Adjust, Style, Outline, and Details controls without shifting the canvas.
 - The grid editor previews stored photos with their existing crop, fit, and rotation, using the same panel mapping and image placement as the main editor. Cancel leaves the original composition untouched.
-- Spacing is independent of optional panel outlines, which start off. Thin editing guides and invisible 44px touch targets do not appear in exports. Existing saved segments retain their geometry until explicitly extended; saved-grid updates can also be undone from the main editor.
+- Spacing is independent of optional panel outlines, which start off. Thin editing guides and subtle endpoint cues with 44px touch targets do not appear in exports. Existing saved segments retain their geometry until explicitly extended; saved-grid updates can also be undone from the main editor.
 - A consistent graphite workspace and warm editing sheets carry through setup, capture, grid design, and export. Clean, Paper, and Bold presets provide one-tap appearance starting points.
 - The grid library renders faithful panel-and-divider previews for both templates and locally saved custom grids.
 - Layout, Appearance, and Export live in one accessible sheet that keeps the canvas geometry stable and remains keyboard navigable.
@@ -40,6 +40,12 @@ Instacomic turns a phone camera into a live comic strip editor. Pick a panel, sh
 - One Export flow presents image completeness, PNG sharing, video settings, render progress, and explicit Download/Share actions; video rendering never auto-downloads.
 - The responsive canvas preserves its exact format on short phones, tablets, desktop, and landscape without rotating the app shell.
 - Installable PWA shell with manifest icons and offline app caching.
+
+## Design system
+
+![Instacomic editorial setup](docs/instacomic-setup.png)
+
+The editorial studio covers setup, capture, photo editing, custom grids, appearance, and export. Desktop has direct Layout/Style access and panel navigation; mobile uses contextual bottom tools. See [design foundations and component ownership](docs/design-system.md).
 
 ## Local development
 
@@ -61,6 +67,7 @@ npm run smoke:camera
 npm run smoke:video
 npm run smoke:ux
 npm run smoke:grid
+npm run smoke:studio
 ```
 
 The smoke checks exercise browser-first setup and optional installation, exact responsive canvas geometry, labelled export flows, contextual photo actions, coalesced Undo/Redo history, simultaneous pinch zoom and snap rotation, background autosave, Home/Continue/New recovery, photo-safe custom-grid saves, accessible modal and tab behavior, keyboard and pointer grid editing, safe custom-grid deletion/discard, live/export border parity, fake-camera capture through the final panel, and explicit story-video download.

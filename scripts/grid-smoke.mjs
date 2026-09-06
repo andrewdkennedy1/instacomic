@@ -33,7 +33,13 @@ try {
   assert.equal(await page.locator('.creator-free-line').first().evaluate((line) => getComputedStyle(line, '::before').display), 'none', 'disabled outlines still render a dark underlay')
   assert.equal(await page.locator('.creator-free-line').first().evaluate((line) => getComputedStyle(line, '::before').height), '6px')
   assert.equal(await page.locator('.creator-free-line').first().evaluate((line) => getComputedStyle(line, '::before').borderRadius), '0px')
-  assert.equal(await page.locator('.creator-handle').first().evaluate((handle) => getComputedStyle(handle, '::after').content), 'none')
+  const selectedHandle = await page.locator('.creator-handle.is-selected').first().evaluate(handle => {
+    const target = handle.getBoundingClientRect()
+    const cue = getComputedStyle(handle, '::after')
+    return { width: target.width, height: target.height, cueWidth: parseFloat(cue.width), visible: cue.opacity === '1' }
+  })
+  assert.ok(selectedHandle.width >= 44 && selectedHandle.height >= 44, 'divider end handles must remain touch friendly')
+  assert.ok(selectedHandle.visible && selectedHandle.cueWidth >= 6 && selectedHandle.cueWidth <= 14, 'selected endpoints need a small, visible editing cue')
   const canvasBefore = await page.locator('.creator-canvas').boundingBox()
   for (const tab of ['Adjust', 'Style', 'Outline', 'Details', 'Dividers']) {
     await creator.getByRole('tab', { name: tab, exact: true }).click()

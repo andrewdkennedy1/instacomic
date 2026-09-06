@@ -96,10 +96,12 @@ const creatorFullscreenVisible = await page.locator('.creator-fullscreen').count
 const drawerHiddenAfterCreate = await page.locator('.motion-drawer').boundingBox().then((box) => box && box.y > 830)
 const creatorCanvasFormat = await page.locator('.creator-canvas').getAttribute('data-page-format')
 const creatorCanvasAspect = await page.locator('.creator-canvas').boundingBox().then((box) => (box ? box.height / box.width : 0))
-const uniformControlBorders = await page.evaluate(() => {
-  const standardSurfaces = document.querySelectorAll('.drawer-tabs, .layout-card, .layout-preview, .creator-topbar button, .creator-actions button, .field input')
-  const expectedBorder = getComputedStyle(document.documentElement).getPropertyValue('--ui-border').trim()
-  return standardSurfaces.length > 0 && Array.from(standardSurfaces).every((element) => getComputedStyle(element).borderTopWidth === expectedBorder)
+const consistentControlHierarchy = await page.evaluate(() => {
+  const primary = document.querySelector('.creator-topbar .primary')
+  const secondary = document.querySelector('.creator-topbar button:not(.primary)')
+  const controls = [...document.querySelectorAll('.creator-topbar button, .creator-selection-row button, .creator-selection-row select')]
+  return getComputedStyle(primary).backgroundColor !== getComputedStyle(secondary).backgroundColor &&
+    controls.every(control => control.getBoundingClientRect().height >= 44)
 })
 const creatorHasHorizontalDivider = await page.getByRole('button', { name: 'Horizontal divider' }).count()
 const creatorHasGestureHint = (await page.locator('.creator-gesture-hint').innerText()).toLowerCase().includes('two fingers')
@@ -278,7 +280,7 @@ const savedPreviewDividerRun = paperRunFromImage(
   savedPreviewImage,
   Math.round(savedPreviewImage.width * 0.5),
   Math.round(savedPreviewImage.height * 0.24),
-  '#e5e5ea',
+  '#ffffff',
 )
 await page.screenshot({ path: 'test-results/custom-grid-gallery.png', fullPage: true })
 const deleteLayoutButton = page.getByRole('button', { name: 'Delete Final Layout layout' })
@@ -333,7 +335,7 @@ const result = {
   drawerHiddenAfterCreate,
   creatorCanvasFormat,
   creatorCanvasAspect,
-  uniformControlBorders,
+  consistentControlHierarchy,
   creatorHasHorizontalDivider,
   creatorHasGestureHint,
   creatorWholeLineMoved,
@@ -412,7 +414,7 @@ const failures = [
   result.drawerHiddenAfterCreate ? null : 'drawer stayed visible behind the fullscreen creator',
   result.creatorCanvasFormat === '9:16' ? null : 'custom layout creator did not inherit the selected aspect ratio id',
   Math.abs(result.creatorCanvasAspect - 16 / 9) < 0.08 ? null : 'custom layout creator canvas did not render as 9:16',
-  result.uniformControlBorders ? null : 'standard editor controls do not use a uniform border width',
+  result.consistentControlHierarchy ? null : 'primary and secondary controls are not distinct or lack touch targets',
   result.creatorHasHorizontalDivider === 1 ? null : 'custom layout maker does not expose horizontal dividers',
   result.creatorHasGestureHint ? null : 'custom layout maker does not explain its two-finger line gesture',
   result.creatorWholeLineMoved ? null : 'custom grid whole-line dragging does not move the selected divider',
@@ -728,7 +730,7 @@ async function downloadPng(page) {
 async function closeDrawer(page) {
   const open = await page.locator('.motion-drawer.is-open').count()
   if (open > 0) {
-    await page.locator('.motion-drawer.is-open .drawer-grabber').evaluate((button) => button.click())
+    await page.locator('.motion-drawer.is-open .drawer-close').evaluate((button) => button.click())
   }
   await waitForDrawerHidden(page)
 }

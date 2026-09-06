@@ -15,6 +15,7 @@
     "smoke:photos": "node scripts/photo-position-smoke.mjs",
     "smoke:video": "node scripts/video-smoke.mjs",
     "smoke:ux": "node scripts/ux-smoke.mjs",
+    "smoke:studio": "node scripts/studio-smoke.mjs",
     "smoke:grid": "node scripts/grid-smoke.mjs",
     "deploy": "npm run build && wrangler deploy"
   },

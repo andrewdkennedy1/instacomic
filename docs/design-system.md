@@ -1,0 +1,39 @@
+# Instacomic studio design
+
+The studio uses an editorial type hierarchy, warm ivory controls, a charcoal artwork stage, and one terracotta accent. The comic remains the dominant surface. Selection uses outlines and text weight; accent color identifies the primary action, active photo, or meaningful editing control.
+
+## Product structure
+
+- **Setup:** a live layout specimen, format and starting-grid choices, then Start creating. A recovered draft replaces the setup form with Continue and a clearly explained new-comic action. Installation stays optional.
+- **Studio:** desktop offers direct Layout and Style access plus a panel navigator. Mobile uses a five-action capture dock. Selecting a photo replaces that dock with its editing tools without resizing the artwork.
+- **Controls:** one modal sheet for Layout, Style, and Export. Desktop anchors it beside the artwork; mobile uses a bottom sheet. Sections use spacing and separators instead of nested cards. Done, Escape, the backdrop, and dragging the title area dismiss the sheet.
+- **Grid creator:** a full canvas and five tool pages. Desktop places the inspector on the right; mobile reserves a fixed bottom dock with swipe navigation. Small endpoint cues retain 44px hit targets and disappear in Preview.
+- **Export:** completeness information precedes the image actions. Story-video settings and progress follow as a separate section. Existing explicit download and share behavior remains intact.
+
+## Source ownership
+
+| File | Responsibility |
+| --- | --- |
+| `src/tokens.css` | Semantic color, type, spacing, radius, shadow, motion, control and width tokens |
+| `src/ui.tsx` | Shared 24px line icons, brand, setting sections, range and color fields |
+| `src/studio.css` | Product shell, controls, workflow layouts, responsive and accessibility rules |
+| `src/canvas.css` | Artwork geometry, live photo layers, divider handles and layout previews |
+| `scripts/generate-icons.py` | Reproducible PWA brand icons, using Pillow |
+
+Keep document appearance separate from interface tokens. Paper, gutters, strokes, image placement, and export dimensions are user content settings; changing the studio palette must not change exported comics. IndexedDB, export rendering, grid geometry, and the Worker retain their established architecture.
+
+## Foundations and interaction
+
+Use the platform sans-serif for controls and the system editorial serif for prominent headings. Base control text is 15px; 12–13px is reserved for compact labels and metadata. Use the 4px spacing scale and 44px minimum interactive targets. Standard actions use 8px corners, compact choices use 4px corners, and sheets use 20px top corners on mobile.
+
+Layout changes at 760px and 1100px; 360px and short-landscape rules handle constrained devices. Canvas containers preserve the selected aspect ratio at every size. Safe-area insets and actual viewport height reserve space for toolbars.
+
+Primary actions have a solid terracotta fill. Secondary actions use neutral outlines or surfaces. Tertiary actions use text or line icons. Destructive actions use red, with existing recovery and confirmation behavior. Hover, press, focus, disabled and processing states are shared. Motion is brief (140–200ms); Framer Motion and CSS both honor reduced motion. Dialogs trap and restore focus, tabs support arrow keys, and offscreen or covered controls are inert.
+
+Photo drags capture the pointer so releasing outside the canvas or browser still ends the gesture. This prevents a later toolbar tap from finishing a previous drag and activating a newly revealed photo action.
+
+## Validation
+
+Run the existing camera, photo, save/recovery, editing, grid, geometry, video, install and responsive smoke scripts. `scripts/studio-smoke.mjs` adds desktop panel navigation, direct Style/Layout access, modal focus restoration, mobile controls and setup breakpoints. Visual review covers setup, populated capture, contextual photo tools, layout library, appearance, export and custom-grid editing at mobile and desktop sizes.
+
+When extending the UI, reuse the semantic tokens and shared fields, preserve the canvas geometry tests, and review a rendered narrow and wide viewport before shipping. Do not add another global CSS override layer.

@@ -252,7 +252,7 @@ await waitForDrawerHidden(page)
 const drawerFocusRestored = await page.evaluate(() => document.activeElement?.getAttribute('aria-label') === 'Controls')
 const closedDrawerInert = await page.locator('.motion-drawer').evaluate((drawer) => drawer.hasAttribute('inert') && drawer.getAttribute('aria-hidden') === 'true')
 const coreTargetsMeet44 = await page.evaluate(() =>
-  [...document.querySelectorAll('.editor-header button:not(:disabled), .capture-actions button:not(:disabled)')].every((control) => {
+  [...document.querySelectorAll('.editor-header button:not(:disabled), .capture-actions button:not(:disabled)')].filter(control => control.getClientRects().length > 0).every((control) => {
     const box = control.getBoundingClientRect()
     return box.width >= 44 && box.height >= 44
   }),
@@ -578,7 +578,7 @@ async function openDrawer(page) {
 
 async function closeDrawer(page) {
   if ((await page.locator('.motion-drawer.is-open').count()) > 0) {
-    await page.locator('.motion-drawer.is-open .drawer-grabber').evaluate((button) => button.click())
+    await page.locator('.motion-drawer.is-open .drawer-close').evaluate((button) => button.click())
   }
   await waitForDrawerHidden(page)
 }

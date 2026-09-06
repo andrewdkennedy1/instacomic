@@ -12,8 +12,8 @@ import {
   type DraftAssetRecord,
   type DraftRecord,
 } from './draft-store'
-import './style.css'
-import './ux-overhaul.css'
+import './studio.css'
+import { ActionIcon, ToolIcon, Brand, SettingsSection, RangeField, ColorField } from './ui'
 
 type PanelFit = 'cover' | 'contain'
 type DrawerTab = 'layout' | 'style' | 'export'
@@ -1927,7 +1927,7 @@ function App() {
         `${customLayout.name} saved to Your grids; kept ${layout.name} active so all ${photoCount} photos stay visible.`,
       )
     } else {
-      setStatus(editingLayoutId ? 'Custom grid updated on this phone.' : 'Custom grid saved on this phone.')
+      setStatus(editingLayoutId ? 'Custom grid updated on this device.' : 'Custom grid saved on this device.')
     }
   }
 
@@ -1941,6 +1941,9 @@ function App() {
     }
 
     event.preventDefault()
+    // Keep the release on this surface even when a photo is dragged beyond
+    // the canvas or window. Otherwise the next toolbar tap ends the gesture.
+    event.currentTarget.setPointerCapture(event.pointerId)
     if (!showPhotoActions) {
       setPhotoActionsDeferred(true)
     }
@@ -2394,7 +2397,7 @@ function App() {
   return (
     <main
       ref={shellRef}
-      className={`native-shell ${appContext.isInstalled ? 'is-app' : 'is-installer'} ${showPhotoActions ? 'has-photo-actions' : ''}`}
+      className={`native-shell ${appContext.isInstalled ? 'is-app' : 'is-installer'} ${showPhotoActions ? 'has-photo-actions' : ''} ${started ? 'is-editing' : 'is-home'}`}
       data-history-undo={historyCounts.undo}
       data-history-redo={historyCounts.redo}
       data-autosave-state={draftPhase}
@@ -2420,21 +2423,29 @@ function App() {
       {!started && (
         <section className="start-screen" aria-label="Start Instacomic" data-draft-phase={draftPhase}>
           <div className="start-shell">
-            <header className="start-hero">
-              <div className="start-brand-row">
-                <img className="start-logo" src="/icons/icon-192.png" alt="" />
-                <div className="start-mark">Instacomic</div>
-              </div>
-              <h1>Turn moments into a comic.</h1>
-              <p>Shoot or add photos panel by panel, arrange the page, then export it ready to share.</p>
-              <div className="start-preview" aria-hidden="true">
-                <div className="start-preview-page" style={{ aspectRatio: `${pageFormat.width} / ${pageFormat.height}` }}>
-                  <LayoutPreview layout={layout} />
-                </div>
-                <div><span>Your story starts here</span><strong>{layout.name} <i>·</i> {pageFormat.id}</strong></div>
-              </div>
+            <header className="start-topbar">
+              <Brand />
+              <span className="start-edition">The everyday comic studio</span>
             </header>
-
+            <div className="start-intro">
+              <p className="eyebrow">A new way to keep a moment</p>
+              <h1>Life happens. <em>Make it a comic.</em></h1>
+              <p>A few photos. Your point of view. Something worth keeping.</p>
+            </div>
+            <div className="start-workspace">
+              <figure className="start-preview">
+                <div className="start-preview-stage">
+                  <span className="preview-registration top-left" aria-hidden="true" />
+                  <span className="preview-registration bottom-right" aria-hidden="true" />
+                  <div className="start-preview-page" style={{ aspectRatio: `${pageFormat.width} / ${pageFormat.height}` }}>
+                    <LayoutPreview layout={layout} specimen />
+                  </div>
+                </div>
+                <figcaption>
+                  <div><span className="eyebrow">Your canvas</span><strong>{layout.name}<i> / </i>{pageFormat.id}</strong></div>
+                  <span>{layout.panels.length} moments,<br />one story.</span>
+                </figcaption>
+              </figure>
             <div className="start-panel">
               {draftPhase === 'checking' ? (
                 <div className="draft-checking" role="status">
@@ -2445,10 +2456,10 @@ function App() {
                 <>
                   <div className="start-section-heading">
                     <div>
-                      <span>Welcome back</span>
-                      <strong>Continue where you left off</strong>
+                      <span className="eyebrow">Welcome back</span>
+                      <h2>Your story is waiting.</h2>
                     </div>
-                    <em>Saved automatically</em>
+                    <span className="saved-indicator">Saved on this device</span>
                   </div>
                   <section className="draft-recovery-card" aria-label="Saved comic draft">
                     <LayoutPreview layout={savedDraft.document.layout} />
@@ -2472,12 +2483,13 @@ function App() {
                 <>
                   <div className="start-section-heading">
                     <div>
-                      <span>New comic</span>
-                      <strong>Choose a canvas and grid</strong>
+                      <span className="eyebrow">New comic</span>
+                      <h2>Set the scene.</h2>
+                      <p>Choose a format and a starting layout.</p>
                     </div>
-                    <em>You can change this later</em>
                   </div>
                   <div className="format-picker" aria-label="Canvas ratio">
+                    <div className="setup-grid-heading"><span><b>01</b> Canvas format</span><em>{pageFormat.detail}</em></div>
                     <div className="format-options" role="group" aria-label="Canvas ratio">
                       {pageFormats.map((format) => (
                         <button
@@ -2496,14 +2508,14 @@ function App() {
                             <strong>{format.id}</strong>
                             <em>{format.label}</em>
                           </span>
-                          <i aria-hidden="true">✓</i>
+                          <i aria-hidden="true"><ActionIcon name="check" /></i>
                         </button>
                       ))}
                     </div>
                   </div>
                   <div className="setup-grid-picker">
                     <div className="setup-grid-heading">
-                      <span>Starting grid</span>
+                      <span><b>02</b> Starting grid</span>
                       <em>{`${layout.name} · ${layout.panels.length} panels`}</em>
                     </div>
                     <div className="setup-grid-options" role="group" aria-label="Starting grid">
@@ -2524,22 +2536,14 @@ function App() {
                         ))}
                     </div>
                   </div>
+                  {newProjectRequested && savedDraft && <p className="new-comic-warning">Starting a new comic replaces your saved draft. Export it first if you want to keep it.</p>}
                   <div className="start-actions">
                     <button
                       className="start-button"
                       type="button"
-                      onPointerDown={(event) => {
-                        if (event.isPrimary && event.button === 0) {
-                          if (newProjectRequested) {
-                            startNewProjectFromGesture()
-                          } else {
-                            startFromGesture()
-                          }
-                        }
-                      }}
                       onClick={() => (newProjectRequested ? startNewProjectFromGesture() : startFromGesture())}
                     >
-                      {newProjectRequested ? 'Start new comic' : 'Start creating'}
+                      <span>{newProjectRequested ? 'Start new comic' : 'Start creating'}</span><ActionIcon name="arrow" />
                     </button>
                     {newProjectRequested && savedDraft && (
                       <button className="start-secondary" type="button" onClick={() => setNewProjectRequested(false)}>
@@ -2549,8 +2553,11 @@ function App() {
                   </div>
                 </>
               )}
+              <p className="setup-reassurance">Shoot with your camera or add photos. Everything stays on your device.</p>
             </div>
-
+            </div>
+            <footer className="start-footer">
+              <p>Small moments. <span>Great stories.</span></p>
             {!appContext.isInstalled && (
               <InstallNudge
                 appContext={appContext}
@@ -2558,20 +2565,21 @@ function App() {
                 onTriggerNativeInstall={triggerNativeInstall}
               />
             )}
+            </footer>
           </div>
         </section>
       )}
-      <video ref={videoRef} className="live-camera" autoPlay muted playsInline />
-      <input ref={fileInputRef} className="photo-upload" type="file" accept="image/*" tabIndex={-1} disabled={photoProcessing} onChange={(event) => void uploadPhoto(event)} />
+      <video ref={videoRef} className="live-camera" autoPlay muted playsInline aria-hidden="true" />
+      <input ref={fileInputRef} className="photo-upload" type="file" accept="image/*" tabIndex={-1} aria-hidden="true" disabled={photoProcessing} onChange={(event) => void uploadPhoto(event)} />
       <p className="sr-status" id="photo-gesture-help">Drag to move. Pinch to zoom. Twist to rotate.</p>
 
       {started && (
         <header className="editor-header" aria-hidden={drawerOpen || creatorOpen} inert={drawerOpen || creatorOpen || undefined}>
-          <button className="editor-home" type="button" aria-label="Back to projects" onClick={returnHome}>
-            <ActionIcon name="home" />
+          <button className="editor-home" type="button" aria-label="Back to projects" title="Back to projects" onClick={returnHome}>
+            <Brand compact />
           </button>
           <div className="editor-context">
-            <span>{layout.name}</span>
+            <span>{layout.name} <i> / </i> {pageFormat.id}</span>
             <strong>{activePanelIndex >= 0 ? `Panel ${activePanelIndex + 1} of ${layout.panels.length}` : capturedCount === layout.panels.length ? 'Comic ready' : `${capturedCount} of ${layout.panels.length} photos`}</strong>
           </div>
           <div className="history-toolbar" role="group" aria-label="Editing history">
@@ -2598,6 +2606,10 @@ function App() {
               {draftPhase === 'saving' ? 'Saving' : draftPhase === 'error' ? 'Not saved' : draftPhase === 'none' ? 'Ready' : 'Saved'}
             </span>
           </div>
+          <nav className="editor-tools" aria-label="Studio tools">
+            <button type="button" onClick={() => openDrawer('layout')}><ActionIcon name="layout" />Layout</button>
+            <button type="button" onClick={() => openDrawer('style')}><ActionIcon name="style" />Style</button>
+          </nav>
           <button className="header-export" type="button" aria-label="Open export controls" onClick={() => openDrawer('export')}>
             <ActionIcon name="export" />
             <span>Export</span>
@@ -2606,14 +2618,23 @@ function App() {
       )}
 
       {started && (
+        <div className="workspace-heading" aria-hidden={drawerOpen || creatorOpen} inert={drawerOpen || creatorOpen || undefined}>
+          <div><span className="eyebrow">The studio</span><h1>{settings.caption.trim() || 'Your story, in the making.'}</h1></div>
+          <span className="workspace-format">{pageFormat.label} <b>{pageFormat.id}</b></span>
+        </div>
+      )}
+
+      {started && (
         <div
           id="app-status"
-          className={`editor-notice ${/(blocked|failed|unavailable|not saved|could not)/i.test(status) ? 'is-error' : ''}`}
-          role={/(blocked|failed|unavailable|not saved|could not)/i.test(status) ? 'alert' : 'status'}
-          aria-live={/(blocked|failed|unavailable|not saved|could not)/i.test(status) ? 'assertive' : 'polite'}
+          inert={drawerOpen || creatorOpen || undefined}
+          className={`editor-notice ${/(failed|not saved|could not)/i.test(status) ? 'is-error' : ''}`}
+          role={/(failed|not saved|could not)/i.test(status) ? 'alert' : 'status'}
+          aria-live={/(failed|not saved|could not)/i.test(status) ? 'assertive' : 'polite'}
         >
-          <i />
+          <i aria-hidden="true" />
           <span>{status}</span>
+          {/camera.+(unavailable|blocked)/i.test(status) && !stream && <button type="button" onClick={() => void startCamera()}>Try camera</button>}
         </div>
       )}
 
@@ -2711,6 +2732,26 @@ function App() {
         </div>
       </section>
 
+      {started && (
+        <aside className="studio-inspector" aria-label="Your comic panels" inert={drawerOpen || creatorOpen || undefined}>
+          <div className="inspector-heading"><span className="eyebrow">Your comic</span><h2>One moment<br /><em>at a time.</em></h2></div>
+          <div className="inspector-progress"><span>Panels</span><span>{capturedCount} / {layout.panels.length}</span></div>
+          <nav className="panel-list" aria-label="Panel navigation">
+            {layout.panels.map((panel, index) => <button key={panel.id} type="button" aria-label={`Go to panel ${index + 1}`} aria-pressed={activePanelId === panel.id} onClick={() => selectPanel(panel.id)}>
+              <span className="panel-list-number">{String(index + 1).padStart(2, '0')}</span>
+              <span className="panel-list-thumb">{shots[panel.id] ? <img src={shots[panel.id].dataUrl} alt="" /> : <ActionIcon name="plus" />}</span>
+              <span className="panel-list-copy"><strong>Panel {index + 1}</strong><span>{shots[panel.id] ? 'Photo added' : activePanelId === panel.id ? 'Ready for a photo' : 'An open possibility'}</span></span>
+              {shots[panel.id] && <ActionIcon name="check" />}
+            </button>)}
+          </nav>
+          <div className="inspector-note">
+            <ActionIcon name={capturedCount === layout.panels.length ? 'check' : 'camera'} />
+            <div><strong>{capturedCount === layout.panels.length ? 'A story worth sharing.' : 'Start with what’s in front of you.'}</strong><p>{capturedCount === layout.panels.length ? 'Fine-tune your photos, add a caption, or export your comic.' : 'Select a panel, then take a photo or add one from your library.'}</p></div>
+          </div>
+          <button className="inspector-style" type="button" onClick={() => openDrawer('style')}>Give it your signature style <ActionIcon name="arrow" /></button>
+        </aside>
+      )}
+
       <AnimatePresence>
         {showPhotoActions && selectedShot && activePanelId && (
           <PhotoActionTray
@@ -2765,11 +2806,15 @@ function App() {
             onClick={capturePanel}
             aria-label={activePanelIndex >= 0 ? `Capture panel ${activePanelIndex + 1}` : 'All panels captured'}
           >
-            <span />
+            <span>{photoProcessing && <i className="loading-ring" />}</span>
           </button>
-          <button className="round-action capture-tool" type="button" onClick={() => openDrawer()} aria-label="Controls">
-            <ActionIcon name="controls" />
-            <span>Edit</span>
+          <button className="round-action capture-tool" type="button" onClick={() => openDrawer('layout')} aria-label="Controls" title="Layout and canvas">
+            <ActionIcon name="layout" />
+            <span>Layout</span>
+          </button>
+          <button className="round-action capture-tool" type="button" onClick={() => openDrawer('style')} aria-label="Open appearance controls">
+            <ActionIcon name="style" />
+            <span>Style</span>
           </button>
         </div>
       </nav>
@@ -2915,70 +2960,6 @@ function LiveVideo({ stream, panel, fit }: { stream: MediaStream; panel: Panel; 
   return <video ref={ref} className="live-frame" style={photoFrameStyle(panel, fit)} autoPlay muted playsInline aria-hidden="true" />
 }
 
-type ToolIconName = 'undo' | 'redo' | 'replace' | 'fit' | 'reset' | 'remove'
-
-function ToolIcon({ name }: { name: ToolIconName }) {
-  if (name === 'undo' || name === 'redo') {
-    return (
-      <svg className={name === 'redo' ? 'is-mirrored' : ''} viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M9 7 4.5 11 9 15" />
-        <path d="M5 11h7.5a6 6 0 0 1 6 6" />
-      </svg>
-    )
-  }
-
-  if (name === 'replace') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="3.5" y="4.5" width="13" height="13" rx="2" />
-        <path d="m5.5 15 3.5-4 2.5 2.5 2-2 3 3" />
-        <path d="M15 7h5.5m0 0L18 4.5M20.5 7 18 9.5" />
-      </svg>
-    )
-  }
-
-  if (name === 'fit') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5" />
-        <rect x="8" y="8" width="8" height="8" rx="1" />
-      </svg>
-    )
-  }
-
-  if (name === 'reset') {
-    return (
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M6.4 7.2A7 7 0 1 1 5 14" />
-        <path d="M6.5 3.5v4.3h4.3" />
-      </svg>
-    )
-  }
-
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M5 7h14M9 7V4.5h6V7m-8 0 .8 12h8.4L17 7M10 10v6M14 10v6" />
-    </svg>
-  )
-}
-
-type ActionIconName = 'home' | 'export' | 'flip' | 'photo' | 'controls' | 'image' | 'share' | 'video' | 'install'
-
-function ActionIcon({ name }: { name: ActionIconName }) {
-  const paths: Record<ActionIconName, React.ReactNode> = {
-    home: <><path d="m4 11 8-7 8 7" /><path d="M6.5 10v10h11V10" /><path d="M10 20v-6h4v6" /></>,
-    export: <><path d="M12 3v12" /><path d="m7.5 7.5 4.5-4.5 4.5 4.5" /><path d="M5 13v6h14v-6" /></>,
-    flip: <><path d="M4.5 8.5A8 8 0 0 1 18 6" /><path d="M18 3v3.5h-3.5" /><path d="M19.5 15.5A8 8 0 0 1 6 18" /><path d="M6 21v-3.5h3.5" /></>,
-    photo: <><rect x="3" y="4" width="18" height="16" rx="3" /><circle cx="8" cy="9" r="1.5" /><path d="m4 17 4.7-4.6 3.3 3 2.4-2.2L20 18" /></>,
-    controls: <><path d="M4 7h10" /><path d="M18 7h2" /><circle cx="16" cy="7" r="2" /><path d="M4 17h2" /><path d="M10 17h10" /><circle cx="8" cy="17" r="2" /></>,
-    image: <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="m4 17 5-5 3.5 3.5 2-2L20 19" /><circle cx="16.5" cy="8.5" r="1.5" /></>,
-    share: <><path d="M12 4v11" /><path d="m8 8 4-4 4 4" /><path d="M5 13v6h14v-6" /></>,
-    video: <><rect x="3" y="5" width="14" height="14" rx="3" /><path d="m17 10 4-2v8l-4-2" /><path d="m9 9 4 3-4 3Z" /></>,
-    install: <><rect x="6" y="3" width="12" height="18" rx="3" /><path d="M10 17h4" /><path d="M12 7v6" /><path d="m9.5 10.5 2.5 2.5 2.5-2.5" /></>,
-  }
-  return <svg className="action-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>
-}
-
 function PhotoActionTray({
   panelNumber,
   shot,
@@ -3020,7 +3001,7 @@ function PhotoActionTray({
         <div>
           <strong>{`Panel ${panelNumber}`}</strong>
           <span>{`${Math.round(shot.scale * 100)}% · ${formatRotation(shot.rotation)}`}</span>
-          <em>Drag to move · pinch to zoom</em>
+          <em>Drag · pinch · rotate</em>
         </div>
         <span className="photo-action-summary-actions">
           <button type="button" className="photo-action-controls" aria-label="Open comic controls" onClick={onOpenControls}>
@@ -3047,7 +3028,7 @@ function PhotoActionTray({
         </button>
         <button type="button" aria-label={`Reset panel ${panelNumber} photo`} disabled={transformIsDefault} onClick={onReset}>
           <ToolIcon name="reset" />
-          <span>Reset position</span>
+          <span>Reset</span>
         </button>
         <button className="is-danger" type="button" aria-label={`Remove panel ${panelNumber} photo`} onClick={onRemove}>
           <ToolIcon name="remove" />
@@ -3180,18 +3161,9 @@ function Drawer({
         }}
       >
         <div className="drawer-heading">
-          <button
-            className="drawer-grabber"
-            type="button"
-            onPointerDown={(event) => dragControls.start(event)}
-            onClick={() => (open ? onClose() : onOpen())}
-            aria-label={open ? 'Close controls' : 'Open controls'}
-          >
-            <span />
-          </button>
-          <div>
-            <span>Edit comic</span>
-            <strong>{tabTitle}</strong>
+          <div onPointerDown={(event) => dragControls.start(event)}>
+            <span className="eyebrow">Make it yours</span>
+            <h2>{tabTitle}</h2>
           </div>
           <button className="drawer-close" type="button" aria-label="Done editing comic" onClick={onClose}>
             Done
@@ -3215,7 +3187,7 @@ function Drawer({
             </button>
           ))}
         </div>
-        <AnimatePresence mode="wait">
+        {/* Keep one active tab panel in the DOM during navigation. */}
           <motion.div
             key={tab}
             id={`drawer-panel-${tab}`}
@@ -3224,13 +3196,11 @@ function Drawer({
             aria-labelledby={`drawer-tab-${tab}`}
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
             transition={{ duration: 0.16 }}
           >
             {children}
           </motion.div>
-        </AnimatePresence>
-        {open && <p className="drawer-feedback" role="status">{status}</p>}
+        {open && !/camera|panel.+live/i.test(status) && <p className={`drawer-feedback ${/(failed|not saved|could not|not applied|not deleted)/i.test(status) ? 'is-error' : ''}`} role="status">{status}</p>}
       </motion.aside>
     </>
   )
@@ -3266,7 +3236,7 @@ function LayoutPanel({
         <div className="canvas-format-heading">
           <div>
             <strong id="canvas-format-heading">Canvas format</strong>
-            <span>Changes the final image dimensions</span>
+            <span>The shape of your finished comic</span>
           </div>
           <em>{`${pageFormat.id} · ${pageFormat.label}`}</em>
         </div>
@@ -3287,15 +3257,6 @@ function LayoutPanel({
         </div>
       </section>
 
-      {!layout.custom && <div className="current-layout-card" aria-label={`Current layout ${layout.name}`}>
-        <LayoutPreview layout={layout} />
-        <div>
-          <span>Current grid</span>
-          <strong>{layout.name}</strong>
-          <em>{`${layout.panels.length} panel${layout.panels.length === 1 ? '' : 's'}`}</em>
-        </div>
-      </div>}
-
       <section className="layout-section" aria-labelledby="saved-grid-heading">
         <div className="layout-section-heading">
           <strong id="saved-grid-heading">Your grids</strong>
@@ -3304,7 +3265,7 @@ function LayoutPanel({
         <div className="layout-gallery saved-layout-gallery">
           <button className="layout-card create-card" type="button" onClick={onCreate}>
             <span className="layout-preview create-preview" aria-hidden="true">
-              <span>+</span>
+              <ActionIcon name="plus" />
             </span>
             <span className="layout-card-copy">
               <strong>New grid</strong>
@@ -3390,7 +3351,7 @@ function LayoutCard({
           aria-label={`Delete ${option.name} layout`}
           onClick={() => setConfirmingDelete(true)}
         >
-          <span aria-hidden="true">×</span>
+          <ToolIcon name="remove" />
         </button>
       )}
       {option.custom && onDelete && confirmingDelete && (
@@ -3411,17 +3372,17 @@ function LayoutCard({
   )
 }
 
-function LayoutPreview({ layout }: { layout: Layout }) {
+function LayoutPreview({ layout, specimen = false }: { layout: Layout; specimen?: boolean }) {
   const dividerWidth = layout.custom ? (layout.dividerThickness ?? 9) / 4 : 2.25
   const borderWidth = layoutBorderThickness(layout) ?? 0.8
-  const borderColor = layoutBorderColor(layout) ?? '#d6d3d1'
+  const borderColor = layoutBorderColor(layout) ?? '#939787'
   const panelStrokeWidth = layout.custom ? borderWidth : 0.8
   const previewStyle = {
     '--layout-preview-border': borderColor,
   } as React.CSSProperties
 
   return (
-    <span className="layout-preview" aria-hidden="true" data-layout-preview={layout.id} style={previewStyle}>
+    <span className={`layout-preview ${specimen ? 'is-specimen' : ''}`} aria-hidden="true" data-layout-preview={layout.id} style={previewStyle}>
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" focusable="false">
         <rect className="layout-preview-paper" x="0" y="0" width="100" height="100" />
         {layout.panels.map((panel) =>
@@ -3448,6 +3409,10 @@ function LayoutPreview({ layout }: { layout: Layout }) {
             />
           ),
         )}
+        {specimen && layout.panels.map((panel, index) => {
+          const center = panelCentroid(panel)
+          return <text key={`number-${panel.id}`} className="specimen-number" x={center.x * 100} y={center.y * 100} textAnchor="middle" dominantBaseline="middle">{String(index + 1).padStart(2, '0')}</text>
+        })}
         {layout.dividers?.map((divider, index) => {
           const paint = cutPaintSpan(divider, 1, divider.extent === 'canvas')
           return (
@@ -3953,7 +3918,7 @@ function CreatorPanel({
     >
       <div className="creator-topbar">
         <button type="button" onClick={onCancel} aria-label="Close creator">
-          Close
+          <ActionIcon name="close" /><span>Close</span>
         </button>
         <div className="creator-title">
           <strong>{editing ? 'Edit grid' : 'Create grid'}</strong>
@@ -4282,8 +4247,8 @@ function CreatorPanel({
               aria-hidden={toolTab !== 'borders'}
             >
               <div className="creator-control-heading">
-                <strong id="grid-appearance-heading">Space, not strokes</strong>
-                <span>Clean separation. Outlines only if you want them.</span>
+                <strong id="grid-appearance-heading">Give each moment room</strong>
+                <span>Adjust the space between your panels.</span>
               </div>
               <div className="creator-precision-group">
                 <RangeField
@@ -4507,78 +4472,6 @@ function StylePanel({
   )
 }
 
-function SettingsSection({
-  title,
-  description,
-  children,
-}: {
-  title: string
-  description: string
-  children: React.ReactNode
-}) {
-  return (
-    <section className="settings-section">
-      <div className="settings-section-heading">
-        <strong>{title}</strong>
-        <span>{description}</span>
-      </div>
-      <div className="settings-section-body">{children}</div>
-    </section>
-  )
-}
-
-function RangeField({
-  label,
-  value,
-  min,
-  max,
-  step = 1,
-  unit,
-  ariaLabel,
-  onChange,
-}: {
-  label: string
-  value: number
-  min: number
-  max: number
-  step?: number
-  unit: string
-  ariaLabel?: string
-  onChange: (value: number) => void
-}) {
-  return (
-    <label className="range-field">
-      <span>
-        <strong>{label}</strong>
-        <output aria-hidden="true">{`${step < 1 ? value.toFixed(1) : value}${unit}`}</output>
-      </span>
-      <input
-        aria-label={ariaLabel ?? label}
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        aria-valuetext={`${value}${unit}`}
-        style={{ '--range-progress': `${((value - min) / (max - min)) * 100}%` } as React.CSSProperties}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-    </label>
-  )
-}
-
-function ColorField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="color-field">
-      <span>{label}</span>
-      <span className="color-field-control">
-        <input aria-label={label} type="color" value={value} onChange={(event) => onChange(event.target.value)} />
-        <output aria-hidden="true">{value.toUpperCase()}</output>
-      </span>
-    </label>
-  )
-}
-
 function ExportPanel({
   settings,
   capturedCount,
@@ -4626,10 +4519,11 @@ function ExportPanel({
         <div className="export-card-heading">
           <span className="export-card-icon" aria-hidden="true"><ActionIcon name="image" /></span>
           <div>
-            <strong>Shareable image</strong>
+            <strong>The finished comic</strong>
             <span>{`${exportWidth} × ${exportHeight} PNG`}</span>
           </div>
         </div>
+        <p className="export-intro">Made by you. Ready for the world.</p>
         {isIncomplete && (
           <div className="export-warning" role="status">
             <strong>{`${panelCount - capturedCount} panel${panelCount - capturedCount === 1 ? '' : 's'} still empty`}</strong>
@@ -4652,7 +4546,7 @@ function ExportPanel({
             Share PNG
           </button>
         </div>
-        <p>Download saves directly. Share opens your device share menu.</p>
+        <p>Full resolution. No watermark. Yours to keep.</p>
       </section>
 
       <section className="export-card video-settings">
@@ -4689,7 +4583,7 @@ function ExportPanel({
             <div className="video-ready-actions">
               <button type="button" onClick={() => onDownloadVideo(readyVideo)}>Download video</button>
               <button type="button" onClick={() => void onShareVideo(readyVideo)}>Share video</button>
-              <button type="button" aria-label="Dismiss video ready" onClick={onDismissVideo}>×</button>
+              <button type="button" aria-label="Dismiss video ready" onClick={onDismissVideo}><ActionIcon name="close" /></button>
             </div>
           </div>
         ) : (
@@ -4723,7 +4617,7 @@ function InstallNudge({
           <strong>Install for faster access</strong>
           <em>Optional · the browser editor works too</em>
         </span>
-        <i aria-hidden="true">›</i>
+        <i aria-hidden="true"><ActionIcon name="arrow" /></i>
       </summary>
       <div className="install-nudge-body">
         <p>Keep Instacomic on your Home Screen for a full-screen, app-like editor.</p>

@@ -1,0 +1,142 @@
+/* Artwork geometry is isolated from the surrounding product interface.
+   These dimensions also feed pointer mapping, PNG and story-video rendering. */
+.comic-stage {
+  position: absolute;
+  inset: 158px max(18px, env(safe-area-inset-right)) max(166px, calc(env(safe-area-inset-bottom) + 154px)) max(18px, env(safe-area-inset-left));
+  display: grid;
+  place-items: center;
+  grid-template-rows: minmax(0, 1fr);
+  container-type: size;
+}
+
+.live-strip {
+  position: relative;
+  width: min(100cqw, 640px, calc(100cqh * var(--page-width) / var(--page-height)));
+  height: auto;
+  aspect-ratio: var(--page-width) / var(--page-height);
+  align-self: center;
+  justify-self: center;
+  padding: var(--gutter);
+  border: var(--border) solid var(--ink);
+  border-radius: 5px;
+  background: var(--paper);
+  box-shadow: var(--ui-shadow-paper);
+  overflow: visible;
+  touch-action: none;
+}
+
+.live-strip.is-custom { border-radius: 0; }
+.live-strip.is-custom::after {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--border));
+  z-index: 7;
+  border: var(--border) solid var(--ink);
+  pointer-events: none;
+}
+
+.live-panel {
+  position: absolute;
+  overflow: hidden;
+  padding: 0;
+  border: var(--border) solid var(--ink);
+  border-radius: var(--radius);
+  background: #f2f2f7;
+  touch-action: none;
+  pointer-events: auto;
+  transition: box-shadow var(--ui-fast) var(--ui-ease);
+}
+.live-panel.is-live { z-index: 2; box-shadow: inset 0 0 0 2px var(--ui-primary); }
+.live-panel:focus-visible { outline-offset: -4px; }
+.live-panel img {
+  position: absolute;
+  display: block;
+  max-width: none;
+  max-height: none;
+  object-fit: fill;
+  will-change: left, top, width, height, transform;
+  pointer-events: none;
+}
+.live-frame { position: absolute; z-index: 2; object-fit: cover; pointer-events: none; }
+.live-divider-clip { position: absolute; inset: 0; overflow: hidden; z-index: 3; pointer-events: none; }
+.live-divider-gap { position: absolute; z-index: 3; transform-origin: 0 50%; pointer-events: none; }
+.live-divider-gap::before,
+.live-divider-gap::after { content: ''; position: absolute; left: 0; top: 50%; width: 100%; transform: translateY(-50%); }
+.live-divider-gap::before { height: calc(var(--gutter) + var(--border) * 2); background: var(--ink); }
+.live-divider-gap.is-unoutlined::before { display: none; }
+.live-divider-gap::after { height: var(--gutter); background: var(--paper); }
+
+.panel-placeholder {
+  position: absolute;
+  top: var(--chip-y);
+  left: var(--chip-x);
+  width: max-content;
+  max-width: 90%;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 6px;
+  color: #71736c;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.panel-placeholder b { font-family: var(--font-editorial); font-size: clamp(20px, 5cqw, 34px); line-height: 1; font-weight: 400; color: #8a8b83; }
+.panel-placeholder em { font-size: 12px; font-style: normal; line-height: 1.4; }
+.live-panel.is-live .panel-placeholder { color: var(--ui-primary); }
+.live-panel.is-live .panel-placeholder b { color: var(--ui-primary); }
+.panel-chip { position: absolute; z-index: 4; top: var(--chip-y); left: var(--chip-x); transform: translate(-50%, -50%); padding: 5px 8px; border-radius: 4px; color: #fff; background: var(--ui-primary); font-size: 12px; }
+.strip-caption { position: absolute; right: var(--gutter); bottom: var(--gutter); left: var(--gutter); z-index: 10; min-height: 40px; display: grid; place-items: center; padding: 8px 12px; border: var(--border) solid var(--ink); border-radius: var(--radius); background: #fff; font-size: clamp(14px, 3.4vw, 20px); font-weight: 650; line-height: 1.1; overflow-wrap: anywhere; }
+.rotation-snap-cue { position: absolute; z-index: 64; display: grid; justify-items: center; pointer-events: none; transform: translate(-50%, -50%); }
+.rotation-snap-cue span { min-width: 58px; padding: 7px 10px; border: 1px solid #fff8; border-radius: 4px; color: #fff; background: var(--ui-primary); font-size: 13px; text-align: center; }
+.rotation-snap-cue i { width: 1px; height: 44px; background: #fff; }
+
+/* Template diagrams retain the same panel and divider mapping as the editor. */
+.layout-preview { display: block; width: 100%; aspect-ratio: 1; overflow: hidden; border: 1px solid var(--ui-separator); border-radius: 2px; background: #fff; }
+.layout-preview svg { display: block; width: 100%; height: 100%; overflow: hidden; }
+.layout-preview-paper { fill: #fff; }
+.layout-preview-panel { fill: #e5e2d9; stroke: var(--layout-preview-border, #d6d3d1); stroke-linejoin: round; }
+.layout-preview-divider { stroke: #fff; stroke-linecap: butt; }
+.layout-preview-divider-border,
+.layout-preview-outline { stroke: var(--layout-preview-border, #d6d3d1); stroke-linejoin: round; stroke-linecap: butt; }
+.is-specimen .layout-preview-panel { fill: #d5d2c5; }
+.is-specimen .layout-preview-panel:nth-child(3n) { fill: #b7b9a8; }
+.is-specimen .layout-preview-panel:nth-child(4n) { fill: #c9b4a2; }
+.is-specimen .layout-preview-panel:nth-child(5n) { fill: #e3dacc; }
+.specimen-number { fill: #59594f; font-size: 5px; font-family: var(--font-editorial); }
+
+/* Grid creation: painting, line hit areas, and end handles are separate layers. */
+.creator-canvas-zone { min-height: 0; min-width: 0; display: grid; place-items: center; container-type: size; margin: 24px 28px; }
+.creator-canvas {
+  position: relative;
+  width: min(100cqw, 640px, calc(100cqh * var(--creator-page-width) / var(--creator-page-height)));
+  aspect-ratio: var(--creator-page-width) / var(--creator-page-height);
+  align-self: center;
+  justify-self: center;
+  border: var(--creator-border-thickness) solid var(--creator-border-color);
+  background: var(--creator-paper, #fff);
+  box-shadow: var(--ui-shadow-paper);
+  overflow: visible;
+  touch-action: none;
+}
+.creator-panel { position: absolute; z-index: 1; clip-path: inherit; border: 0; background: #edf0f4; pointer-events: none; }
+.creator-panel img { position: absolute; max-width: none; max-height: none; pointer-events: none; user-select: none; }
+.creator-panel-number { display: none; }
+.creator-line-hit { position: absolute; z-index: 5; height: 44px; padding: 0; border: 0; border-radius: 0; background: transparent; transform-origin: 0 50%; touch-action: none; cursor: move; }
+.creator-line-hit:focus-visible { outline-offset: -12px; }
+.creator-cut-clip { position: absolute; inset: 0; overflow: hidden; z-index: 4; pointer-events: none; }
+.creator-free-line { position: absolute; z-index: 4; height: 44px; transform-origin: 0 50%; pointer-events: none; }
+.creator-free-line::before,
+.creator-free-line::after { content: ''; position: absolute; top: 50%; right: 0; left: 0; transform: translateY(-50%); }
+.creator-free-line::before { height: calc(var(--creator-divider-thickness) + var(--creator-border-thickness) * 2); background: var(--creator-border-color); }
+.creator-stack[data-border-thickness='0'] .creator-free-line::before { display: none; }
+.creator-free-line::after { height: var(--creator-divider-thickness); background: var(--creator-paper, #fff); }
+.creator-cut-guide { position: absolute; top: 50%; left: 0; right: 0; z-index: 1; height: 1px; background: #8e958b; transform: translateY(-50%); }
+.creator-free-line.is-selected .creator-cut-guide { background: var(--ui-primary); height: 1.5px; }
+.creator-handle { position: absolute; z-index: 7; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 0; background: transparent; transform: translate(-50%, -50%); touch-action: none; cursor: grab; }
+.creator-handle::after { content: ''; position: absolute; inset: 17px; border: 1.5px solid #fff; border-radius: 2px; background: #828b7d; opacity: 0; transition: opacity var(--ui-fast), transform var(--ui-fast); }
+.creator-handle.is-selected::after { background: var(--ui-primary); opacity: 1; }
+.creator-handle.is-active::after { transform: scale(1.25); }
+.creator-handle.is-active { cursor: grabbing; }
+.creator-canvas.is-previewing .creator-handle,
+.creator-canvas.is-previewing .creator-line-hit,
+.creator-canvas.is-previewing .creator-cut-guide { visibility: hidden; }
