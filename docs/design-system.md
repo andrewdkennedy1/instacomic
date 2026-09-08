@@ -8,7 +8,7 @@ The studio uses an editorial type hierarchy, warm ivory controls, a charcoal art
 - **Studio:** desktop offers direct Layout and Style access plus a panel navigator. Mobile uses a five-action capture dock. Selecting a photo replaces that dock with its editing tools without resizing the artwork.
 - **Controls:** one modal sheet for Layout, Slides and Export. Layout offers 27 choices in four columns; Layout and Slides reserve space below the canvas in a compact bottom drawer. Built-in templates also have a Style tab; custom grids open their Style controls inside the grid editor. Desktop anchors it beside the artwork; mobile uses a bottom sheet. Sections use spacing and separators instead of nested cards. Done, Escape, the backdrop, and dragging the title area dismiss the sheet.
 - **Grid creator:** a full canvas and seven compact tool pages. Phone, tablet and desktop reserve the same 224px bottom drawer with swipe navigation; short landscape places that compact drawer beside the artwork. Each page fits without vertical scrolling and switching tools leaves the preview fixed. Small endpoint cues retain 44px hit targets and disappear in Preview.
-- **Export:** completeness information precedes the image actions. Story-video settings and progress follow as a separate section. Existing explicit download and share behavior remains intact.
+- **Export:** a compact preview strip confirms every slide in order. Prepare images before the final Share tap, then pass all image files to one native share sheet. Show cancellation and failures without implying Photos saved the images. There are no ZIP, file-download, or animated-video controls. Unsupported browsers retain full-resolution images for individual sharing or saving.
 
 ## Source ownership
 
@@ -34,7 +34,7 @@ Photo drags capture the pointer so releasing outside the canvas or browser still
 
 ## Validation
 
-Run the existing camera, photo, save/recovery, editing, grid, geometry, video, install and responsive smoke scripts. `scripts/studio-smoke.mjs` adds desktop panel navigation, direct Style/Layout access, modal focus restoration, mobile controls and setup breakpoints. Visual review covers setup, populated capture, contextual photo tools, layout library, appearance, export and custom-grid editing at mobile and desktop sizes.
+Run the existing camera, photo, save/recovery, editing, grid, geometry, native sharing, install and responsive smoke scripts. `scripts/studio-smoke.mjs` adds desktop panel navigation, direct Style/Layout access, modal focus restoration, mobile controls and setup breakpoints. Visual review covers setup, populated capture, contextual photo tools, layout library, appearance, export and custom-grid editing at mobile and desktop sizes.
 
 When extending the UI, reuse the semantic tokens and shared fields, preserve the canvas geometry tests, and review a rendered narrow and wide viewport before shipping. Do not add another global CSS override layer.
 
@@ -46,6 +46,12 @@ Custom grids store their paper, corner, caption and fit settings with the saved 
 
 IndexedDB version 2 adds a project library alongside the current-draft pointer. Project saves and their photo references commit atomically. Photos use immutable IDs and are written once as ArrayBuffers; older Blob assets still load. Cleanup retains the union of photos referenced by the library and current draft. Existing drafts migrate before a new project can replace the current pointer.
 
-Each project stores an ordered collection of up to 20 slides. Slides preserve their layout, photos and transforms, caption, and colors; the format applies to the whole carousel. The same snapshot history supports slide creation, duplication, ordering, removal and panorama creation. The panorama tool appends 2–5 cropped slides after the source without deleting it. ZIP exports contain numbered PNGs in visible slide order.
+Each project stores an ordered collection of up to 20 slides. Slides preserve their layout, photos and transforms, caption, and colors; the format applies to the whole carousel. The same snapshot history supports slide creation, duplication, ordering, removal and panorama creation. The panorama tool appends 2–5 cropped slides after the source without deleting it. Native sharing includes numbered PNG files in visible slide order, regardless of the active slide.
 
-`scripts/blank-grid-smoke.mjs` checks blank startup, the grid catalog, and preview visibility across five viewport sizes. `scripts/carousel-smoke.mjs` checks the library, durable photos in Chromium and WebKit, slide operations, panorama export pixels, ZIP ordering and independent project deletion. `scripts/project-migration-smoke.mjs` verifies version 1 Blob drafts survive migration and starting another project.
+`scripts/blank-grid-smoke.mjs` checks blank startup, the grid catalog, and preview visibility across five viewport sizes. `scripts/carousel-smoke.mjs` checks the library, durable photos in Chromium and WebKit, slide operations, panorama export pixels, shared-file ordering and independent project deletion. `scripts/project-migration-smoke.mjs` verifies version 1 Blob drafts survive migration and starting another project.
+
+## Direct grid adjustment
+
+Adjust grid keeps photos visible above a small Reset / Snap to center / Done dock. Rectangular templates move shared edges together to preserve adjoining cells and photo IDs; custom divider grids use the same small adjustment dock. Snapping uses a visible center cue and feature-detected vibration, with no promised haptics on iPhone Safari. Appearance presets have been removed; named manual settings remain.
+
+Custom grid adjustments match each polygon to its original divider sides, preserving photo IDs when centroid sorting would change. The canvas editor reuses this mapping when the same regions remain, and reopening it uses the active slide geometry. The adjustment smoke checks include diagonal corner movement, style editing afterward, and Undo recovery.

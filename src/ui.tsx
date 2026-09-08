@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 
-export type IconName = 'home' | 'export' | 'flip' | 'photo' | 'controls' | 'image' | 'share' | 'video' | 'install' | 'layout' | 'style' | 'arrow' | 'check' | 'close' | 'camera' | 'plus'
+export type IconName = 'home' | 'export' | 'flip' | 'photo' | 'controls' | 'image' | 'share' | 'install' | 'layout' | 'style' | 'arrow' | 'check' | 'close' | 'camera' | 'plus'
 
 /** A single, 24px line-icon family for the entire studio. */
 export function ActionIcon({ name }: { name: IconName }) {
@@ -12,7 +12,6 @@ export function ActionIcon({ name }: { name: IconName }) {
     controls: <><path d="M4 7h10m4 0h2M4 17h2m4 0h10" /><circle cx="16" cy="7" r="2" /><circle cx="8" cy="17" r="2" /></>,
     image: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="m4 17 5-5 3.5 3.5 2-2L20 19" /><circle cx="16.5" cy="8.5" r="1.5" /></>,
     share: <><path d="M12 4v11m-4-7 4-4 4 4M5 13v6h14v-6" /></>,
-    video: <><rect x="3" y="5" width="14" height="14" rx="2" /><path d="m17 10 4-2v8l-4-2M9 9l4 3-4 3Z" /></>,
     install: <><rect x="6" y="3" width="12" height="18" rx="2" /><path d="M10 17h4M12 7v6m-2.5-2.5L12 13l2.5-2.5" /></>,
     layout: <><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 12h18M12 12v9" /></>,
     style: <><path d="m5 16 11-11a2.1 2.1 0 0 1 3 3L8 19H5v-3ZM13.5 7.5l3 3M4 22h16" /></>,

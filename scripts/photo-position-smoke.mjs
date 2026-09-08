@@ -1,5 +1,6 @@
 import { deflateSync } from 'node:zlib'
 import { chromium } from 'playwright'
+import { installNativeShare, sharePreparedPhotos } from './native-share-fixture.mjs'
 
 const crcTable = createCrcTable()
 const baseUrl = process.env.SMOKE_BASE_URL ?? 'http://127.0.0.1:4174'
@@ -13,20 +14,12 @@ const page = await browser.newPage({
 const errors = []
 page.on('pageerror', (error) => errors.push(error.message))
 
+await installNativeShare(page)
 await page.addInitScript(() => {
   Object.defineProperty(navigator, 'standalone', {
     configurable: true,
     get: () => true,
   })
-
-  window.__instacomicDownloads = []
-  const originalClick = HTMLAnchorElement.prototype.click
-  HTMLAnchorElement.prototype.click = function click() {
-    if (this.download) {
-      window.__instacomicDownloads.push(this.href)
-    }
-    return originalClick.call(this)
-  }
 })
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
@@ -171,18 +164,10 @@ async function sharedPngPixel(page, point) {
   await page.waitForTimeout(220)
   await openDrawer(page)
   await page.getByRole('tab', { name: 'Export', exact: true }).tap()
-  const downloadPng = page.getByRole('button', { name: 'Download PNG', exact: true })
-  await downloadPng.waitFor({ state: 'visible' })
-  const downloadIndex = await page.evaluate(() => window.__instacomicDownloads.length)
-  const [download] = await Promise.all([
-    page.waitForEvent('download'),
-    downloadPng.evaluate((button) => button.click()),
-  ])
-  await page.waitForFunction((count) => window.__instacomicDownloads.length > count, downloadIndex)
+  const [shared] = await sharePreparedPhotos(page)
   const pixel = await page.evaluate(
-    async ({ downloadIndex, point }) => {
-      const href = window.__instacomicDownloads[downloadIndex]
-      const blob = await fetch(href).then((response) => response.blob())
+    async ({ png, point }) => {
+      const blob = await fetch(`data:image/png;base64,${png}`).then(response => response.blob())
       const bitmap = await createImageBitmap(blob)
       const canvas = document.createElement('canvas')
       canvas.width = bitmap.width
@@ -203,9 +188,8 @@ async function sharedPngPixel(page, point) {
         height: canvas.height,
       }
     },
-    { downloadIndex, point },
+    { png: shared.png, point },
   )
-  await download.delete().catch(() => {})
   await closeDrawer(page)
   return pixel
 }

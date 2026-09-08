@@ -4,7 +4,7 @@
   <img src="public/icons/icon-192.png" width="96" height="96" alt="Instacomic app icon">
 </p>
 
-<h3 align="center">A photo and carousel studio with blank canvases, custom grids, saved projects, and story video.</h3>
+<h3 align="center">A photo and carousel studio with blank canvases, custom grids, saved projects, and photo sharing.</h3>
 
 <p align="center">
   <a href="https://instacomic.catcafe.space">Live app</a>
@@ -32,16 +32,17 @@ Instacomic starts with a blank canvas and a compact grid picker. Add photos, bui
 - An IndexedDB project library saves named projects, photos, slide order, grids, captions and image transforms. Existing single drafts migrate automatically; starting a new project preserves earlier work. Deletion requires confirmation and retains photos still used by other projects.
 - Carousels support up to 20 slides, with live thumbnails, add/duplicate/reorder/remove controls and Undo/Redo. All slides share the selected format.
 - Split a photo across 2–5 consecutive slides for a seamless panorama. The original slide stays available.
-- Export every slide as a numbered, 1440px-wide PNG in one ZIP. Unzip, then select the images in order when creating an Instagram carousel.
+- Share every slide together as numbered, 1440px-wide photo files. Photos are prepared before you tap Share so Safari retains the user gesture needed to open its native share sheet. On iPhone, choose Save Images to save the batch; the website cannot write directly to the Photos library. Individual photo sharing and full-resolution previews are available when a browser cannot share the batch.
 - Projects remain in this browser profile on this device. Clearing site data removes the local library; exported images are independent copies.
 - Custom grids use edge-to-edge cuts with angle and position sliders, continuous dragging and two-finger rotation, optional snapping, and gesture-level Undo/Redo. A compact swipeable dock groups Dividers, Adjust, Style, Border, Photos, Caption, and Details controls without shifting the canvas. Every page fits the same 224px drawer, keeping photos and live changes visible.
 - The grid editor previews stored photos with their existing crop, fit, and rotation, using the same panel mapping and image placement as the main editor. Cancel leaves the original composition untouched.
 - Dividers use a single solid color and width. The outside border has its own toggle and width, using the same line color. Thin editing guides and subtle endpoint cues with 44px touch targets do not appear in exports. Existing saved segments retain their geometry until explicitly extended; saved-grid updates can also be undone from the main editor.
-- A consistent graphite workspace and warm editing sheets carry through setup, capture, grid design, and export. Clean, Paper, and Bold presets provide one-tap appearance starting points.
+- A consistent graphite workspace and warm editing sheets carry through setup, capture, grid design, and export. Appearance controls use explicit colors and widths, without look presets.
 - The grid library renders faithful panel-and-divider previews for both templates and locally saved custom grids.
 - Layout, Appearance, Slides, and Export share an accessible, keyboard-navigable sheet. Layout and Slides use compact bottom drawers with space reserved for the live canvas.
-- Custom canvas styling lives inside the grid editor: line color and width, paper, corners, captions, image fit, and presets. Changes are staged until Save or Update; Cancel leaves the comic unchanged. The separate Style sheet remains available for built-in templates.
-- One Export flow presents image completeness, PNG sharing, video settings, render progress, and explicit Download/Share actions; video rendering never auto-downloads.
+- Custom canvas styling lives inside the grid editor: line color and width, paper, corners, captions, and image fit. Changes are staged until Save or Update; Cancel leaves the comic unchanged. The separate Style sheet remains available for built-in templates.
+- One Export flow prepares all slides in order, shows their previews, and opens native sharing with the complete batch. ZIP downloads, PNG file-download buttons, and animated story-video exports have been removed.
+- Adjust grid opens a fullscreen photo preview with a small control dock. Drag shared dividers, reset changes, or save them with Undo support. Center snapping has a visible guide and uses vibration only on browsers that support it; iPhone Safari has no standard web haptics API.
 - The responsive canvas preserves its exact format on short phones, tablets, desktop, and landscape without rotating the app shell.
 - Installable PWA shell with manifest icons and offline app caching.
 
@@ -78,14 +79,15 @@ npm run smoke:editing
 npm run smoke:save
 npm run smoke:photos
 npm run smoke:camera
-npm run smoke:video
+npm run smoke:share
 npm run smoke:ux
 npm run smoke:grid
+npm run smoke:adjust
 npm run smoke:studio
 node scripts/canvas-style-smoke.mjs
 ```
 
-The smoke checks exercise browser-first setup and optional installation, exact responsive canvas geometry, labelled export flows, contextual photo actions, coalesced Undo/Redo history, simultaneous pinch zoom and snap rotation, background autosave, Home/Continue/New recovery, photo-safe custom-grid saves, accessible modal and tab behavior, keyboard and pointer grid editing, safe custom-grid deletion/discard, live/export border parity, fake-camera capture through the final panel, and explicit story-video download.
+The smoke checks exercise browser-first setup and optional installation, exact responsive canvas geometry, labelled export flows, contextual photo actions, coalesced Undo/Redo history, simultaneous pinch zoom and snap rotation, background autosave, Home/Continue/New recovery, photo-safe custom-grid saves, accessible modal and tab behavior, keyboard and pointer grid editing, safe custom-grid deletion/discard, live/export border parity, fake-camera capture through the final panel, ordered multi-photo native sharing, and fullscreen divider adjustment.
 
 ## Deploy
 

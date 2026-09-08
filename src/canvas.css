@@ -1,5 +1,5 @@
 /* Artwork geometry is isolated from the surrounding product interface.
-   These dimensions also feed pointer mapping, PNG and story-video rendering. */
+   These dimensions also feed pointer mapping, photo rendering. */
 .comic-stage {
   position: absolute;
   inset: 158px max(18px, env(safe-area-inset-right)) max(166px, calc(env(safe-area-inset-bottom) + 154px)) max(18px, env(safe-area-inset-left));

@@ -1,4 +1,5 @@
 import { chromium } from 'playwright'
+import { installNativeShare, sharePreparedPhotos } from './native-share-fixture.mjs'
 
 const browser = await chromium.launch()
 const baseUrl = process.env.SMOKE_BASE_URL ?? 'http://127.0.0.1:4174'
@@ -12,6 +13,7 @@ const errors = []
 page.on('pageerror', (error) => errors.push(error.message))
 
 try {
+  await installNativeShare(page)
   await page.goto(baseUrl, { waitUntil: 'networkidle' })
   await page.getByRole('button', { name: 'Start creating' }).tap()
   await page.getByRole('button', { name: 'Use Shard layout, 5 panels', exact: true }).click()
@@ -24,7 +26,7 @@ try {
     await page.locator(`[data-panel-id="${panelNumber}"] img`).waitFor()
     if (panelNumber >= 3) {
       await waitForSavedPhotoCount(page, panelNumber)
-      exportChecks.push(await downloadPng(page, panelNumber))
+      exportChecks.push(await sharePng(page, panelNumber))
     }
   }
 
@@ -73,15 +75,15 @@ try {
     exportChecks.every((check, index) => check.expectedPhotos === index + 3 && check.visiblePhotos === index + 3)
       ? null
       : 'saving at three, four, or five photos changed the visible photo count',
-    exportChecks.every((check) => check.downloadBytes > 1000)
+    exportChecks.every((check) => check.sharedBytes > 1000)
       ? null
-      : 'one of the three-, four-, or five-photo PNG downloads was empty',
-    exportChecks.every((check) => check.downloadActionCount === 1 && check.shareActionCount === 1)
+      : 'one of the three-, four-, or five-photo PNG shares was empty',
+    exportChecks.every((check) => check.downloadActionCount === 0 && check.shareActionCount === 1)
       ? null
-      : 'export does not provide distinct Download and Share actions',
+      : 'export must provide one Share action and no Download action',
     exportChecks.every((check) => check.compactActionsFit)
       ? null
-      : 'download and share actions overflow on a compact phone',
+      : 'share action overflows on a compact phone',
     newGridPanelCount === 4 ? null : 'regression setup no longer creates a four-panel grid',
     photosAfterSave === 5 ? null : 'saving a smaller grid removed the latest visible photo',
     layoutAfterSave === 'Shard' ? null : 'the incompatible saved grid replaced the active comic layout',
@@ -116,13 +118,14 @@ async function openLayoutDrawer(page) {
   await page.getByRole('tab', { name: 'Layout', exact: true }).tap()
 }
 
-async function downloadPng(page, expectedPhotos) {
+async function sharePng(page, expectedPhotos) {
   await page.getByRole('button', { name: 'Open export controls' }).tap()
   await page.locator('.motion-drawer.is-open').waitFor()
   await page.getByRole('tab', { name: 'Export', exact: true }).tap()
-  const downloadAction = page.getByRole('button', { name: 'Download PNG', exact: true })
-  const downloadActionCount = await downloadAction.count()
-  const shareActionCount = await page.getByRole('button', { name: 'Share PNG', exact: true }).count()
+  const shareAction = page.getByRole('button', { name: 'Share 1 photo', exact: true })
+  await shareAction.waitFor({ state: 'visible' })
+  const downloadActionCount = await page.getByRole('button', { name: /Download|Export PNG|ZIP/ }).count()
+  const shareActionCount = await shareAction.count()
   let compactActionsFit = true
   if (expectedPhotos === 5) {
     const { mkdirSync } = await import('node:fs')
@@ -130,7 +133,7 @@ async function downloadPng(page, expectedPhotos) {
     await page.screenshot({ path: 'test-results/export-save.png', fullPage: true })
     await page.setViewportSize({ width: 280, height: 568 })
     await page.waitForTimeout(100)
-    compactActionsFit = await page.locator('.export-image-actions').evaluate((actions) => {
+    compactActionsFit = await page.locator('.photo-share-card').evaluate((actions) => {
       const container = actions.getBoundingClientRect()
       return (
         document.documentElement.scrollWidth <= innerWidth + 1 &&
@@ -143,14 +146,12 @@ async function downloadPng(page, expectedPhotos) {
     await page.screenshot({ path: 'test-results/export-save-small.png', fullPage: true })
     await page.setViewportSize({ width: 390, height: 844 })
   }
-  const [download] = await Promise.all([page.waitForEvent('download'), downloadAction.tap()])
-  const path = await download.path()
-  const downloadBytes = path ? (await import('node:fs')).statSync(path).size : 0
-  await download.delete().catch(() => undefined)
+  const [shared] = await sharePreparedPhotos(page)
+  const sharedBytes = shared.size
   const visiblePhotos = await page.locator('.live-panel img').count()
   await page.getByRole('button', { name: 'Done editing comic', exact: true }).tap()
   await page.locator('.motion-drawer.is-open').waitFor({ state: 'detached' })
-  return { expectedPhotos, visiblePhotos, downloadBytes, downloadActionCount, shareActionCount, compactActionsFit }
+  return { expectedPhotos, visiblePhotos, sharedBytes, downloadActionCount, shareActionCount, compactActionsFit }
 }
 
 async function readDraft(page) {
@@ -172,23 +173,10 @@ async function readDraft(page) {
 }
 
 async function waitForSavedPhotoCount(page, expectedCount) {
-  await page.waitForFunction(
-    async (count) => {
-      const record = await new Promise((resolve, reject) => {
-        const request = indexedDB.open('instacomic')
-        request.onerror = () => reject(request.error)
-        request.onsuccess = () => {
-          const database = request.result
-          const transaction = database.transaction('drafts', 'readonly')
-          const get = transaction.objectStore('drafts').get('current')
-          get.onerror = () => reject(get.error)
-          get.onsuccess = () => resolve(get.result ?? null)
-          transaction.oncomplete = () => database.close()
-        }
-      })
-      return record?.document?.shotCache?.filter(Boolean).length === count
-    },
-    expectedCount,
-  )
-  return readDraft(page)
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const record = await readDraft(page)
+    if (record?.document?.shotCache?.filter(Boolean).length === expectedCount) return record
+    await page.waitForTimeout(100)
+  }
+  throw new Error(`Expected ${expectedCount} saved photos`)
 }

@@ -4,6 +4,7 @@ import type { PointerEvent, TouchEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { useContentAspect, useDialogFocus, useDraftHistory } from './editor-hooks'
 import { cutAt, cutControls, cutPaintSpan, extendCut } from './grid-geometry'
+import { rectangularDividers, moveRectDivider, snapGridCenter, type RectDivider } from './rect-grid'
 import {
   clearDraftData,
   listProjects,
@@ -15,7 +16,7 @@ import {
   type DraftAssetRecord,
   type DraftRecord,
 } from './draft-store'
-import { createZip } from './carousel-export'
+import { PhotoExportPanel } from './PhotoExportPanel'
 import './studio.css'
 import { ActionIcon, ToolIcon, Brand, SettingsSection, RangeField, ColorField } from './ui'
 
@@ -64,29 +65,6 @@ type CapturedPhoto = {
   height: number
 }
 
-type LoadedPanelFrame = {
-  panel: Panel
-  shot: Shot | null
-  image: HTMLImageElement | null
-}
-
-type StoryVideoFormat = {
-  mimeType: string
-  extension: 'mp4'
-}
-
-type StoryVideoRenderPhase = 'rendering' | 'finalizing'
-
-type ReadyStoryVideo = {
-  blob: Blob
-  url: string
-  fileName: string
-  mimeType: string
-  extension: StoryVideoFormat['extension']
-  width: number
-  height: number
-}
-
 type Settings = {
   gutters: number
   radius: number
@@ -96,6 +74,7 @@ type Settings = {
   caption: string
   captionColor: string
   fit: PanelFit
+  // Retained so existing saved projects remain compatible after video export removal.
   videoDuration: number
   videoSpeed: number
 }
@@ -699,18 +678,15 @@ function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [drawerTab, setDrawerTab] = useState<DrawerTab>('layout')
   const [status, setStatus] = useState('Tap a panel. Shoot. Repeat.')
-  const [imageExporting, setImageExporting] = useState(false)
+  const [exportRevision, setExportRevision] = useState(0)
   const [photoProcessing, setPhotoProcessing] = useState(false)
-  const [videoRendering, setVideoRendering] = useState(false)
-  const [videoProgress, setVideoProgress] = useState(0)
-  const [videoProgressPhase, setVideoProgressPhase] = useState<StoryVideoRenderPhase>('rendering')
-  const [readyVideo, setReadyVideo] = useState<ReadyStoryVideo | null>(null)
   const [photoDragState, setPhotoDragState] = useState<PhotoDragState | null>(null)
   const [customLayouts, setCustomLayouts] = useState<Layout[]>([])
   const [draftLines, setDraftLines] = useState<CustomLine[]>(() => createDefaultDraftLines())
   const [draftName, setDraftName] = useState('')
   const [draftAppearance, setDraftAppearance] = useState<CanvasAppearance>(() => canvasAppearance(defaultSettings))
   const [creatorStartsWithStyle, setCreatorStartsWithStyle] = useState(false)
+  const [creatorAdjustOnly, setCreatorAdjustOnly] = useState(false)
   const [draftThickness, setDraftThickness] = useState(0)
   const [draftBorderColor, setDraftBorderColor] = useState(DEFAULT_CUSTOM_GRID_BORDER_COLOR)
   const [draftBorderThickness, setDraftBorderThickness] = useState(DEFAULT_CUSTOM_GRID_BORDER_THICKNESS)
@@ -766,11 +742,9 @@ function App() {
   const editorVersionRef = useRef(0)
   const replacePanelIdRef = useRef<string | null>(null)
   const lastSnapAngleRef = useRef<number | null>(null)
-  const readyVideoUrlRef = useRef<string | null>(null)
   const startRequestedRef = useRef(false)
   const photoOperationCountRef = useRef(0)
-  const imageExportingRef = useRef(false)
-  const exportAssetIdsRef = useRef<Set<string>>(new Set())
+  const exportAssetIdsRef = useRef<Map<string, number>>(new Map())
   const dragControls = useDragControls()
 
   const allLayouts = useMemo(() => [...layouts, ...customLayouts], [customLayouts])
@@ -778,7 +752,7 @@ function App() {
   const capturedCount = layout.panels.filter((panel) => shots[panel.id]).length
   const selectedShot = activePanelId ? shots[activePanelId] ?? null : null
   const selectedShotFit = selectedShot?.fit ?? settings.fit
-  const showPhotoActions = !!selectedShot && !photoActionsDeferred && !drawerOpen && !creatorOpen && !videoRendering && !readyVideo
+  const showPhotoActions = !!selectedShot && !photoActionsDeferred && !drawerOpen && !creatorOpen
   const savedDraftPhotoCount = savedDraft ? projectShots(savedDraft.document).filter(Boolean).length : 0
   const pageStyle = {
     '--page-width': pageFormat.width,
@@ -812,6 +786,9 @@ function App() {
   useEffect(() => {
     editorVersionRef.current += 1
   }, [activePanelId, layout, pageFormat.id, settings, shots, carouselVersion, projectName])
+
+  const shareSnapshot = useMemo(() => captureProjectSnapshot(),
+    [layout, settings, shots, pageFormat.id, carouselVersion, projectId, projectName, exportRevision])
 
   function captureProjectSnapshot(): ProjectSnapshot {
     const current: SlideSnapshot = { layout: cloneLayout(layout), pageFormatId: pageFormat.id, settings: { ...settings },
@@ -950,7 +927,7 @@ function App() {
 
   function referencedRuntimeAssetIds() {
     const assetIds = new Set(projectShots(captureProjectSnapshot()).flatMap(shot => shot ? [shot.assetId] : []))
-    exportAssetIdsRef.current.forEach(id => assetIds.add(id))
+    exportAssetIdsRef.current.forEach((_, id) => assetIds.add(id))
     const historyEntries = [
       ...undoStackRef.current,
       ...redoStackRef.current,
@@ -1356,24 +1333,8 @@ function App() {
     }
   }, [stream])
 
-  useEffect(() => {
-    return () => {
-      if (readyVideoUrlRef.current) {
-        URL.revokeObjectURL(readyVideoUrlRef.current)
-      }
-    }
-  }, [])
-
-  function clearReadyVideo() {
-    if (readyVideoUrlRef.current) {
-      URL.revokeObjectURL(readyVideoUrlRef.current)
-      readyVideoUrlRef.current = null
-    }
-    setReadyVideo(null)
-  }
-
   function clearExport() {
-    clearReadyVideo()
+    setExportRevision(value => value + 1)
   }
 
   async function requestAppFullscreen() {
@@ -1555,28 +1516,28 @@ function App() {
     setStatus(`Slide ${index + 1} of ${slides.length}. Undo is available.`)
   }
 
-  async function exportCarousel() {
-    if (carouselExporting || photoProcessing) return
-    setCarouselExporting(true)
-    const snapshot = captureProjectSnapshot()
-    exportAssetIdsRef.current = new Set(projectShots(snapshot).flatMap(shot => shot ? [shot.assetId] : []))
+  async function prepareSharePhotos(snapshot: ProjectSnapshot, onProgress: (completed: number) => void, signal: AbortSignal) {
+    const assetIds = new Set(projectShots(snapshot).flatMap(shot => shot ? [shot.assetId] : []))
+    assetIds.forEach(id => exportAssetIdsRef.current.set(id, (exportAssetIdsRef.current.get(id) ?? 0) + 1))
     try {
-      const files = []
-      for (const [index, slide] of snapshot.carousel!.slides.entries()) {
-        setStatus(`Exporting slide ${index + 1} of ${snapshot.carousel!.slides.length}…`)
-        files.push({ name: `slide-${String(index + 1).padStart(2, '0')}.png`,
-          blob: await renderToPng(slide.layout, shotsForLayout(slide.layout, slide.shotCache.map(shot => shot ?? undefined)), slide.settings, getPageFormat(slide.pageFormatId)) })
+      const files: File[] = []
+      for (const [index, slide] of (snapshot.carousel?.slides ?? [snapshot]).entries()) {
+        if (signal.aborted) throw new DOMException('Photo preparation canceled.', 'AbortError')
+        const blob = await renderToPng(slide.layout,
+          shotsForLayout(slide.layout, slide.shotCache.map(shot => shot ?? undefined)),
+          slide.settings, getPageFormat(slide.pageFormatId))
+        files.push(new File([blob], `slide-${String(index + 1).padStart(2, '0')}.png`, { type: 'image/png' }))
+        onProgress(index + 1)
       }
-      const blob = await createZip(files)
-      const url = URL.createObjectURL(blob)
-      const anchor = document.createElement('a')
-      anchor.href = url
-      anchor.download = `${projectName.trim().replace(/[^a-z0-9_-]+/gi, '-').slice(0, 60) || 'instacomic'}-carousel.zip`
-      anchor.click()
-      setTimeout(() => URL.revokeObjectURL(url), 60000)
-      setStatus(`Exported ${files.length} slides. Unzip and select the numbered images in Instagram.`)
-    } catch (error) { setStatus(error instanceof Error ? error.message : 'Carousel export failed.') }
-    finally { setCarouselExporting(false); exportAssetIdsRef.current.clear(); scheduleRuntimeAssetPrune() }
+      return files
+    } finally {
+      assetIds.forEach(id => {
+        const references = (exportAssetIdsRef.current.get(id) ?? 1) - 1
+        if (references > 0) exportAssetIdsRef.current.set(id, references)
+        else exportAssetIdsRef.current.delete(id)
+      })
+      scheduleRuntimeAssetPrune()
+    }
   }
 
   async function splitPanorama() {
@@ -2040,6 +2001,7 @@ function App() {
   }
 
   function openCreator() {
+    setCreatorAdjustOnly(false)
     const currentBorderColor = layoutBorderColor(layout) ?? settings.borderColor
     setEditingLayoutId(null)
     setCreatorStartsWithStyle(false)
@@ -2057,7 +2019,8 @@ function App() {
   }
 
   function editCustomLayout(layoutId: string, showStyle = false) {
-    const targetLayout = customLayouts.find((item) => item.id === layoutId)
+    setCreatorAdjustOnly(false)
+    const targetLayout = layout.id === layoutId ? layout : customLayouts.find((item) => item.id === layoutId)
     if (!targetLayout) {
       return
     }
@@ -2075,6 +2038,28 @@ function App() {
     setCreatorOpen(true)
     setDrawerOpen(false)
     setDrawerTab('layout')
+  }
+
+  function openAdjustGrid() {
+    flushPendingSettingsHistory()
+    setCreatorAdjustOnly(true)
+    setCreatorDirty(false)
+    setCreatorDiscardConfirmOpen(false)
+    setCreatorOpen(true)
+    setDrawerOpen(false)
+  }
+
+  function saveGridAdjustment(next: Layout) {
+    if (JSON.stringify(next) !== JSON.stringify(layout)) {
+      commitHistoryEntry(beginHistoryEntry('Adjust grid'))
+      setLayout(next)
+      if (next.custom) setCustomLayouts(current => current.map(item => item.id === next.id ? cloneLayout(next) : item))
+      clearExport()
+    }
+    setCreatorDirty(false)
+    setCreatorDiscardConfirmOpen(false)
+    setCreatorOpen(false)
+    setStatus('Grid adjusted. Every photo stays in its panel.')
   }
 
   function closeCreator() {
@@ -2098,9 +2083,9 @@ function App() {
       document.activeElement.blur()
     }
 
-    const originalLayout = customLayouts.find((item) => item.id === editingLayoutId)
+    const originalLayout = layout.id === editingLayoutId ? layout : customLayouts.find((item) => item.id === editingLayoutId)
     const readingOrder = !editingLayoutId || originalLayout?.panelOrder === 'reading'
-    const panels = panelsFromLines(draftLines, readingOrder)
+    const panels = (originalLayout ? adjustedPanelsKeepingPhotos(originalLayout, draftLines) : null) ?? panelsFromLines(draftLines, readingOrder)
 
     if (panels.length === 0) {
       setStatus('Move a divider before saving.')
@@ -2457,171 +2442,6 @@ function App() {
     setDrawerOpen(true)
   }
 
-  async function renderComicBlob() {
-    if (photoOperationCountRef.current > 0) {
-      throw new Error('The latest photo is still being prepared. Try saving again in a moment.')
-    }
-    if (imageExportingRef.current) {
-      throw new Error('The PNG is already being prepared.')
-    }
-
-    imageExportingRef.current = true
-    setImageExporting(true)
-    setStatus('Preparing the latest comic...')
-    const snapshot = captureProjectSnapshot()
-    const snapshotCache = snapshot.shotCache.map((shot) => shot ?? undefined)
-    const snapshotShots = shotsForLayout(snapshot.layout, snapshotCache)
-    clearReadyVideo()
-    try {
-      return await renderToPng(
-        snapshot.layout,
-        snapshotShots,
-        snapshot.settings,
-        getPageFormat(snapshot.pageFormatId),
-      )
-    } finally {
-      imageExportingRef.current = false
-      setImageExporting(false)
-    }
-  }
-
-  function downloadComicBlob(blob: Blob) {
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = 'instacomic.png'
-    document.body.append(link)
-    link.click()
-    link.remove()
-    window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
-  }
-
-  async function downloadComic() {
-    try {
-      downloadComicBlob(await renderComicBlob())
-      setStatus('PNG downloaded with the latest photos.')
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'PNG download failed.')
-    }
-  }
-
-  async function shareComic() {
-    try {
-      const blob = await renderComicBlob()
-      const file = new File([blob], 'instacomic.png', { type: 'image/png' })
-      if ('canShare' in navigator && navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ files: [file], title: 'Instacomic' })
-        setStatus('Shared.')
-      } else {
-        downloadComicBlob(blob)
-        setStatus('Sharing is unavailable here, so the PNG downloaded.')
-      }
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        setStatus('Share canceled. Your comic is unchanged.')
-      } else {
-        setStatus(error instanceof Error ? error.message : 'Share failed.')
-      }
-    }
-  }
-
-  async function exportStoryVideo() {
-    if (videoRendering) {
-      return
-    }
-    if (photoOperationCountRef.current > 0) {
-      setStatus('The latest photo is still being prepared. Try exporting again in a moment.')
-      return
-    }
-
-    clearReadyVideo()
-    const snapshot = captureProjectSnapshot()
-    const snapshotCache = snapshot.shotCache.map((shot) => shot ?? undefined)
-    const snapshotShots = shotsForLayout(snapshot.layout, snapshotCache)
-    setVideoRendering(true)
-    setVideoProgress(0)
-    setVideoProgressPhase('rendering')
-    try {
-      setStatus('Rendering story video...')
-      const video = await renderStoryVideo(
-        snapshot.layout,
-        snapshotShots,
-        snapshot.settings,
-        getPageFormat(snapshot.pageFormatId),
-        (progress, phase) => {
-        setVideoProgress(progress)
-        setVideoProgressPhase(phase)
-        setStatus(
-          phase === 'finalizing'
-            ? `Finalizing story video ${Math.round(progress * 100)}%...`
-            : `Rendering story video ${Math.round(progress * 100)}%...`,
-        )
-        },
-      )
-      const fileName = `instacomic-story.${video.extension}`
-      setReadyStoryVideo(video, fileName)
-      setStatus('Story video ready. Choose Download or Share.')
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Story video export failed.')
-    } finally {
-      setVideoRendering(false)
-      setVideoProgress(0)
-      setVideoProgressPhase('rendering')
-    }
-  }
-
-  function setReadyStoryVideo(
-    video: Awaited<ReturnType<typeof renderStoryVideo>>,
-    fileName: string,
-  ) {
-    clearReadyVideo()
-    const url = URL.createObjectURL(video.blob)
-    const ready: ReadyStoryVideo = {
-      blob: video.blob,
-      url,
-      fileName,
-      mimeType: video.mimeType,
-      extension: video.extension,
-      width: video.width,
-      height: video.height,
-    }
-    readyVideoUrlRef.current = url
-    setReadyVideo(ready)
-    setDrawerTab('export')
-    setDrawerOpen(true)
-    return ready
-  }
-
-  function downloadReadyVideo(video: ReadyStoryVideo) {
-    const link = document.createElement('a')
-    link.href = video.url
-    link.download = video.fileName
-    document.body.append(link)
-    link.click()
-    link.remove()
-  }
-
-  async function shareReadyVideo(video: ReadyStoryVideo) {
-    const file = new File([video.blob], video.fileName, { type: video.mimeType })
-    try {
-      if ('canShare' in navigator && navigator.canShare?.({ files: [file] })) {
-        await navigator.share({ files: [file], title: 'Instacomic story video' })
-        setStatus(`Shared ${video.width}x${video.height} story video.`)
-        return
-      }
-
-      downloadReadyVideo(video)
-      setStatus(`Sharing is unavailable here, so the ${video.extension.toUpperCase()} downloaded.`)
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        setStatus('Video ready.')
-        return
-      }
-
-      setStatus(error instanceof Error ? error.message : 'Story video share failed.')
-    }
-  }
-
   return (
     <main
       ref={shellRef}
@@ -2630,7 +2450,7 @@ function App() {
       data-history-redo={historyCounts.redo}
       data-autosave-state={draftPhase}
       data-photo-processing={photoProcessing || undefined}
-      data-image-exporting={imageExporting || undefined}
+      data-image-exporting={carouselExporting || undefined}
       style={pageStyle}
       onPointerMove={(event) => {
         movePhoto(event.clientX, event.clientY)
@@ -3058,6 +2878,7 @@ function App() {
             onLayout={changeLayout}
             onFormat={selectPageFormat}
             onCreate={openCreator}
+            onAdjust={openAdjustGrid}
             onEditCustomLayout={editCustomLayout}
             onDeleteCustomLayout={deleteCustomLayout}
           />
@@ -3079,35 +2900,21 @@ function App() {
             <RangeField label="Number of slides" unit="" value={panoramaCount} min={2} max={5} onChange={setPanoramaCount} />
             <button className="export-secondary" type="button" disabled={photoProcessing || carouselExporting || Object.keys(shots).length === 0 || (slidesRef.current.length || 1) + panoramaCount > 20} onClick={() => void splitPanorama()}>Split photo across slides</button>
           </SettingsSection>
-          <button className="export-primary" type="button" disabled={carouselExporting || photoProcessing} onClick={() => void exportCarousel()}>{carouselExporting ? 'Preparing carousel…' : 'Export carousel ZIP'}</button>
+          <button className="primary export-primary" type="button" onClick={() => openDrawer('export')}>Share photos</button>
         </div>}
         {drawerTab === 'style' && (
           <StylePanel settings={settings} onSettings={updateProjectSettings} onReset={resetAppearance} />
         )}
-        {drawerTab === 'export' && (<>
-          <section className="carousel-export-summary"><strong>{slidesRef.current.length || 1} slides in this project</strong>
-            <button className="export-primary" type="button" disabled={carouselExporting || photoProcessing} onClick={() => void exportCarousel()}>{carouselExporting ? 'Preparing carousel…' : 'Export carousel ZIP'}</button>
-            <span>Numbered PNGs, ready to upload in order.</span></section>
-          <ExportPanel
-            settings={settings}
-            capturedCount={capturedCount}
-            panelCount={layout.panels.length}
-            pageFormat={pageFormat}
-            imageExporting={imageExporting}
-            photoProcessing={photoProcessing}
-            videoRendering={videoRendering}
-            videoProgress={videoProgress}
-            videoProgressPhase={videoProgressPhase}
-            readyVideo={readyVideo}
-            onSettings={updateProjectSettings}
-            onDownloadImage={downloadComic}
-            onShareImage={shareComic}
-            onExportVideo={exportStoryVideo}
-            onDownloadVideo={downloadReadyVideo}
-            onShareVideo={shareReadyVideo}
-            onDismissVideo={clearReadyVideo}
-          />
-        </>)}
+        {drawerTab === 'export' && drawerOpen && <PhotoExportPanel
+          snapshot={shareSnapshot}
+          count={shareSnapshot.carousel!.slides.length}
+          width={1440}
+          height={Math.round(1440 * pageFormat.height / pageFormat.width)}
+          emptyPanels={shareSnapshot.carousel!.slides.reduce((total, slide) => total + slide.layout.panels.filter((_, index) => !slide.shotCache[index]).length, 0)}
+          processing={photoProcessing}
+          onPrepare={prepareSharePhotos}
+          onBusy={setCarouselExporting}
+        />}
       </Drawer>
       <AnimatePresence>
         {creatorOpen && (
@@ -3116,14 +2923,15 @@ function App() {
             className="creator-fullscreen"
             role="dialog"
             aria-modal="true"
-            aria-label={editingLayoutId ? 'Edit custom grid' : 'Create custom grid'}
+            aria-label={creatorAdjustOnly ? 'Adjust grid' : editingLayoutId ? 'Edit custom grid' : 'Create custom grid'}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.18 }}
           >
             <div className="creator-panel-host" inert={creatorDiscardConfirmOpen || undefined}>
-              <CreatorPanel
+              {creatorAdjustOnly ? <AdjustGridPanel initialLayout={layout} settings={settings} pageFormat={pageFormat} shots={shots}
+                onSave={saveGridAdjustment} onCancel={closeCreator} onDirty={setCreatorDirty} /> : <CreatorPanel
                 draftName={draftName}
                 draftLines={draftLines}
                 dividerThickness={draftThickness}
@@ -3137,7 +2945,8 @@ function App() {
                 onAppearance={setDraftAppearance}
                 photoCache={mergeLayoutShotsIntoCache(layout, shots, shotCacheRef.current)}
                 photoFit={draftAppearance.fit}
-                readingOrder={!editingLayoutId || customLayouts.find((item) => item.id === editingLayoutId)?.panelOrder === 'reading'}
+                initialLayout={layout.id === editingLayoutId ? layout : customLayouts.find((item) => item.id === editingLayoutId)}
+                readingOrder={!editingLayoutId || (layout.id === editingLayoutId ? layout : customLayouts.find((item) => item.id === editingLayoutId))?.panelOrder === 'reading'}
                 onName={(value) => {
                   setCreatorDirty(true)
                   setDraftName(value)
@@ -3169,7 +2978,7 @@ function App() {
                   setDraftBorderColor(draft.borderColor)
                   setDraftBorderThickness(draft.borderThickness)
                 }}
-              />
+              />}
             </div>
             {creatorDiscardConfirmOpen && (
               <div className="creator-discard-backdrop">
@@ -3495,6 +3304,7 @@ function LayoutPanel({
   onLayout,
   onFormat,
   onCreate,
+  onAdjust,
   onEditCustomLayout,
   onDeleteCustomLayout,
 }: {
@@ -3505,6 +3315,7 @@ function LayoutPanel({
   onLayout: (layout: Layout) => void
   onFormat: (format: PageFormat) => void
   onCreate: () => void
+  onAdjust: () => void
   onEditCustomLayout: (layoutId: string) => void
   onDeleteCustomLayout: (layoutId: string) => void
 }) {
@@ -3514,11 +3325,16 @@ function LayoutPanel({
     (firstGrids.includes(b.id) ? firstGrids.indexOf(b.id) : firstGrids.length))
   const savedLayouts = layouts.filter((option) => option.custom).sort((a, b) => Number(b.id === layout.id) - Number(a.id === layout.id))
 
+  const adjustButton = (layout.dividers?.length || rectangularDividers(layout.panels).length > 0) ?
+    <button type="button" className="adjust-grid-entry" onClick={onAdjust}>
+      <ActionIcon name="layout" /><span>Adjust grid</span><ActionIcon name="arrow" />
+    </button> : null
+
   const templatePicker = (
       <section className="layout-section" aria-labelledby="built-in-grid-heading">
-        <div className="layout-section-heading">
+        <div className={`layout-section-heading ${adjustButton && !layout.custom ? 'has-adjust' : ''}`}>
           <strong id="built-in-grid-heading">Templates</strong>
-          <span>{builtInLayouts.length} included</span>
+          {!layout.custom && adjustButton ? adjustButton : <span>{builtInLayouts.length} included</span>}
         </div>
         <div className="layout-gallery">
           {builtInLayouts.map((option) => (
@@ -3531,7 +3347,7 @@ function LayoutPanel({
       <section className="layout-section" aria-labelledby="saved-grid-heading">
         <div className="layout-section-heading">
           <strong id="saved-grid-heading">Your grids</strong>
-          <span>{savedLayouts.length > 0 ? `${savedLayouts.length} saved` : 'Saved locally'}</span>
+          {layout.custom && adjustButton ? adjustButton : <span>{savedLayouts.length > 0 ? `${savedLayouts.length} saved` : 'Saved locally'}</span>}
         </div>
         <div className="layout-gallery saved-layout-gallery">
           <button className="layout-card create-card" type="button" onClick={onCreate}>
@@ -3738,6 +3554,227 @@ function LayoutPreview({ layout, specimen = false }: { layout: Layout; specimen?
   )
 }
 
+function adjustedPanelsKeepingPhotos(initialLayout: Layout, nextLines: CustomLine[]): Panel[] | null {
+  const originalLines = initialLayout.dividers ?? []
+  if (originalLines.length !== nextLines.length) return null
+  const orderedLines = originalLines.map(line => nextLines.find(next => next.id === line.id))
+  if (orderedLines.some(line => !line)) return null
+
+  function signature(panel: Panel, candidates: CustomLine[]) {
+    const points = panel.points ?? [
+      [panel.x * 100, panel.y * 100], [(panel.x + panel.w) * 100, panel.y * 100],
+      [(panel.x + panel.w) * 100, (panel.y + panel.h) * 100], [panel.x * 100, (panel.y + panel.h) * 100],
+    ] as Array<[number, number]>
+    return candidates.map((line, index) => {
+      const original = originalLines[index]
+      const dx = line.x2 - line.x1, dy = line.y2 - line.y1
+      const length = Math.hypot(dx, dy)
+      const direction = dx * (original.x2 - original.x1) + dy * (original.y2 - original.y1) < 0 ? -1 : 1
+      const distances = points.map(point => direction * lineSide(point, line) / (length || 1))
+      // Polygon coordinates are rounded to two decimals. Ignore that boundary
+      // noise, and distinguish unsplit regions spanning a finite segment's line.
+      return `${distances.some(value => value > 0.02) ? '+' : ''}${distances.some(value => value < -0.02) ? '-' : ''}`
+    }).join('|')
+  }
+
+  const nextPanels = panelsFromLines(nextLines, false)
+  if (nextPanels.length !== initialLayout.panels.length) return null
+  const bySignature = new Map<string, Panel>()
+  for (const panel of nextPanels) {
+    const key = signature(panel, orderedLines as CustomLine[])
+    if (bySignature.has(key)) return null
+    bySignature.set(key, panel)
+  }
+  const matched: Panel[] = []
+  for (const original of initialLayout.panels) {
+    const key = signature(original, originalLines)
+    const panel = bySignature.get(key)
+    if (!panel) return null
+    matched.push({ ...panel, id: original.id })
+    bySignature.delete(key)
+  }
+  return matched
+}
+
+function AdjustGridPanel({ initialLayout, settings, pageFormat, shots, onSave, onCancel, onDirty }: {
+  initialLayout: Layout
+  settings: Settings
+  pageFormat: PageFormat
+  shots: Record<string, Shot>
+  onSave: (layout: Layout) => void
+  onCancel: () => void
+  onDirty: (dirty: boolean) => void
+}) {
+  const [draft, setDraft] = useState(() => cloneLayout(initialLayout))
+  const [snapping, setSnapping] = useState(true)
+  const [centered, setCentered] = useState(false)
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const centeredRef = useRef(false)
+  const canvasRef = useRef<HTMLDivElement>(null)
+  const canvasAspect = useContentAspect(canvasRef, pageFormatCanvasAspect(pageFormat))
+  const history = useDraftHistory(draft, setDraft)
+  const dragRef = useRef<{ pointerId: number; x: number; y: number; layout: Layout; rect?: RectDivider; line?: CustomLine } | null>(null)
+  const rectDividers = rectangularDividers(draft.panels)
+  const lines = draft.dividers ?? []
+  useEffect(() => onDirty(history.dirty), [history.dirty, onDirty])
+
+  function showCenter(snapped: boolean) {
+    if (snapped && !centeredRef.current) {
+      try { navigator.vibrate?.(10) } catch { /* Visual feedback remains available without vibration. */ }
+    }
+    centeredRef.current = snapped
+    setCentered(snapped)
+  }
+
+  function begin(event: PointerEvent<HTMLButtonElement>, rect?: RectDivider, line?: CustomLine) {
+    if (event.button !== 0 || dragRef.current) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    history.endGroup()
+    centeredRef.current = false
+    setCentered(false)
+    setActiveId(rect?.id ?? line?.id ?? null)
+    dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, layout: cloneLayout(draft), rect, line }
+  }
+
+  function move(event: PointerEvent<HTMLButtonElement>) {
+    const drag = dragRef.current
+    const canvas = canvasRef.current
+    if (!drag || drag.pointerId !== event.pointerId || !canvas) return
+    const dx = (event.clientX - drag.x) / canvas.clientWidth
+    const dy = (event.clientY - drag.y) / canvas.clientHeight
+    if (drag.rect) {
+      const raw = drag.rect.position + (drag.rect.axis === 'x' ? dx : dy)
+      const snap = snapGridCenter(raw, centeredRef.current, snapping)
+      const position = clamp(snap.position, drag.rect.min, drag.rect.max)
+      showCenter(snap.snapped && Math.abs(position - 0.5) < 0.00001)
+      history.change(() => setDraft({ ...drag.layout, panels: moveRectDivider(drag.layout.panels, drag.rect!, position) }), 'divider')
+      return
+    }
+    if (!drag.line) return
+    const source = drag.line
+    let candidate = { ...source, x1: source.x1 + dx * 100, x2: source.x2 + dx * 100, y1: source.y1 + dy * 100, y2: source.y2 + dy * 100 }
+    const controls = cutControls(candidate, canvasAspect)
+    const snap = snapGridCenter(controls.position / 100, centeredRef.current, snapping)
+    if (source.extent === 'canvas') {
+      candidate = { ...candidate, ...cutAt(controls.angle, snap.position * 100, canvasAspect) }
+    } else {
+      // Keep both endpoints of a legacy segment inside the canvas while translating it.
+      const boundedX = clamp(dx * 100, -Math.min(source.x1, source.x2), 100 - Math.max(source.x1, source.x2))
+      const boundedY = clamp(dy * 100, -Math.min(source.y1, source.y2), 100 - Math.max(source.y1, source.y2))
+      candidate = { ...source, x1: source.x1 + boundedX, x2: source.x2 + boundedX, y1: source.y1 + boundedY, y2: source.y2 + boundedY }
+      if (snapping) candidate = snapCustomLine(candidate, drag.layout.dividers ?? [], source.id, canvasAspect)
+    }
+    const nextLines = (drag.layout.dividers ?? []).map(line => line.id === source.id ? candidate : { ...line })
+    const panels = adjustedPanelsKeepingPhotos(initialLayout, nextLines)
+    // Preserve each photo's region, including when centroid reading order changes.
+    if (!panels) { showCenter(false); return }
+    showCenter(snap.snapped && source.extent === 'canvas')
+    history.change(() => setDraft({ ...drag.layout, dividers: nextLines, panels }), 'divider')
+  }
+
+  function end(event: PointerEvent<HTMLButtonElement>) {
+    if (dragRef.current?.pointerId !== event.pointerId) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    dragRef.current = null
+    history.endGroup()
+    showCenter(false)
+    setActiveId(null)
+  }
+
+  function nudge(event: React.KeyboardEvent<HTMLButtonElement>, rect?: RectDivider, line?: CustomLine) {
+    const delta = ({ ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] } as Record<string, number[]>)[event.key]
+    if (!delta) return
+    event.preventDefault()
+    const step = event.shiftKey ? 0.02 : 0.005
+    if (rect) {
+      const position = rect.position + delta[rect.axis === 'x' ? 0 : 1] * step
+      history.change(() => setDraft({ ...draft, panels: moveRectDivider(draft.panels, rect, position) }), 'key')
+    } else if (line) {
+      const candidate = { ...line, x1: line.x1 + delta[0] * step * 100, x2: line.x2 + delta[0] * step * 100, y1: line.y1 + delta[1] * step * 100, y2: line.y2 + delta[1] * step * 100 }
+      const moved = line.extent === 'canvas' ? { ...candidate, ...extendCut(candidate, canvasAspect) } : clampCustomLine(candidate)
+      const nextLines = lines.map(item => item.id === line.id ? moved : item)
+      const panels = adjustedPanelsKeepingPhotos(initialLayout, nextLines)
+      if (panels) history.change(() => setDraft({ ...draft, panels, dividers: nextLines }), 'key')
+    }
+  }
+
+  const handleCandidates = rectDividers.length ? rectDividers.map(rect => ({
+    id: rect.id, rect, line: undefined as CustomLine | undefined,
+    x: (rect.axis === 'x' ? rect.position : (rect.start + rect.end) / 2) * 100,
+    y: (rect.axis === 'y' ? rect.position : (rect.start + rect.end) / 2) * 100,
+    axis: rect.axis,
+  })) : lines.map(line => ({
+    id: line.id, rect: undefined as RectDivider | undefined, line,
+    x: (line.x1 + line.x2) / 2, y: (line.y1 + line.y2) / 2,
+    axis: Math.abs(line.x2 - line.x1) < Math.abs(line.y2 - line.y1) ? 'x' : 'y',
+  }))
+  const handles: Array<(typeof handleCandidates)[number]> = []
+  for (const handle of handleCandidates) {
+    // Crossing dividers each need an independently reachable touch target.
+    let placed = handle
+    for (const fraction of [0.5, 0.3, 0.7, 0.15, 0.85]) {
+      const candidate = { ...handle }
+      if (handle.rect) {
+        const along = (handle.rect.start + (handle.rect.end - handle.rect.start) * fraction) * 100
+        if (handle.axis === 'x') candidate.y = along; else candidate.x = along
+      } else if (handle.line) {
+        candidate.x = handle.line.x1 + (handle.line.x2 - handle.line.x1) * fraction
+        candidate.y = handle.line.y1 + (handle.line.y2 - handle.line.y1) * fraction
+      }
+      placed = candidate
+      if (handles.every(other => Math.hypot(candidate.x - other.x, (candidate.y - other.y) * canvasAspect) >= 18)) break
+    }
+    handles.push(placed)
+  }
+
+  return <form className="creator-stack adjust-stack" onSubmit={event => { event.preventDefault(); onSave(draft) }}
+    onKeyUp={event => { if (event.key.startsWith('Arrow')) history.endGroup() }}
+    onKeyDown={event => {
+      if ((event.ctrlKey || event.metaKey) && ['z', 'y'].includes(event.key.toLowerCase())) {
+        event.preventDefault(); event.stopPropagation()
+        if (event.shiftKey || event.key.toLowerCase() === 'y') history.redo(); else history.undo()
+      }
+    }} style={{
+      '--creator-page-width': pageFormat.width, '--creator-page-height': pageFormat.height,
+      '--creator-border-thickness': `${settings.border}px`, '--creator-border-color': settings.borderColor,
+      '--creator-divider-thickness': `${settings.gutters}px`, '--creator-paper': settings.background,
+      '--creator-radius': `${settings.radius}px`, '--gutter': `${settings.gutters}px`,
+    } as React.CSSProperties}>
+    <header className="adjust-topbar">
+      <button type="button" onClick={onCancel} aria-label="Close adjust grid"><ActionIcon name="close" /></button>
+      <div role="group" aria-label="Grid adjustment history">
+        <button type="button" aria-label="Undo grid adjustment" disabled={!history.canUndo} onClick={history.undo}><ToolIcon name="undo" /></button>
+        <button type="button" aria-label="Redo grid adjustment" disabled={!history.canRedo} onClick={history.redo}><ToolIcon name="redo" /></button>
+      </div>
+      <button type="submit" className="primary">Done</button>
+    </header>
+    <div className="creator-canvas-zone adjust-canvas-zone">
+      <div ref={canvasRef} className={`creator-canvas adjust-canvas ${draft.custom ? 'is-custom' : ''}`} aria-label="Adjust photo grid" data-adjust-layout={draft.id}>
+        {draft.panels.map((panel, index) => <div key={panel.id} className="creator-panel" style={panelStyle(panel, !draft.custom)} data-adjust-panel={panel.id}>
+          {shots[initialLayout.panels[index].id] && <img src={shots[initialLayout.panels[index].id].dataUrl} alt="" draggable={false}
+            style={shotImageStyle(panel, shots[initialLayout.panels[index].id], shots[initialLayout.panels[index].id].fit ?? settings.fit, pageFormat)} />}
+        </div>)}
+        {lines.map(line => <div className="creator-cut-clip" key={line.id} aria-hidden="true"><span className="creator-free-line" style={lineSegmentStyle(line, canvasAspect, true)} /></div>)}
+        {settings.caption.trim() && <div className="strip-caption creator-caption" style={{ color: settings.captionColor }}>{settings.caption}</div>}
+        {centered && <div className="grid-center-cue" aria-hidden="true"><i /><i /><span>Centered</span></div>}
+        {handles.map((handle, index) => <button key={handle.id} type="button" className={`adjust-divider-handle is-${handle.axis} ${activeId === handle.id ? 'is-active' : ''}`}
+          style={{ left: `${handle.x}%`, top: `${handle.y}%` }} aria-label={`Adjust divider ${index + 1}`} aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown"
+          data-divider-position={handle.rect?.position ?? cutControls(handle.line!, canvasAspect).position / 100}
+          data-divider-axis={handle.axis} onPointerDown={event => begin(event, handle.rect, handle.line)} onPointerMove={move} onPointerUp={end} onPointerCancel={end}
+          onKeyDown={event => nudge(event, handle.rect, handle.line)}><span aria-hidden="true">↕</span></button>)}
+      </div>
+    </div>
+    <div className="adjust-dock">
+      <div className="adjust-dock-heading"><strong>Adjust</strong><span role="status">{centered ? 'Snapped to center' : 'Drag a divider to resize your photos'}</span></div>
+      <div className="adjust-dock-actions">
+        <button type="button" onClick={() => { history.change(() => setDraft(cloneLayout(initialLayout))); showCenter(false) }}><ToolIcon name="undo" /><span>Reset</span></button>
+        <button type="button" aria-pressed={snapping} onClick={() => { setSnapping(!snapping); showCenter(false) }}><span className="adjust-snap-icon" aria-hidden="true">＋</span><span>Snap {snapping ? 'on' : 'off'}</span></button>
+      </div>
+    </div>
+  </form>
+}
+
 function CreatorPanel({
   draftName,
   draftLines,
@@ -3752,6 +3789,7 @@ function CreatorPanel({
   startsWithStyle,
   photoCache,
   photoFit,
+  initialLayout,
   readingOrder,
   onName,
   onAddLine,
@@ -3779,6 +3817,7 @@ function CreatorPanel({
   startsWithStyle: boolean
   photoCache: Array<Shot | undefined>
   photoFit: PanelFit
+  initialLayout?: Layout
   readingOrder: boolean
   onName: (name: string) => void
   onAddLine: (preset: CustomLinePreset) => void
@@ -3871,7 +3910,9 @@ function CreatorPanel({
     onRestore,
   )
   useEffect(() => onDirty(history.dirty), [history.dirty, onDirty])
-  const previewPanels = useMemo(() => panelsFromLines(draftLines, readingOrder), [draftLines, readingOrder])
+  const previewPanels = useMemo(() =>
+    (initialLayout ? adjustedPanelsKeepingPhotos(initialLayout, draftLines) : null) ?? panelsFromLines(draftLines, readingOrder),
+  [draftLines, readingOrder, initialLayout])
   const canvasAspect = useContentAspect(canvasRef, pageFormatCanvasAspect(pageFormat))
   const creatorStyle = {
     '--creator-divider-thickness': `${dividerThickness}px`,
@@ -4599,19 +4640,7 @@ function CreatorPanel({
                   <strong>{fit === 'cover' ? 'Fill' : 'Fit'}</strong><span>{fit === 'cover' ? 'Crop to frame' : 'Show whole photo'}</span>
                 </button>)}
               </div>
-              <div className="style-presets" role="group" aria-label="Appearance presets">
-                {[
-                  { name: 'Clean', background: '#ffffff', borderColor: '#111111', gutters: 8, radius: 0 },
-                  { name: 'Paper', background: '#f3ede2', borderColor: '#51483e', gutters: 12, radius: 4 },
-                  { name: 'Bold', background: '#111111', borderColor: '#111111', gutters: 6, radius: 0 },
-                ].map((preset) => <button key={preset.name} type="button"
-                  aria-pressed={appearance.background === preset.background && borderColor === preset.borderColor && dividerThickness === preset.gutters && appearance.radius === preset.radius}
-                  onClick={() => history.change(() => {
-                    onAppearance({ ...appearance, background: preset.background, radius: preset.radius })
-                    onBorderColor(preset.borderColor)
-                    onThickness(preset.gutters)
-                  })}>{preset.name}</button>)}
-              </div>
+
             </section>
             <section className="creator-control-section" id="grid-tools-caption" role="tabpanel" aria-labelledby="grid-tab-caption"
               inert={toolTab !== 'caption' || undefined} aria-hidden={toolTab !== 'caption'}>
@@ -4683,11 +4712,6 @@ function StylePanel({
 }) {
   const previousBorder = useRef(settings.border || 2)
   useEffect(() => { if (settings.border > 0) previousBorder.current = settings.border }, [settings.border])
-  const presets = [
-    { name: 'Clean', background: '#ffffff', borderColor: '#111111', border: 0, gutters: 8, radius: 0 },
-    { name: 'Paper', background: '#f3ede2', borderColor: '#51483e', border: 1, gutters: 12, radius: 4 },
-    { name: 'Bold', background: '#111111', borderColor: '#111111', border: 3, gutters: 6, radius: 0 },
-  ]
   return (
     <div className="drawer-stack style-stack">
       <SettingsSection title="Canvas" description="Set the page and line colors.">
@@ -4759,28 +4783,6 @@ function StylePanel({
           onChange={(border) => onSettings({ border })}
         />}
       </SettingsSection>
-      <SettingsSection title="Start with a look" description="One tap to set the mood. Fine-tune anything below.">
-        <div className="style-presets" role="group" aria-label="Appearance presets">
-          {presets.map(({ name, ...preset }) => (
-            <button
-              key={name}
-              type="button"
-              aria-pressed={Object.entries(preset).every(([key, value]) => settings[key as keyof Settings] === value)}
-              onClick={() => onSettings(preset)}
-            >
-              <span
-                className="style-preset-preview"
-                style={{ background: preset.background, color: preset.borderColor }}
-                aria-hidden="true"
-              >
-                <i />
-                <i />
-              </span>
-              {name}
-            </button>
-          ))}
-        </div>
-      </SettingsSection>
       <SettingsSection title="Caption" description="Add an optional title to the finished comic.">
         <label className="field text-field">
           <span>Caption text</span>
@@ -4800,131 +4802,6 @@ function StylePanel({
       <button className="settings-reset" type="button" onClick={onReset}>
         Reset appearance
       </button>
-    </div>
-  )
-}
-
-function ExportPanel({
-  settings,
-  capturedCount,
-  panelCount,
-  pageFormat,
-  imageExporting,
-  photoProcessing,
-  videoRendering,
-  videoProgress,
-  videoProgressPhase,
-  readyVideo,
-  onSettings,
-  onDownloadImage,
-  onShareImage,
-  onExportVideo,
-  onDownloadVideo,
-  onShareVideo,
-  onDismissVideo,
-}: {
-  settings: Settings
-  capturedCount: number
-  panelCount: number
-  pageFormat: PageFormat
-  imageExporting: boolean
-  photoProcessing: boolean
-  videoRendering: boolean
-  videoProgress: number
-  videoProgressPhase: StoryVideoRenderPhase
-  readyVideo: ReadyStoryVideo | null
-  onSettings: (settings: Partial<Settings>) => void
-  onDownloadImage: () => Promise<void>
-  onShareImage: () => Promise<void>
-  onExportVideo: () => Promise<void>
-  onDownloadVideo: (video: ReadyStoryVideo) => void
-  onShareVideo: (video: ReadyStoryVideo) => Promise<void>
-  onDismissVideo: () => void
-}) {
-  const exportWidth = 1440
-  const exportHeight = Math.round((exportWidth * pageFormat.height) / pageFormat.width)
-  const isIncomplete = capturedCount < panelCount
-  const imageBusy = imageExporting || photoProcessing
-  return (
-    <div className="export-stack">
-      <section className="export-card export-image-card">
-        <div className="export-card-heading">
-          <span className="export-card-icon" aria-hidden="true"><ActionIcon name="image" /></span>
-          <div>
-            <strong>The finished comic</strong>
-            <span>{`${exportWidth} × ${exportHeight} PNG`}</span>
-          </div>
-        </div>
-        <p className="export-intro">Made by you. Ready for the world.</p>
-        {isIncomplete && (
-          <div className="export-warning" role="status">
-            <strong>{`${panelCount - capturedCount} panel${panelCount - capturedCount === 1 ? '' : 's'} still empty`}</strong>
-            <span>You can export now, but empty panels will remain blank.</span>
-          </div>
-        )}
-        {photoProcessing && (
-          <div className="export-warning" role="status">
-            <strong>Finishing the latest photo</strong>
-            <span>Download and share will unlock as soon as it is safely in the comic.</span>
-          </div>
-        )}
-        <div className="export-image-actions">
-          <button className="primary export-primary" type="button" disabled={imageBusy} onClick={() => void onDownloadImage()}>
-            <ActionIcon name="image" />
-            {imageExporting ? 'Preparing…' : 'Download PNG'}
-          </button>
-          <button className="export-secondary" type="button" disabled={imageBusy} onClick={() => void onShareImage()}>
-            <ActionIcon name="share" />
-            Share PNG
-          </button>
-        </div>
-        <p>Full resolution. No watermark. Yours to keep.</p>
-      </section>
-
-      <section className="export-card video-settings">
-        <div className="export-card-heading">
-          <span className="export-card-icon" aria-hidden="true"><ActionIcon name="video" /></span>
-          <div>
-            <strong>Story video</strong>
-            <span>Animated panel reveal for stories and reels</span>
-          </div>
-        </div>
-        <RangeField label="Duration" ariaLabel="Video duration" value={settings.videoDuration} min={3} max={10} unit="s" onChange={(videoDuration) => onSettings({ videoDuration })} />
-        <RangeField label="Reveal speed" ariaLabel="Video speed" value={settings.videoSpeed} min={0.6} max={1.8} step={0.1} unit="×" onChange={(videoSpeed) => onSettings({ videoSpeed })} />
-
-        {videoRendering ? (
-          <div
-            className="video-render-progress"
-            role="progressbar"
-            aria-label="Rendering story video"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={Math.round(videoProgress * 100)}
-            aria-valuetext={`${videoProgressPhase === 'finalizing' ? 'Finalizing' : 'Rendering'} ${Math.round(videoProgress * 100)}%`}
-          >
-            <span style={{ width: `${Math.round(videoProgress * 100)}%` }} />
-            <em>{`${videoProgressPhase === 'finalizing' ? 'Finalizing' : 'Rendering'} ${Math.round(videoProgress * 100)}%`}</em>
-          </div>
-        ) : readyVideo ? (
-          <div className="video-ready-card" role="region" aria-label="Video ready actions">
-            <span className="sr-status" role="status" aria-live="polite">Story video ready.</span>
-            <div>
-              <strong>Video ready</strong>
-              <em>{`${readyVideo.width} × ${readyVideo.height} ${readyVideo.extension.toUpperCase()}`}</em>
-            </div>
-            <div className="video-ready-actions">
-              <button type="button" onClick={() => onDownloadVideo(readyVideo)}>Download video</button>
-              <button type="button" onClick={() => void onShareVideo(readyVideo)}>Share video</button>
-              <button type="button" aria-label="Dismiss video ready" onClick={onDismissVideo}><ActionIcon name="close" /></button>
-            </div>
-          </div>
-        ) : (
-          <button className="primary export-primary" type="button" disabled={photoProcessing || imageExporting} onClick={() => void onExportVideo()}>
-            <ActionIcon name="video" />
-            Export story video
-          </button>
-        )}
-      </section>
     </div>
   )
 }
@@ -4997,255 +4874,54 @@ async function renderToPng(
     throw new Error('Canvas is unavailable.')
   }
 
-  context.fillStyle = layout.custom ? settings.background : settings.borderColor
-  context.fillRect(0, 0, canvas.width, canvas.height)
-  const gutter = settings.gutters * 3
-  const outer = settings.border * 3
-
-  const images = await Promise.all(
-    layout.panels.map(async (panel) => ({
-      panel,
-      shot: shots[panel.id] ?? null,
-      image: shots[panel.id] ? await loadImage(shots[panel.id].dataUrl) : null,
-    })),
-  )
-
-  for (const { panel, image, shot } of images) {
-    drawPanel(context, panel, image, shot, width, panelHeight, outer, gutter, settings, 3)
-  }
-
-  for (const divider of layout.dividers ?? []) {
-    drawDividerGap(context, divider, width, panelHeight, outer, gutter, settings.borderColor)
-  }
-
-  if (settings.caption.trim()) {
-    const captionHeight = Math.min(130, panelHeight * 0.22)
-    const captionY = panelHeight - captionHeight - outer - gutter / 2
-    context.fillStyle = '#ffffff'
-    context.fillRect(outer + gutter / 2, captionY, width - outer * 2 - gutter, captionHeight - gutter)
-    context.strokeStyle = settings.borderColor
-    context.lineWidth = settings.border > 0 ? Math.max(3, settings.border * 3) : 0
-    context.strokeRect(outer + gutter / 2, captionY, width - outer * 2 - gutter, captionHeight - gutter)
-    context.fillStyle = settings.captionColor
-    context.font = '700 68px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
-    context.textAlign = 'center'
-    context.textBaseline = 'middle'
-    context.fillText(settings.caption, width / 2, captionY + captionHeight / 2, width - 130)
-  }
-
-  drawOuterBezel(context, width, panelHeight, outer, settings)
-
-  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
-  if (!blob) {
-    throw new Error('PNG render failed.')
-  }
-  return blob
-}
-
-async function renderStoryVideo(
-  layout: Layout,
-  shots: Record<string, Shot>,
-  settings: Settings,
-  pageFormat: PageFormat,
-  onProgress?: (progress: number, phase: StoryVideoRenderPhase) => void,
-) {
-  if (typeof MediaRecorder === 'undefined') {
-    throw new Error('Story video export is unavailable in this browser.')
-  }
-
-  const captureCanvas = document.createElement('canvas') as HTMLCanvasElement & {
-    captureStream?: (frameRate?: number) => MediaStream
-  }
-  if (!captureCanvas.captureStream) {
-    throw new Error('Story video export is unavailable in this browser.')
-  }
-
-  const videoFormat = bestStoryVideoFormat()
-  const width = 1080
-  const panelHeight = Math.round((width * pageFormat.height) / pageFormat.width)
-  const fps = 24
-  const duration = clamp(settings.videoDuration, 3, 10)
-  const totalFrames = Math.max(1, Math.round(duration * fps))
-  captureCanvas.width = width
-  captureCanvas.height = panelHeight
-  const context = captureCanvas.getContext('2d')
-  if (!context) {
-    throw new Error('Canvas is unavailable.')
-  }
-
-  const images = await loadPanelFrames(layout, shots)
-  const stream = captureCanvas.captureStream(fps)
-  const chunks: Blob[] = []
-  const recorder = new MediaRecorder(stream, { mimeType: videoFormat.mimeType, videoBitsPerSecond: 6_000_000 })
-  const done = new Promise<Blob>((resolve, reject) => {
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        chunks.push(event.data)
-      }
-    }
-    recorder.onerror = () => reject(new Error('Story video recording failed.'))
-    recorder.onstop = () => resolve(new Blob(chunks, { type: videoFormat.mimeType }))
-  })
-
-  let blob: Blob
   try {
-    recorder.start(250)
-    for (let frame = 0; frame < totalFrames; frame += 1) {
-      const progress = totalFrames <= 1 ? 1 : frame / (totalFrames - 1)
-      drawStoryVideoFrame(context, layout, images, settings, width, panelHeight, progress)
-      if (frame % 6 === 0 || frame === totalFrames - 1) {
-        onProgress?.(clamp(((frame + 1) / totalFrames) * 0.94, 0, 0.94), 'rendering')
-      }
-      await wait(1000 / fps)
+    context.fillStyle = layout.custom ? settings.background : settings.borderColor
+    context.fillRect(0, 0, canvas.width, canvas.height)
+    const gutter = settings.gutters * 3
+    const outer = settings.border * 3
+
+    const images = await Promise.all(
+      layout.panels.map(async (panel) => ({
+        panel,
+        shot: shots[panel.id] ?? null,
+        image: shots[panel.id] ? await loadImage(shots[panel.id].dataUrl) : null,
+      })),
+    )
+
+    for (const { panel, image, shot } of images) {
+      drawPanel(context, panel, image, shot, width, panelHeight, outer, gutter, settings, 3)
     }
 
-    onProgress?.(0.97, 'finalizing')
-    await wait(120)
-    if (recorder.state !== 'inactive') {
-      try {
-        recorder.requestData()
-      } catch {
-        // Some browsers do not allow an explicit final data request; stop still flushes.
-      }
-      recorder.stop()
-    }
-    blob = await withTimeout(done, 10000, 'Story video recording did not finish. Try a shorter video or another browser.')
-  } finally {
-    if (recorder.state !== 'inactive') {
-      try {
-        recorder.stop()
-      } catch {
-        // The recorder may already be stopping after an error or timeout.
-      }
-    }
-    stream.getTracks().forEach((track) => track.stop())
-  }
-
-  if (blob.size <= 0) {
-    throw new Error('Story video export produced an empty file.')
-  }
-  onProgress?.(1, 'finalizing')
-
-  return {
-    blob,
-    width,
-    height: panelHeight,
-    mimeType: videoFormat.mimeType,
-    extension: videoFormat.extension,
-  }
-}
-
-async function loadPanelFrames(layout: Layout, shots: Record<string, Shot>): Promise<LoadedPanelFrame[]> {
-  return Promise.all(
-    layout.panels.map(async (panel) => ({
-      panel,
-      shot: shots[panel.id] ?? null,
-      image: shots[panel.id] ? await loadImage(shots[panel.id].dataUrl) : null,
-    })),
-  )
-}
-
-function drawStoryVideoFrame(
-  context: CanvasRenderingContext2D,
-  layout: Layout,
-  images: LoadedPanelFrame[],
-  settings: Settings,
-  width: number,
-  panelHeight: number,
-  progress: number,
-) {
-  context.clearRect(0, 0, width, panelHeight)
-  context.fillStyle = layout.custom ? settings.background : settings.borderColor
-  context.fillRect(0, 0, width, panelHeight)
-  const styleScale = width / 480
-  const gutter = settings.gutters * styleScale
-  const outer = settings.border * styleScale
-
-  images.forEach(({ panel, image, shot }, index) => {
-    const motion = panelRevealMotion(panel, index, images.length, progress, settings.videoSpeed, width, panelHeight)
-    context.save()
-    context.globalAlpha = motion.alpha
-    context.translate(motion.x, motion.y)
-    drawPanel(context, panel, image, shot, width, panelHeight, outer, gutter, settings, styleScale)
-    context.restore()
-  })
-
-  const decorationAlpha = easeOutCubic(clamp((progress - 0.56) / 0.24, 0, 1))
-  if (decorationAlpha > 0) {
-    context.save()
-    context.globalAlpha = decorationAlpha
     for (const divider of layout.dividers ?? []) {
-      drawDividerGap(
-        context,
-        divider,
-        width,
-        panelHeight,
-        outer,
-        gutter,
-        settings.borderColor,
-      )
+      drawDividerGap(context, divider, width, panelHeight, outer, gutter, settings.borderColor)
     }
-    context.restore()
+
+    if (settings.caption.trim()) {
+      const captionHeight = Math.min(130, panelHeight * 0.22)
+      const captionY = panelHeight - captionHeight - outer - gutter / 2
+      context.fillStyle = '#ffffff'
+      context.fillRect(outer + gutter / 2, captionY, width - outer * 2 - gutter, captionHeight - gutter)
+      context.strokeStyle = settings.borderColor
+      context.lineWidth = settings.border > 0 ? Math.max(3, settings.border * 3) : 0
+      context.strokeRect(outer + gutter / 2, captionY, width - outer * 2 - gutter, captionHeight - gutter)
+      context.fillStyle = settings.captionColor
+      context.font = '700 68px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+      context.textAlign = 'center'
+      context.textBaseline = 'middle'
+      context.fillText(settings.caption, width / 2, captionY + captionHeight / 2, width - 130)
+    }
+
+    drawOuterBezel(context, width, panelHeight, outer, settings)
+
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+    if (!blob) {
+      throw new Error('PNG render failed.')
+    }
+    return blob
+  } finally {
+    canvas.width = 0
+    canvas.height = 0
   }
-
-  if (settings.caption.trim()) {
-    const captionAlpha = easeOutCubic(clamp((progress - 0.74) / 0.2, 0, 1))
-    const captionHeight = Math.min(96, panelHeight * 0.18)
-    const captionY = panelHeight - captionHeight - outer - gutter / 2 + (1 - captionAlpha) * 42
-    context.save()
-    context.globalAlpha = captionAlpha
-    context.fillStyle = '#ffffff'
-    context.fillRect(outer + gutter / 2, captionY, width - outer * 2 - gutter, captionHeight - gutter)
-    context.strokeStyle = settings.borderColor
-    context.lineWidth = Math.max(2, settings.border * styleScale)
-    context.strokeRect(outer + gutter / 2, captionY, width - outer * 2 - gutter, captionHeight - gutter)
-    context.fillStyle = settings.captionColor
-    context.font = `700 ${Math.round(50 * (width / 1080))}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`
-    context.textAlign = 'center'
-    context.textBaseline = 'middle'
-    context.fillText(settings.caption, width / 2, captionY + captionHeight / 2, width - 96)
-    context.restore()
-  }
-
-  drawOuterBezel(context, width, panelHeight, outer, settings)
-}
-
-function panelRevealMotion(
-  panel: Panel,
-  index: number,
-  count: number,
-  progress: number,
-  speed: number,
-  width: number,
-  panelHeight: number,
-) {
-  const start = count <= 1 ? 0 : (index / Math.max(1, count - 1)) * 0.36
-  const span = clamp(0.54 / clamp(speed, 0.6, 1.8), 0.3, 0.8)
-  const local = easeOutBack(clamp((progress - start) / span, 0, 1))
-  const center = panelCentroid(panel)
-  const xDirection = center.x < 0.45 ? -1 : center.x > 0.55 ? 1 : index % 2 === 0 ? -1 : 1
-  const yDirection = center.y < 0.42 ? -1 : center.y > 0.58 ? 1 : index % 2 === 0 ? -1 : 1
-  return {
-    x: (1 - local) * xDirection * width * 0.72,
-    y: (1 - local) * yDirection * panelHeight * 0.12,
-    alpha: clamp(local * 1.15, 0, 1),
-  }
-}
-
-function bestStoryVideoFormat(): StoryVideoFormat {
-  const formats: StoryVideoFormat[] = [
-    { mimeType: 'video/mp4;codecs=avc1.42E01E', extension: 'mp4' },
-    { mimeType: 'video/mp4;codecs=avc1.4D401E', extension: 'mp4' },
-    { mimeType: 'video/mp4;codecs=avc1.640028', extension: 'mp4' },
-    { mimeType: 'video/mp4;codecs=h264', extension: 'mp4' },
-    { mimeType: 'video/mp4', extension: 'mp4' },
-  ]
-  const supported = formats.find((format) => MediaRecorder.isTypeSupported(format.mimeType))
-  if (supported) {
-    return supported
-  }
-
-  throw new Error('MP4 story video export is unavailable in this browser.')
 }
 
 function drawOuterBezel(
@@ -5267,36 +4943,6 @@ function drawOuterBezel(
   drawRoundedRect(context, inset, inset, width - inset * 2, panelHeight - inset * 2, settings.radius * (width / 480))
   context.stroke()
   context.restore()
-}
-
-function easeOutCubic(value: number) {
-  return 1 - Math.pow(1 - value, 3)
-}
-
-function easeOutBack(value: number) {
-  const c1 = 1.70158
-  const c3 = c1 + 1
-  return 1 + c3 * Math.pow(value - 1, 3) + c1 * Math.pow(value - 1, 2)
-}
-
-function wait(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms))
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string) {
-  return new Promise<T>((resolve, reject) => {
-    const timeoutId = window.setTimeout(() => reject(new Error(message)), ms)
-    promise.then(
-      (value) => {
-        window.clearTimeout(timeoutId)
-        resolve(value)
-      },
-      (error) => {
-        window.clearTimeout(timeoutId)
-        reject(error)
-      },
-    )
-  })
 }
 
 function drawPanel(

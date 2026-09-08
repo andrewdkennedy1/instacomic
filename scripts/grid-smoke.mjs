@@ -173,7 +173,13 @@ try {
   await page.getByRole('button', { name: 'Controls', exact: true }).click()
   await page.getByRole('button', { name: 'Edit My flow grid', exact: true }).click()
   await page.getByRole('tab', { name: 'Photos', exact: true }).click()
-  await page.getByRole('button', { name: 'Paper', exact: true }).click()
+  assert.equal(await page.getByRole('button', { name: /^(Clean|Paper|Bold)$/ }).count(), 0)
+  await page.getByRole('tab', { name: 'Style', exact: true }).click()
+  await page.getByLabel('Paper', { exact: true }).evaluate(input => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, '#f3ede2')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    input.dispatchEvent(new Event('change', { bubbles: true }))
+  })
   await page.getByRole('button', { name: 'Update layout', exact: true }).click()
   await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
   assert.equal(await page.locator('.live-strip').evaluate((strip) => strip.style.getPropertyValue('--paper')), '#f3ede2')
@@ -193,6 +199,8 @@ try {
   await page.getByRole('button', { name: 'Continue editing' }).click()
   await page.locator('.start-screen').waitFor({ state: 'detached' })
   await page.getByRole('button', { name: 'Controls', exact: true }).click()
+  // Select the legacy template; recovery correctly keeps the active project's own geometry.
+  await page.getByRole('button', { name: 'Use My flow layout, 4 panels', exact: true }).click()
   await page.getByRole('button', { name: 'Edit My flow grid' }).click()
   await page.getByRole('tab', { name: 'Adjust', exact: true }).click()
   assert.equal(await page.getByRole('button', { name: 'Extend divider to canvas edges' }).count(), 1)
@@ -240,7 +248,7 @@ try {
   assert.equal(await camera.locator('.start-screen').isVisible(), true)
   await camera.close()
   assert.deepEqual(errors, [])
-  console.log('Grid editing, undo/redo, responsive dock, preview, focus, legacy photo mapping, appearance presets, and camera races passed.')
+  console.log('Grid editing, undo/redo, responsive dock, preview, focus, legacy photo mapping, manual appearance controls, removed presets, and camera races passed.')
 } finally {
   await browser.close()
 }

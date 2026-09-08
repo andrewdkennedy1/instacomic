@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { installNativeShare, sharePreparedPhotos } from './native-share-fixture.mjs'
 import { inflateSync } from 'node:zlib'
 import { chromium } from 'playwright'
 
@@ -13,6 +14,7 @@ const page = await browser.newPage({
 const errors = []
 page.on('pageerror', (error) => errors.push(error.message))
 
+await installNativeShare(page)
 await enableStandalone(page)
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
@@ -34,9 +36,9 @@ await page.waitForFunction(() => document.querySelector('.motion-drawer').getBou
 await page.locator('.start-screen').waitFor({ state: 'detached' })
 const landscapeLiveFormat = await page.locator('.live-strip').getAttribute('data-page-format')
 const landscapeLiveAspect = await page.locator('.live-strip').boundingBox().then((box) => (box ? box.height / box.width : 0))
-const landscapeDownload = await downloadPng(page)
-const landscapeDownloadPath = await landscapeDownload.path()
-const landscapeExportedSize = pngSize(landscapeDownloadPath)
+const landscapePhoto = await sharePng(page)
+const landscapePhotoPath = landscapePhoto.path
+const landscapeExportedSize = pngSize(landscapePhotoPath)
 await page.reload({ waitUntil: 'networkidle' })
 await page.getByRole('button', { name: 'New comic', exact: true }).click()
 await page.getByRole('button', { name: /9:16/ }).tap()
@@ -89,9 +91,9 @@ const stickerElementCount = await page.locator('[data-sticker-id], .sticker').co
 await closeDrawer(page)
 const drawerHidden = await page.locator('.motion-drawer').boundingBox().then((box) => box && box.y > 830)
 
-const download = await downloadPng(page)
-const downloadPath = await download.path()
-const exportedSize = pngSize(downloadPath)
+const shared = await sharePng(page)
+const sharedPath = shared.path
+const exportedSize = pngSize(sharedPath)
 const manifest = await (await page.request.get(new URL('/manifest.webmanifest', baseUrl).toString())).json()
 const bodyOverflow = await page.evaluate(() => getComputedStyle(document.body).overflow)
 await openDrawer(page)
@@ -256,10 +258,10 @@ await page.locator('.creator-fullscreen').waitFor({ state: 'detached' })
 const liveStripImage = decodePngBuffer(await page.locator('.live-strip').screenshot())
 const liveCustomDividerRun = paperRunFromImage(liveStripImage, Math.round(liveStripImage.width * 0.5), Math.round(liveStripImage.height * 0.24), '#203040')
 const liveCustomBezelPixel = pixelAt(liveStripImage, Math.round(liveStripImage.width * 0.5), 0)
-const customDownload = await downloadPng(page)
-const customDownloadPath = await customDownload.path()
-const customExportedSize = pngSize(customDownloadPath)
-const customExportedImage = decodePng(customDownloadPath)
+const customPhoto = await sharePng(page)
+const customPhotoPath = customPhoto.path
+const customExportedSize = pngSize(customPhotoPath)
+const customExportedImage = decodePng(customPhotoPath)
 const customDividerRun = paperRunFromImage(customExportedImage, Math.round(customExportedSize.width * 0.5), Math.round(customExportedSize.height * 0.24), '#203040')
 const customBezelPixel = pixelAt(customExportedImage, Math.round(customExportedSize.width * 0.5), 3)
 await waitForDraftRevision(page, draftRevisionBeforeFinalStyle + 1)
@@ -342,7 +344,7 @@ const result = {
   stickerTabCount,
   stickerElementCount,
   drawerHidden,
-  sharedFile: download.suggestedFilename(),
+  sharedFile: shared.name,
   exportedSize,
   manifestName: manifest.name,
   bodyOverflow,
@@ -373,7 +375,7 @@ const result = {
   liveBorderAfterLayoutSave,
   liveAspectAfterLayoutSave,
   storedLayoutInfo,
-  customSharedFile: customDownload.suggestedFilename(),
+  customSharedFile: customPhoto.name,
   customExportedSize,
   liveCustomDividerRun,
   liveCustomBezelPixel,
@@ -421,7 +423,7 @@ const failures = [
   result.stickerTabCount === 0 ? null : 'sticker drawer tab is still visible',
   result.stickerElementCount === 0 ? null : 'sticker elements are still present',
   result.drawerHidden ? null : 'closed drawer is still visible',
-  result.sharedFile === 'instacomic.png' ? null : 'share fallback did not produce instacomic.png',
+  result.sharedFile === 'slide-01.png' ? null : 'native share did not receive the numbered PNG',
   result.exportedSize.width === 1440 && result.exportedSize.height === 2560 ? null : '9:16 export dimensions are incorrect',
   result.manifestName === 'Instacomic' ? null : 'manifest did not load',
   result.bodyOverflow === 'hidden' ? null : 'body is scrollable',
@@ -460,7 +462,7 @@ const failures = [
     ? null
     : 'edited custom grid border settings were not applied to the live layout',
   Math.abs(result.liveAspectAfterLayoutSave - 16 / 9) < 0.08 ? null : 'saved custom layout did not keep the live canvas at 9:16',
-  result.customSharedFile === 'instacomic.png' ? null : 'custom layout share fallback did not produce instacomic.png',
+  result.customSharedFile === 'slide-01.png' ? null : 'custom layout native share did not receive the numbered PNG',
   result.customExportedSize.width === 1440 && result.customExportedSize.height === 2560 ? null : 'custom 9:16 export dimensions are incorrect',
   result.liveCustomDividerRun.width >= 12 ? null : 'custom layout live preview did not render the selected gap',
   isDarkPixel(result.liveCustomBezelPixel) ? null : 'custom layout live preview did not render the outer bezel',
@@ -571,7 +573,7 @@ function decodePng(path) {
 function decodePngBuffer(buffer) {
   const signature = '89504e470d0a1a0a'
   if (buffer.subarray(0, 8).toString('hex') !== signature) {
-    throw new Error('Downloaded file is not a PNG')
+    throw new Error('Shared file is not a PNG')
   }
 
   let width = 0
@@ -728,18 +730,18 @@ async function openDrawer(page) {
   }
 }
 
-async function downloadPng(page) {
+async function sharePng(page) {
   if ((await page.locator('.motion-drawer.is-open').count()) === 0) {
     await page.getByRole('button', { name: 'Open export controls' }).tap()
     await page.locator('.motion-drawer.is-open').waitFor()
   }
   await page.getByRole('tab', { name: 'Export', exact: true }).tap()
-  const [download] = await Promise.all([
-    page.waitForEvent('download'),
-    page.getByRole('button', { name: 'Download PNG' }).tap(),
-  ])
+  const [shared] = await sharePreparedPhotos(page)
+  mkdirSync('test-results', { recursive: true })
+  const path = `test-results/shared-${Date.now()}.png`
+  writeFileSync(path, Buffer.from(shared.png, 'base64'))
   await closeDrawer(page)
-  return download
+  return { path, name: shared.name }
 }
 
 async function closeDrawer(page) {

@@ -1,7 +1,7 @@
 {
   "name": "Instacomic",
   "short_name": "Instacomic",
-  "description": "Snap live camera photos into customizable comic strip layouts with PNG and story video export.",
+  "description": "Create photo grids and Instagram carousels, save projects in your browser, and share all your slides as photos.",
   "start_url": "/",
   "scope": "/",
   "display": "fullscreen",

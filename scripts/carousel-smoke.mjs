@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
+import { installNativeShare, sharePreparedPhotos } from './native-share-fixture.mjs'
 import { chromium, webkit } from 'playwright'
 
 mkdirSync('test-results', { recursive: true })
@@ -7,6 +8,7 @@ for (const engine of [chromium, webkit]) {
  const browser = await engine.launch()
  try {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, acceptDownloads: true })
+  await installNativeShare(page)
   const errors = []
   page.on('pageerror', error => errors.push(error.message))
   await page.goto(process.env.SMOKE_BASE_URL ?? 'http://127.0.0.1:5173')
@@ -65,22 +67,12 @@ for (const engine of [chromium, webkit]) {
   assert.equal(await thumbnails.count(), 4)
   await page.getByRole('button', { name: 'Edit slide 2', exact: true }).click()
   await page.screenshot({ path: `test-results/carousel-${engine.name()}.png` })
-  const downloadPromise = page.waitForEvent('download')
-  await page.getByRole('button', { name: 'Export carousel ZIP', exact: true }).click()
-  const download = await downloadPromise
-  const path = `test-results/carousel-${engine.name()}.zip`
-  await download.saveAs(path)
-  const zip = readFileSync(path)
-  const entries = []
-  let offset = 0
-  while (zip.readUInt32LE(offset) === 0x04034b50) {
-   const size = zip.readUInt32LE(offset + 18), nameLength = zip.readUInt16LE(offset + 26), extraLength = zip.readUInt16LE(offset + 28)
-   const name = zip.subarray(offset + 30, offset + 30 + nameLength).toString()
-   const start = offset + 30 + nameLength + extraLength
-   const data = zip.subarray(start, start + size)
-   assert.equal(data.readUInt32BE(16), 1440)
-   assert.equal(data.readUInt32BE(20), 1800)
-   entries.push({ name, png: data.toString('base64') }); offset = start + size
+  await page.getByRole('tab', { name: 'Export', exact: true }).click()
+  const entries = await sharePreparedPhotos(page, 4)
+  for (const entry of entries) {
+   const png = Buffer.from(entry.png, 'base64')
+   assert.equal(png.readUInt32BE(16), 1440)
+   assert.equal(png.readUInt32BE(20), 1800)
   }
   assert.deepEqual(entries.map(e => e.name), ['slide-01.png', 'slide-02.png', 'slide-03.png', 'slide-04.png'])
   const colors = await page.evaluate(async entries => Promise.all(entries.slice(1, 3).map(async entry => {
@@ -124,6 +116,6 @@ for (const engine of [chromium, webkit]) {
   await page.locator('.start-screen').waitFor({ state: 'detached' })
   await page.locator('.live-panel img').waitFor()
   assert.deepEqual(errors, [])
-  console.log(`${engine.name()}: project library, four-slide recovery, add/duplicate/reorder/remove, panorama undo, numbered ZIP pixels and independent deletion passed`)
+  console.log(`${engine.name()}: project library, four-slide recovery, add/duplicate/reorder/remove, panorama undo, all-slide native sharing with numbered PNG pixels and independent deletion passed`)
  } finally { await browser.close() }
 }

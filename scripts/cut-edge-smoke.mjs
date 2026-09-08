@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync } from 'node:fs'
+import { installNativeShare, sharePreparedPhotos } from './native-share-fixture.mjs'
 import { chromium, webkit } from 'playwright'
 
 const baseUrl = process.env.SMOKE_BASE_URL ?? 'http://127.0.0.1:4174'
@@ -48,6 +49,7 @@ for (const engine of [chromium, webkit]) {
   const browser = await engine.launch()
   try {
     const page = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+    await installNativeShare(page)
     await page.addInitScript(() => {
       navigator.mediaDevices.getUserMedia = async () => { throw new DOMException('No camera', 'NotFoundError') }
     })
@@ -81,10 +83,8 @@ for (const engine of [chromium, webkit]) {
     await checkEdges(page, await page.locator('.live-strip').screenshot(), line, 24, `${engine.name()} live canvas`)
     await page.getByRole('button', { name: 'Controls', exact: true }).click()
     await page.getByRole('tab', { name: 'Export', exact: true }).click()
-    const pending = page.waitForEvent('download')
-    await page.getByRole('button', { name: 'Download PNG', exact: true }).click()
-    const download = await pending
-    await checkEdges(page, readFileSync(await download.path()), line, 72, `${engine.name()} PNG export`)
+    const [shared] = await sharePreparedPhotos(page)
+    await checkEdges(page, Buffer.from(shared.png, 'base64'), line, 72, `${engine.name()} PNG share`)
     await page.getByRole('tab', { name: 'Layout', exact: true }).click()
     await page.getByRole('button', { name: 'Edit Custom 1 grid', exact: true }).click()
     await page.getByRole('tab', { name: 'Border', exact: true }).click()
@@ -97,9 +97,8 @@ for (const engine of [chromium, webkit]) {
     await checkEdges(page, await page.locator('.live-strip').screenshot(), line, 24, `${engine.name()} outlined live canvas`, 6)
     await page.getByRole('button', { name: 'Controls', exact: true }).click()
     await page.getByRole('tab', { name: 'Export', exact: true }).click()
-    const outlinedDownload = page.waitForEvent('download')
-    await page.getByRole('button', { name: 'Download PNG', exact: true }).click()
-    await checkEdges(page, readFileSync(await (await outlinedDownload).path()), line, 72, `${engine.name()} outlined PNG export`, 18)
+    const [outlined] = await sharePreparedPhotos(page)
+    await checkEdges(page, Buffer.from(outlined.png, 'base64'), line, 72, `${engine.name()} outlined PNG share`, 18)
     console.log(`${engine.name()}: six diagonal angles, outlined editor, and PNG exports with/without outlines passed`)
   } finally {
     await browser.close()
