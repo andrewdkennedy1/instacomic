@@ -53,6 +53,7 @@ for (const engine of [chromium, webkit]) {
     })
     await page.goto(baseUrl)
     await page.getByRole('button', { name: 'Start creating' }).click()
+    await page.getByRole('button', { name: 'Done editing comic', exact: true }).click()
     await page.getByRole('button', { name: 'Controls', exact: true }).click()
     await page.getByRole('tab', { name: 'Style', exact: true }).click()
     await page.locator('.motion-drawer-style label').filter({ hasText: 'Line color' }).locator('input[type="color"]').evaluate(input => {

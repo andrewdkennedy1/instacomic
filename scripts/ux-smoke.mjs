@@ -38,6 +38,7 @@ const setupGeometry = await page.evaluate(() => {
 
 await page.setViewportSize({ width: 390, height: 844 })
 await page.getByRole('button', { name: 'Start creating' }).tap()
+await page.getByRole('button', { name: 'Done editing comic', exact: true }).click()
 await page.locator('.start-screen').waitFor({ state: 'detached' })
 
 const measurements = []
@@ -104,7 +105,7 @@ const failures = [
   setupGeometry.horizontalOverflow ? 'small-phone setup scrolls horizontally' : null,
   setupGeometry.scrollableWhenNeeded ? null : 'small-phone setup cannot scroll vertically when its content exceeds the viewport',
   setupGeometry.formatCount === 4 ? null : 'setup does not expose all canvas formats',
-  setupGeometry.gridCount === 4 ? null : 'setup does not expose the starting-grid choices',
+  setupGeometry.gridCount === 0 ? null : 'new projects should start blank without a preset grid',
   ...measurements.flatMap((measurement) => [
     Math.abs(measurement.aspect - measurement.expectedAspect) < 0.01
       ? null

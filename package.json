@@ -17,7 +17,10 @@
     "smoke:ux": "node scripts/ux-smoke.mjs",
     "smoke:studio": "node scripts/studio-smoke.mjs",
     "smoke:grid": "node scripts/grid-smoke.mjs",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "smoke:carousel": "node scripts/carousel-smoke.mjs",
+    "smoke:blank": "node scripts/blank-grid-smoke.mjs",
+    "smoke:migration": "node scripts/project-migration-smoke.mjs"
   },
   "devDependencies": {
     "@types/react": "^19.2.15",

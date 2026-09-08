@@ -14,6 +14,8 @@ page.on('pageerror', (error) => errors.push(error.message))
 try {
   await page.goto(baseUrl, { waitUntil: 'networkidle' })
   await page.getByRole('button', { name: 'Start creating' }).tap()
+  await page.getByRole('button', { name: 'Use Shard layout, 5 panels', exact: true }).click()
+  await page.getByRole('button', { name: 'Done editing comic', exact: true }).click()
   await page.locator('.start-screen').waitFor({ state: 'detached' })
 
   const exportChecks = []
@@ -155,7 +157,7 @@ async function readDraft(page) {
   return page.evaluate(
     () =>
       new Promise((resolve, reject) => {
-        const request = indexedDB.open('instacomic', 1)
+        const request = indexedDB.open('instacomic')
         request.onerror = () => reject(request.error)
         request.onsuccess = () => {
           const database = request.result
@@ -173,7 +175,7 @@ async function waitForSavedPhotoCount(page, expectedCount) {
   await page.waitForFunction(
     async (count) => {
       const record = await new Promise((resolve, reject) => {
-        const request = indexedDB.open('instacomic', 1)
+        const request = indexedDB.open('instacomic')
         request.onerror = () => reject(request.error)
         request.onsuccess = () => {
           const database = request.result

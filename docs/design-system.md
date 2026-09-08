@@ -4,9 +4,9 @@ The studio uses an editorial type hierarchy, warm ivory controls, a charcoal art
 
 ## Product structure
 
-- **Setup:** a live layout specimen, format and starting-grid choices, then Start creating. A recovered draft replaces the setup form with Continue and a clearly explained new-comic action. Installation stays optional.
+- **Setup:** a blank-page specimen and format choice, then Start creating with the bottom grid picker open. Returning users see their project library. A recovered draft replaces the setup form with Continue and a clearly explained new-comic action. Installation stays optional.
 - **Studio:** desktop offers direct Layout and Style access plus a panel navigator. Mobile uses a five-action capture dock. Selecting a photo replaces that dock with its editing tools without resizing the artwork.
-- **Controls:** one modal sheet for Layout and Export. Built-in templates also have a Style tab; custom grids open their Style controls inside the grid editor. Desktop anchors it beside the artwork; mobile uses a bottom sheet. Sections use spacing and separators instead of nested cards. Done, Escape, the backdrop, and dragging the title area dismiss the sheet.
+- **Controls:** one modal sheet for Layout, Slides and Export. Layout offers 27 choices in four columns; Layout and Slides reserve space below the canvas in a compact bottom drawer. Built-in templates also have a Style tab; custom grids open their Style controls inside the grid editor. Desktop anchors it beside the artwork; mobile uses a bottom sheet. Sections use spacing and separators instead of nested cards. Done, Escape, the backdrop, and dragging the title area dismiss the sheet.
 - **Grid creator:** a full canvas and seven compact tool pages. Phone, tablet and desktop reserve the same 224px bottom drawer with swipe navigation; short landscape places that compact drawer beside the artwork. Each page fits without vertical scrolling and switching tools leaves the preview fixed. Small endpoint cues retain 44px hit targets and disappear in Preview.
 - **Export:** completeness information precedes the image actions. Story-video settings and progress follow as a separate section. Existing explicit download and share behavior remains intact.
 
@@ -41,3 +41,11 @@ When extending the UI, reuse the semantic tokens and shared fields, preserve the
 ## Canvas appearance
 
 Custom grids store their paper, corner, caption and fit settings with the saved grid. The editor stages these settings with geometry, supports Undo/Redo, and commits them together on Save or Update. Dividers are a single solid stroke in the shared line color; the outside border has an independent toggle and width. Its switch does not add internal strokes or alter divider width. Existing border-width fields continue to load as the outside-frame width.
+
+## Local projects and carousels
+
+IndexedDB version 2 adds a project library alongside the current-draft pointer. Project saves and their photo references commit atomically. Photos use immutable IDs and are written once as ArrayBuffers; older Blob assets still load. Cleanup retains the union of photos referenced by the library and current draft. Existing drafts migrate before a new project can replace the current pointer.
+
+Each project stores an ordered collection of up to 20 slides. Slides preserve their layout, photos and transforms, caption, and colors; the format applies to the whole carousel. The same snapshot history supports slide creation, duplication, ordering, removal and panorama creation. The panorama tool appends 2–5 cropped slides after the source without deleting it. ZIP exports contain numbered PNGs in visible slide order.
+
+`scripts/blank-grid-smoke.mjs` checks blank startup, the grid catalog, and preview visibility across five viewport sizes. `scripts/carousel-smoke.mjs` checks the library, durable photos in Chromium and WebKit, slide operations, panorama export pixels, ZIP ordering and independent project deletion. `scripts/project-migration-smoke.mjs` verifies version 1 Blob drafts survive migration and starting another project.

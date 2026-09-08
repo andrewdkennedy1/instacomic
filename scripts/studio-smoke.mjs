@@ -20,7 +20,8 @@ try {
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, `Setup overflows at ${width}px`)
   }
   await page.getByRole('button', { name: 'Start creating', exact: true }).click()
-  await page.getByRole('button', { name: 'Try camera', exact: true }).waitFor()
+  await page.getByRole('button', { name: 'Use Shard layout, 5 panels', exact: true }).click()
+  await page.getByRole('button', { name: 'Done editing comic', exact: true }).click()
   const navigation = page.getByRole('navigation', { name: 'Panel navigation' })
   await navigation.getByRole('button', { name: 'Go to panel 3', exact: true }).click()
   assert.equal(await page.locator('.live-panel.is-live').getAttribute('data-panel-id'), '3')

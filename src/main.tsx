@@ -6,17 +6,21 @@ import { useContentAspect, useDialogFocus, useDraftHistory } from './editor-hook
 import { cutAt, cutControls, cutPaintSpan, extendCut } from './grid-geometry'
 import {
   clearDraftData,
+  listProjects,
+  deleteProject,
+  type SavedProject,
   loadDraftAssets,
   loadDraftRecord,
   saveDraftRecord,
   type DraftAssetRecord,
   type DraftRecord,
 } from './draft-store'
+import { createZip } from './carousel-export'
 import './studio.css'
 import { ActionIcon, ToolIcon, Brand, SettingsSection, RangeField, ColorField } from './ui'
 
 type PanelFit = 'cover' | 'contain'
-type DrawerTab = 'layout' | 'style' | 'export'
+type DrawerTab = 'layout' | 'style' | 'slides' | 'export'
 type CustomLinePreset = 'diagonal' | 'vertical' | 'horizontal'
 type PageFormatId = '4:5' | '3:4' | '4:3' | '9:16'
 
@@ -152,7 +156,7 @@ type PhotoDragState = {
   startAngle?: number
 }
 
-type ProjectSnapshot = {
+type SlideSnapshot = {
   layout: Layout
   pageFormatId: PageFormatId
   settings: Settings
@@ -160,10 +164,19 @@ type ProjectSnapshot = {
   activePanelId: string | null
 }
 
+type ProjectSnapshot = SlideSnapshot & {
+  projectId?: string
+  projectName?: string
+  carousel?: { slides: SlideSnapshot[]; activeIndex: number }
+}
+
 type StoredShot = Omit<Shot, 'dataUrl'>
 
-type StoredProjectDocument = Omit<ProjectSnapshot, 'shotCache'> & {
-  shotCache: Array<StoredShot | null>
+type StoredSlide = Omit<SlideSnapshot, 'shotCache'> & { shotCache: Array<StoredShot | null> }
+type StoredProjectDocument = StoredSlide & {
+  projectId?: string
+  projectName?: string
+  carousel?: { slides: StoredSlide[]; activeIndex: number }
 }
 
 type StoredProjectDraft = DraftRecord<StoredProjectDocument>
@@ -234,14 +247,18 @@ function cloneLayout(layout: Layout): Layout {
   }
 }
 
+function cloneSlide(snapshot: SlideSnapshot): SlideSnapshot {
+  return { layout: cloneLayout(snapshot.layout), pageFormatId: snapshot.pageFormatId,
+    settings: { ...snapshot.settings }, shotCache: snapshot.shotCache.map(shot => shot ? cloneShot(shot) : null), activePanelId: snapshot.activePanelId }
+}
+
 function cloneProjectSnapshot(snapshot: ProjectSnapshot): ProjectSnapshot {
-  return {
-    layout: cloneLayout(snapshot.layout),
-    pageFormatId: snapshot.pageFormatId,
-    settings: { ...snapshot.settings },
-    shotCache: snapshot.shotCache.map((shot) => (shot ? cloneShot(shot) : null)),
-    activePanelId: snapshot.activePanelId,
-  }
+  return { ...cloneSlide(snapshot), projectId: snapshot.projectId, projectName: snapshot.projectName,
+    carousel: snapshot.carousel ? { activeIndex: snapshot.carousel.activeIndex, slides: snapshot.carousel.slides.map(cloneSlide) } : undefined }
+}
+
+function projectShots<T extends { shotCache: Array<Shot | StoredShot | null>; carousel?: { slides: Array<{ shotCache: Array<Shot | StoredShot | null> }> } }>(snapshot: T) {
+  return (snapshot.carousel?.slides ?? [snapshot]).flatMap(slide => slide.shotCache)
 }
 
 function mergeLayoutShotsIntoCache(layout: Layout, shots: Record<string, Shot>, cache: Array<Shot | undefined>) {
@@ -349,7 +366,43 @@ function layoutStyleSettings(layout: Layout): Partial<Settings> {
   }
 }
 
+function rowGrid(id: string, name: string, rows: number[]): Layout {
+  return { id, name, panels: rows.flatMap((columns, row) =>
+    Array.from({ length: columns }, (_, column) => ({
+      id: `${row}-${column}`, x: column / columns, y: row / rows.length,
+      w: 1 / columns, h: 1 / rows.length,
+    }))) }
+}
+
+function turnGrid(layout: Layout, id: string, name: string): Layout {
+  return { id, name, panels: layout.panels.map(panel => ({ ...panel, x: panel.y, y: panel.x, w: panel.h, h: panel.w })) }
+}
+
+const blankLayout: Layout = { id: 'blank', name: 'Blank', borderThickness: 0, panels: [{ id: '1', x: 0, y: 0, w: 1, h: 1 }] }
+const gridPresets: Layout[] = [
+  rowGrid('two-columns', 'Side by side', [2]),
+  rowGrid('two-rows', 'Stacked', [1, 1]),
+  rowGrid('top-story', 'Top story', [1, 2]),
+  turnGrid(rowGrid('right-story', 'Right story', [1, 2]), 'right-story', 'Right story'),
+  turnGrid(rowGrid('left-story', 'Left story', [2, 1]), 'left-story', 'Left story'),
+  rowGrid('bottom-story', 'Bottom story', [2, 1]),
+  rowGrid('three-columns', 'Three columns', [3]),
+  rowGrid('three-rows', 'Three rows', [1, 1, 1]),
+  rowGrid('top-three', 'Top + three', [1, 3]),
+  turnGrid(rowGrid('side-three', 'Side + three', [1, 3]), 'side-three', 'Side + three'),
+  rowGrid('three-bottom', 'Three + bottom', [3, 1]),
+  turnGrid(rowGrid('three-side', 'Three + side', [3, 1]), 'three-side', 'Three + side'),
+  rowGrid('four-rows', 'Four rows', [1, 1, 1, 1]),
+  rowGrid('four-columns', 'Four columns', [4]),
+  rowGrid('five-panels', 'Five panels', [2, 3]),
+  rowGrid('six-panels', 'Six panels', [2, 2, 2]),
+  rowGrid('six-wide', 'Six wide', [3, 3]),
+  rowGrid('nine-panels', 'Nine panels', [3, 3, 3]),
+]
+
 const layouts: Layout[] = [
+  blankLayout,
+  ...gridPresets,
   {
     id: 'shard',
     name: 'Shard',
@@ -452,6 +505,15 @@ const ROTATION_SNAP_RELEASE_DEGREES = 8
 
 function isValidStoredProjectDraft(value: DraftRecord<StoredProjectDocument>): value is StoredProjectDraft {
   const document = value?.document
+  if (document?.carousel) {
+    const carousel = document.carousel
+    if (!Array.isArray(carousel.slides) || carousel.slides.length < 1 || carousel.slides.length > 20 ||
+      !Number.isInteger(carousel.activeIndex) || carousel.activeIndex < 0 || carousel.activeIndex >= carousel.slides.length ||
+      !carousel.slides.every(slide => !!slide && isValidStoredProjectDraft({ ...value, document: {
+        layout: slide.layout, pageFormatId: slide.pageFormatId, settings: slide.settings,
+        shotCache: slide.shotCache, activePanelId: slide.activePanelId,
+      } }))) return false
+  }
   const validNumber = (candidate: unknown) => typeof candidate === 'number' && Number.isFinite(candidate)
   const validPoint = (candidate: unknown) =>
     Array.isArray(candidate) && candidate.length === 2 && candidate.every((coordinate) => validNumber(coordinate))
@@ -659,6 +721,18 @@ function App() {
   const [appContext, setAppContext] = useState<AppContext>(() => getAppContext())
   const [storageReady, setStorageReady] = useState(false)
   const [savedDraft, setSavedDraft] = useState<StoredProjectDraft | null>(null)
+  const [projectId, setProjectId] = useState(createAssetId)
+  const [projectName, setProjectName] = useState('Untitled project')
+  const [savedProjects, setSavedProjects] = useState<SavedProject<StoredProjectDocument>[]>([])
+  const slidesRef = useRef<SlideSnapshot[]>([])
+  const activeSlideRef = useRef(0)
+  const [carouselVersion, setCarouselVersion] = useState(0)
+  const [carouselExporting, setCarouselExporting] = useState(false)
+  const [projectBusy, setProjectBusy] = useState(false)
+  const [projectError, setProjectError] = useState<string | null>(null)
+  const [projectDeleteId, setProjectDeleteId] = useState<string | null>(null)
+  const [panoramaCount, setPanoramaCount] = useState(2)
+
   const [draftPhase, setDraftPhase] = useState<DraftPhase>('checking')
   const [newProjectRequested, setNewProjectRequested] = useState(() => new URLSearchParams(window.location.search).has('new'))
   const [historyCounts, setHistoryCounts] = useState({ undo: 0, redo: 0 })
@@ -696,6 +770,7 @@ function App() {
   const startRequestedRef = useRef(false)
   const photoOperationCountRef = useRef(0)
   const imageExportingRef = useRef(false)
+  const exportAssetIdsRef = useRef<Set<string>>(new Set())
   const dragControls = useDragControls()
 
   const allLayouts = useMemo(() => [...layouts, ...customLayouts], [customLayouts])
@@ -704,7 +779,7 @@ function App() {
   const selectedShot = activePanelId ? shots[activePanelId] ?? null : null
   const selectedShotFit = selectedShot?.fit ?? settings.fit
   const showPhotoActions = !!selectedShot && !photoActionsDeferred && !drawerOpen && !creatorOpen && !videoRendering && !readyVideo
-  const savedDraftPhotoCount = savedDraft?.document.shotCache.filter(Boolean).length ?? 0
+  const savedDraftPhotoCount = savedDraft ? projectShots(savedDraft.document).filter(Boolean).length : 0
   const pageStyle = {
     '--page-width': pageFormat.width,
     '--page-height': pageFormat.height,
@@ -736,16 +811,13 @@ function App() {
 
   useEffect(() => {
     editorVersionRef.current += 1
-  }, [activePanelId, layout, pageFormat.id, settings, shots])
+  }, [activePanelId, layout, pageFormat.id, settings, shots, carouselVersion, projectName])
 
   function captureProjectSnapshot(): ProjectSnapshot {
-    return {
-      layout: cloneLayout(layout),
-      pageFormatId: pageFormat.id,
-      settings: { ...settings },
-      shotCache: shotCacheRef.current.map((shot) => (shot ? cloneShot(shot) : null)),
-      activePanelId,
-    }
+    const current: SlideSnapshot = { layout: cloneLayout(layout), pageFormatId: pageFormat.id, settings: { ...settings },
+      shotCache: shotCacheRef.current.map(shot => shot ? cloneShot(shot) : null), activePanelId }
+    const slides = slidesRef.current.length ? slidesRef.current.map((slide, index) => index === activeSlideRef.current ? current : cloneSlide(slide)) : [current]
+    return { ...current, projectId, projectName, carousel: { slides, activeIndex: activeSlideRef.current } }
   }
 
   function syncHistoryCounts() {
@@ -799,6 +871,11 @@ function App() {
 
   function restoreProjectSnapshot(snapshot: ProjectSnapshot) {
     const nextSnapshot = cloneProjectSnapshot(snapshot)
+    slidesRef.current = nextSnapshot.carousel?.slides ?? [cloneSlide(nextSnapshot)]
+    activeSlideRef.current = nextSnapshot.carousel?.activeIndex ?? 0
+    if (nextSnapshot.projectId) setProjectId(nextSnapshot.projectId)
+    if (nextSnapshot.projectName) setProjectName(nextSnapshot.projectName)
+    setCarouselVersion(version => version + 1)
     const nextCache = nextSnapshot.shotCache.map((shot) => shot ?? undefined)
     shotCacheRef.current = nextCache
     setLayout(nextSnapshot.layout)
@@ -872,9 +949,8 @@ function App() {
   }
 
   function referencedRuntimeAssetIds() {
-    const assetIds = new Set(
-      shotCacheRef.current.flatMap((shot) => (shot ? [shot.assetId] : [])),
-    )
+    const assetIds = new Set(projectShots(captureProjectSnapshot()).flatMap(shot => shot ? [shot.assetId] : []))
+    exportAssetIdsRef.current.forEach(id => assetIds.add(id))
     const historyEntries = [
       ...undoStackRef.current,
       ...redoStackRef.current,
@@ -882,7 +958,7 @@ function App() {
       ...(pendingSettingsHistoryRef.current ? [pendingSettingsHistoryRef.current] : []),
     ]
     historyEntries.forEach((entry) => {
-      entry.snapshot.shotCache.forEach((shot) => {
+      projectShots(entry.snapshot).forEach((shot) => {
         if (shot) {
           assetIds.add(shot.assetId)
         }
@@ -918,47 +994,21 @@ function App() {
   }
 
   function serializeProjectSnapshot(snapshot: ProjectSnapshot): StoredProjectDocument {
-    return {
-      layout: cloneLayout(snapshot.layout),
-      pageFormatId: snapshot.pageFormatId,
-      settings: { ...snapshot.settings },
-      activePanelId: snapshot.activePanelId,
-      shotCache: snapshot.shotCache.map((shot) => {
-        if (!shot) {
-          return null
-        }
-        const { dataUrl: _dataUrl, ...storedShot } = shot
-        return storedShot
-      }),
-    }
+    const serializeSlide = (slide: SlideSnapshot): StoredSlide => ({ ...cloneSlide(slide),
+      shotCache: slide.shotCache.map(shot => { if (!shot) return null; const { dataUrl: _url, ...stored } = shot; return stored }) })
+    return { ...serializeSlide(snapshot), projectId: snapshot.projectId, projectName: snapshot.projectName,
+      carousel: snapshot.carousel ? { activeIndex: snapshot.carousel.activeIndex, slides: snapshot.carousel.slides.map(serializeSlide) } : undefined }
   }
 
   async function hydrateStoredDraft(draft: StoredProjectDraft) {
-    const assetIds = draft.document.shotCache.flatMap((shot) => (shot ? [shot.assetId] : []))
+    const assetIds = projectShots(draft.document).flatMap(shot => shot ? [shot.assetId] : [])
     const assets = await loadDraftAssets(assetIds)
-    const missingAsset = assetIds.find((assetId) => !assets.has(assetId))
-    if (missingAsset) {
-      throw new Error('A saved draft photo is unavailable.')
-    }
-
-    assets.forEach((asset) => {
-      registerDraftAsset(asset)
-    })
-
-    const snapshot: ProjectSnapshot = {
-      layout: cloneLayout(draft.document.layout),
-      pageFormatId: draft.document.pageFormatId,
-      settings: { ...draft.document.settings },
-      activePanelId: draft.document.activePanelId,
-      shotCache: draft.document.shotCache.map((shot) => {
-        if (!shot) {
-          return null
-        }
-        const dataUrl = assetUrlsRef.current.get(shot.assetId)
-        return dataUrl ? { ...shot, dataUrl } : null
-      }),
-    }
-    return snapshot
+    if (assetIds.some(id => !assets.has(id))) throw new Error('A saved project photo is unavailable.')
+    assets.forEach(registerDraftAsset)
+    const hydrate = (slide: StoredSlide): SlideSnapshot => ({ ...slide, layout: cloneLayout(slide.layout), settings: { ...slide.settings },
+      shotCache: slide.shotCache.map(shot => shot ? { ...shot, dataUrl: assetUrlsRef.current.get(shot.assetId)! } : null) })
+    return { ...hydrate(draft.document), projectId: draft.document.projectId ?? createAssetId(), projectName: draft.document.projectName ?? 'Untitled project',
+      carousel: draft.document.carousel ? { activeIndex: draft.document.carousel.activeIndex, slides: draft.document.carousel.slides.map(hydrate) } : undefined }
   }
 
   function queueDraftSave(snapshot: ProjectSnapshot) {
@@ -977,7 +1027,7 @@ function App() {
       updatedAt: Date.now(),
       document,
     }
-    const assetIds = new Set(record.document.shotCache.flatMap((shot) => (shot ? [shot.assetId] : [])))
+    const assetIds = new Set(projectShots(record.document).flatMap((shot) => (shot ? [shot.assetId] : [])))
     const assets = [...assetIds]
       .map((assetId) => assetBlobsRef.current.get(assetId))
       .filter((asset): asset is DraftAssetRecord => !!asset)
@@ -995,7 +1045,8 @@ function App() {
         if (epoch !== draftEpochRef.current || revision < draftRevisionRef.current) {
           return
         }
-        await saveDraftRecord(record, assets)
+        await saveDraftRecord(record, assets, { id: snapshot.projectId ?? projectId, name: snapshot.projectName?.trim() || 'Untitled project' })
+        setSavedProjects(await listProjects<StoredProjectDocument>())
         if (epoch !== draftEpochRef.current || revision < draftRevisionRef.current) {
           return
         }
@@ -1065,33 +1116,12 @@ function App() {
 
     try {
       const stored = localStorage.getItem(CUSTOM_LAYOUT_KEY)
-      const storedActiveLayoutId = localStorage.getItem(ACTIVE_LAYOUT_KEY)
       const storedPageFormat = getPageFormat(localStorage.getItem(PAGE_FORMAT_KEY))
-      let restoredLayout: Layout | undefined
       if (stored) {
         const parsed = JSON.parse(stored) as Layout[]
-        const validLayouts = parsed.filter((item) => Array.isArray(item.panels) && item.panels.length > 0)
-        restoredLayout = [...layouts, ...validLayouts].find((item) => item.id === storedActiveLayoutId)
-        setCustomLayouts(validLayouts)
-
-        if (restoredLayout) {
-          setLayout(restoredLayout)
-          setActivePanelId(restoredLayout.panels[0]?.id ?? null)
-          setStatus(`${restoredLayout.name} layout restored.`)
-        }
-      } else {
-        restoredLayout = layouts.find((item) => item.id === storedActiveLayoutId)
-        if (restoredLayout) {
-          setLayout(restoredLayout)
-          setActivePanelId(restoredLayout.panels[0]?.id ?? null)
-          setStatus(`${restoredLayout.name} layout restored.`)
-        }
+        setCustomLayouts(parsed.filter((item) => Array.isArray(item.panels) && item.panels.length > 0))
       }
-
       setPageFormat(storedPageFormat)
-      if (restoredLayout) {
-        setSettings((current) => ({ ...current, ...layoutStyleSettings(restoredLayout) }))
-      }
     } catch {
       localStorage.removeItem(CUSTOM_LAYOUT_KEY)
       localStorage.removeItem(ACTIVE_LAYOUT_KEY)
@@ -1109,7 +1139,15 @@ function App() {
         if (!active) {
           return
         }
-        if (draft && isValidStoredProjectDraft(draft) && draft.document.shotCache.some(Boolean)) {
+        if (draft && isValidStoredProjectDraft(draft)) {
+          if (!draft.document.projectId) {
+            const id = createAssetId()
+            const assets = await loadDraftAssets(projectShots(draft.document).flatMap(shot => shot ? [shot.assetId] : []))
+            const migrated = { ...draft, document: { ...draft.document, projectId: id, projectName: 'My first project' } }
+            await saveDraftRecord(migrated, [...assets.values()], { id, name: 'My first project' })
+            draft = migrated
+          }
+          setSavedProjects(await listProjects<StoredProjectDocument>())
           draftRevisionRef.current = draft.revision
           lastSavedDocumentSignatureRef.current = JSON.stringify(draft.document)
           setSavedDraft(draft)
@@ -1213,21 +1251,8 @@ function App() {
     }
 
     const snapshot = captureProjectSnapshot()
-    if (!snapshot.shotCache.some(Boolean)) {
-      if (emptyDraftClearedRef.current) {
-        return
-      }
-      emptyDraftClearedRef.current = true
-      void queueDraftClear({ onlyIfProjectEmpty: true }).catch((error) => {
-        console.error('Draft clear failed:', error)
-        emptyDraftClearedRef.current = false
-        setDraftPhase('error')
-        setStatus('Draft could not be cleared. Your previous saved work is still available.')
-      })
-      return
-    }
-    emptyDraftClearedRef.current = false
-
+    if (JSON.stringify(serializeProjectSnapshot(snapshot)) === lastSavedDocumentSignatureRef.current) return
+    setDraftPhase('saving')
     autosaveTimerRef.current = setTimeout(() => {
       queueDraftSave(snapshot)
     }, AUTOSAVE_DELAY_MS)
@@ -1238,7 +1263,7 @@ function App() {
         autosaveTimerRef.current = null
       }
     }
-  }, [activePanelId, draftPhase, layout, pageFormat.id, settings, shots, started])
+  }, [activePanelId, draftPhase, layout, pageFormat.id, settings, shots, started, carouselVersion, projectName, projectId])
 
   useEffect(() => {
     if (!started) {
@@ -1250,9 +1275,6 @@ function App() {
         return
       }
       const snapshot = captureProjectSnapshot()
-      if (!snapshot.shotCache.some(Boolean)) {
-        return
-      }
       if (autosaveTimerRef.current) {
         clearTimeout(autosaveTimerRef.current)
         autosaveTimerRef.current = null
@@ -1271,7 +1293,7 @@ function App() {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('pagehide', flushPendingDraft)
     }
-  }, [activePanelId, layout, pageFormat.id, settings, shots, started])
+  }, [activePanelId, layout, pageFormat.id, settings, shots, started, carouselVersion, projectName, projectId])
 
   useEffect(() => {
     const handleHistoryShortcut = (event: KeyboardEvent) => {
@@ -1414,15 +1436,17 @@ function App() {
   async function enterApp() {
     await prepareAppSurface()
     setStarted(true)
-    setStatus('Starting camera…')
-    void startCamera()
+    setDrawerTab('layout')
+    setDrawerOpen(true)
+    setStatus('Choose a grid or add a photo to your blank canvas.')
   }
 
   function returnHome() {
+    if (carouselExporting || photoProcessing) { setStatus('Finish the current photo or export before switching projects.'); return }
     cameraRequestRef.current += 1
     flushPendingSettingsHistory()
     const snapshot = captureProjectSnapshot()
-    if (draftSessionReadyRef.current && snapshot.shotCache.some(Boolean)) {
+    if (draftSessionReadyRef.current) {
       if (autosaveTimerRef.current) {
         clearTimeout(autosaveTimerRef.current)
         autosaveTimerRef.current = null
@@ -1447,17 +1471,167 @@ function App() {
       flushPendingSettingsHistory()
       commitHistoryEntry(beginHistoryEntry('Change canvas format'))
     }
+    slidesRef.current = slidesRef.current.map(slide => ({ ...slide, pageFormatId: format.id }))
     setPageFormat(format)
     clearExport()
     setStatus(`${format.id} ${format.label} canvas selected.`)
   }
 
+  useEffect(() => {
+    void listProjects<StoredProjectDocument>().then(setSavedProjects).catch(() => setProjectError('Project library could not load. Reload to try again.'))
+  }, [])
+
+  async function openSavedProject(project: SavedProject<StoredProjectDocument>) {
+    if (projectBusy || draftPhase === 'checking') return
+    setProjectBusy(true)
+    setProjectError(null)
+    try {
+      await draftSaveQueueRef.current
+      if (!isValidStoredProjectDraft({ id: 'current', schemaVersion: 1, revision: 1, updatedAt: project.updatedAt, document: project.document })) throw new Error('This saved project could not be read.')
+      const snapshot = await hydrateStoredDraft({ id: 'current', schemaVersion: 1, revision: 1, updatedAt: project.updatedAt, document: project.document })
+      await prepareAppSurface()
+      draftEpochRef.current += 1
+      lastSavedDocumentSignatureRef.current = null
+      restoreProjectSnapshot(snapshot)
+      resetHistory()
+      draftSessionReadyRef.current = true
+      setDraftPhase('none')
+      setStarted(true)
+      setDrawerOpen(false)
+      setNewProjectRequested(false)
+      startRequestedRef.current = true
+      setStatus(`Opened ${project.name}.`)
+    } catch (error) {
+      setProjectError(error instanceof Error ? error.message : 'Project could not open.')
+    } finally { setProjectBusy(false) }
+  }
+
+  async function removeSavedProject(id: string) {
+    if (projectBusy || draftPhase === 'checking') return
+    setProjectBusy(true)
+    try {
+      await draftSaveQueueRef.current
+      await deleteProject(id)
+      setSavedProjects(await listProjects<StoredProjectDocument>())
+      if (savedDraft?.document.projectId === id) { setSavedDraft(null); setDraftPhase('none') }
+      setProjectDeleteId(null)
+      setStatus('Project deleted.')
+    } catch { setProjectError('Project could not be deleted. Try again.') }
+    finally { setProjectBusy(false) }
+  }
+
+  function showSlide(index: number) {
+    if (photoProcessing || carouselExporting) return
+    flushPendingSettingsHistory()
+    const snapshot = captureProjectSnapshot()
+    const slides = snapshot.carousel!.slides
+    if (!slides[index]) return
+    restoreProjectSnapshot({ ...snapshot, ...slides[index], carousel: { slides, activeIndex: index } })
+    setPhotoActionsDeferred(true)
+  }
+
+  function changeSlides(action: 'add' | 'duplicate' | 'remove' | 'previous' | 'next') {
+    if (photoProcessing || carouselExporting) return
+    flushPendingSettingsHistory()
+    const snapshot = captureProjectSnapshot()
+    const slides = snapshot.carousel!.slides
+    let index = activeSlideRef.current
+    if (action === 'remove' && slides.length === 1) return
+    if ((action === 'add' || action === 'duplicate') && slides.length >= 20) return
+    const destination = action === 'previous' ? index - 1 : index + 1
+    if ((action === 'previous' || action === 'next') && !slides[destination]) return
+    commitHistoryEntry(beginHistoryEntry(`${action === 'add' ? 'Add' : action === 'duplicate' ? 'Duplicate' : action === 'remove' ? 'Remove' : 'Move'} slide`))
+    if (action === 'add' || action === 'duplicate') {
+      const slide = action === 'duplicate' ? cloneSlide(slides[index]) : {
+        layout: cloneLayout(blankLayout), settings: { ...settings, caption: '', border: 0 },
+        pageFormatId: pageFormat.id, shotCache: [], activePanelId: '1',
+      }
+      slides.splice(index + 1, 0, slide)
+      index++
+    } else if (action === 'remove') { slides.splice(index, 1); index = Math.min(index, slides.length - 1) }
+    else { [slides[index], slides[destination]] = [slides[destination], slides[index]]; index = destination }
+    restoreProjectSnapshot({ ...snapshot, ...slides[index], carousel: { slides, activeIndex: index } })
+    setPhotoActionsDeferred(true)
+    setStatus(`Slide ${index + 1} of ${slides.length}. Undo is available.`)
+  }
+
+  async function exportCarousel() {
+    if (carouselExporting || photoProcessing) return
+    setCarouselExporting(true)
+    const snapshot = captureProjectSnapshot()
+    exportAssetIdsRef.current = new Set(projectShots(snapshot).flatMap(shot => shot ? [shot.assetId] : []))
+    try {
+      const files = []
+      for (const [index, slide] of snapshot.carousel!.slides.entries()) {
+        setStatus(`Exporting slide ${index + 1} of ${snapshot.carousel!.slides.length}…`)
+        files.push({ name: `slide-${String(index + 1).padStart(2, '0')}.png`,
+          blob: await renderToPng(slide.layout, shotsForLayout(slide.layout, slide.shotCache.map(shot => shot ?? undefined)), slide.settings, getPageFormat(slide.pageFormatId)) })
+      }
+      const blob = await createZip(files)
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `${projectName.trim().replace(/[^a-z0-9_-]+/gi, '-').slice(0, 60) || 'instacomic'}-carousel.zip`
+      anchor.click()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+      setStatus(`Exported ${files.length} slides. Unzip and select the numbered images in Instagram.`)
+    } catch (error) { setStatus(error instanceof Error ? error.message : 'Carousel export failed.') }
+    finally { setCarouselExporting(false); exportAssetIdsRef.current.clear(); scheduleRuntimeAssetPrune() }
+  }
+
+  async function splitPanorama() {
+    if (photoProcessing || carouselExporting) return
+    const source = shots[activePanelId ?? ''] ?? Object.values(shots)[0]
+    if (!source) return
+    const snapshot = captureProjectSnapshot()
+    const slides = snapshot.carousel!.slides
+    if (slides.length + panoramaCount > 20) return
+    const version = editorVersionRef.current
+    beginPhotoOperation()
+    try {
+      const image = await loadImage(source.dataUrl)
+      const width = 1440, height = Math.round(width * pageFormat.height / pageFormat.width)
+      const scale = Math.max(width * panoramaCount / image.naturalWidth, height / image.naturalHeight)
+      const sourceWidth = width / scale, sourceHeight = height / scale
+      const sourceLeft = (image.naturalWidth - sourceWidth * panoramaCount) / 2
+      const sourceTop = (image.naturalHeight - sourceHeight) / 2
+      const added: SlideSnapshot[] = []
+      for (let index = 0; index < panoramaCount; index++) {
+        const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height
+        const context = canvas.getContext('2d')!
+        context.drawImage(image, sourceLeft + index * sourceWidth, sourceTop, sourceWidth, sourceHeight, 0, 0, width, height)
+        const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Panorama could not render.')), 'image/png'))
+        const shot = createAssetShot(blob, width, height)
+        added.push({ layout: cloneLayout(blankLayout), pageFormatId: pageFormat.id,
+          settings: { ...settings, border: 0, gutters: 0, radius: 0, caption: '' }, shotCache: [shot], activePanelId: null })
+      }
+      if (version !== editorVersionRef.current) throw new Error('The project changed during panorama rendering.')
+      flushPendingSettingsHistory()
+      commitHistoryEntry(beginHistoryEntry('Split panorama'))
+      const index = activeSlideRef.current + 1
+      slides.splice(index, 0, ...added)
+      restoreProjectSnapshot({ ...snapshot, ...slides[index], carousel: { slides, activeIndex: index } })
+      setStatus(`Added ${panoramaCount} seamless slides after the original. Undo is available.`)
+    } catch { setStatus('Panorama could not be created. Your original photo is unchanged.') }
+    finally { finishPhotoOperation() }
+  }
+
   function startFromGesture() {
-    if (startRequestedRef.current) {
+    if (startRequestedRef.current || projectBusy) {
       return
     }
 
     startRequestedRef.current = true
+    slidesRef.current = []
+    activeSlideRef.current = 0
+    setProjectId(createAssetId())
+    setProjectName('Untitled project')
+    shotCacheRef.current = []
+    setShots({})
+    resetHistory()
+    setLayout(blankLayout)
+    setSettings({ ...defaultSettings, ...layoutStyleSettings(blankLayout) })
+    setActivePanelId(blankLayout.panels[0].id)
     void enterApp()
   }
 
@@ -1492,7 +1666,7 @@ function App() {
   }
 
   function startNewProjectFromGesture() {
-    if (startRequestedRef.current) {
+    if (startRequestedRef.current || projectBusy) {
       return
     }
 
@@ -1500,6 +1674,7 @@ function App() {
     void (async () => {
       await prepareAppSurface()
       try {
+        await draftSaveQueueRef.current
         const cleared = await queueDraftClear()
         if (!cleared) {
           throw new Error('A newer draft operation interrupted the reset.')
@@ -1507,7 +1682,7 @@ function App() {
       } catch (error) {
         console.error('Draft reset failed:', error)
         setDraftPhase('error')
-        setStatus('Could not discard the saved comic. Try Start new again so no work is lost.')
+        setStatus('Could not start a new project. Your saved project is still available.')
         startRequestedRef.current = false
         return
       }
@@ -1516,12 +1691,18 @@ function App() {
       assetUrlsRef.current.forEach((url) => URL.revokeObjectURL(url))
       assetUrlsRef.current.clear()
       shotCacheRef.current = []
+      slidesRef.current = []
+      activeSlideRef.current = 0
+      setCarouselVersion(version => version + 1)
+      setProjectId(createAssetId())
+      setProjectName('Untitled project')
       setShots({})
       setSettings({
         ...defaultSettings,
-        ...layoutStyleSettings(layout),
+        ...layoutStyleSettings(blankLayout),
       })
-      setActivePanelId(layout.panels[0]?.id ?? null)
+      setLayout(blankLayout)
+      setActivePanelId(blankLayout.panels[0].id)
       setSavedDraft(null)
       setDraftPhase('none')
       draftSessionReadyRef.current = true
@@ -1529,8 +1710,9 @@ function App() {
       resetHistory()
       clearExport()
       setStarted(true)
-      setStatus(`${layout.name} layout. Panel 1 is live.`)
-      void startCamera()
+      setDrawerTab('layout')
+      setDrawerOpen(true)
+      setStatus('Choose a grid or add a photo to your blank canvas.')
     })()
   }
 
@@ -1796,7 +1978,7 @@ function App() {
     }
 
     if (layout.id === layoutId) {
-      const fallbackLayout = layouts[0]
+      const fallbackLayout = layouts.find(option => option.id === 'shard')!
       const result = changeLayout(fallbackLayout, false)
       if (!result.applied) {
         setStatus(`${targetLayout.name} was not deleted because changing grids would hide photos.`)
@@ -2205,6 +2387,17 @@ function App() {
     }
   }
 
+  function updateProjectName(name: string) {
+    if (!pendingSettingsHistoryRef.current) pendingSettingsHistoryRef.current = beginHistoryEntry('Rename project')
+    if (settingsHistoryTimerRef.current) clearTimeout(settingsHistoryTimerRef.current)
+    setProjectName(name)
+    settingsHistoryTimerRef.current = setTimeout(() => {
+      commitHistoryEntry(pendingSettingsHistoryRef.current)
+      pendingSettingsHistoryRef.current = null
+      settingsHistoryTimerRef.current = null
+    }, 360)
+  }
+
   function updateProjectSettings(next: Partial<Settings>) {
     if (!pendingSettingsHistoryRef.current) {
       pendingSettingsHistoryRef.current = beginHistoryEntry('Change style')
@@ -2432,7 +2625,7 @@ function App() {
   return (
     <main
       ref={shellRef}
-      className={`native-shell ${appContext.isInstalled ? 'is-app' : 'is-installer'} ${showPhotoActions ? 'has-photo-actions' : ''} ${started ? 'is-editing' : 'is-home'}`}
+      className={`native-shell ${appContext.isInstalled ? 'is-app' : 'is-installer'} ${showPhotoActions ? 'has-photo-actions' : ''} ${started ? 'is-editing' : 'is-home'} ${drawerOpen && (drawerTab === 'layout' || drawerTab === 'slides') ? 'has-grid-drawer' : ''}`}
       data-history-undo={historyCounts.undo}
       data-history-redo={historyCounts.redo}
       data-autosave-state={draftPhase}
@@ -2456,7 +2649,7 @@ function App() {
     >
       <>
       {!started && (
-        <section className="start-screen" aria-label="Start Instacomic" data-draft-phase={draftPhase}>
+        <section className={`start-screen ${savedProjects.length > 0 ? 'has-projects' : ''}`} aria-label="Start Instacomic" data-draft-phase={draftPhase}>
           <div className="start-shell">
             <header className="start-topbar">
               <Brand />
@@ -2473,12 +2666,12 @@ function App() {
                   <span className="preview-registration top-left" aria-hidden="true" />
                   <span className="preview-registration bottom-right" aria-hidden="true" />
                   <div className="start-preview-page" style={{ aspectRatio: `${pageFormat.width} / ${pageFormat.height}` }}>
-                    <LayoutPreview layout={layout} specimen />
+                    <LayoutPreview layout={savedDraft && !newProjectRequested ? savedDraft.document.layout : blankLayout} specimen />
                   </div>
                 </div>
                 <figcaption>
-                  <div><span className="eyebrow">Your canvas</span><strong>{layout.name}<i> / </i>{pageFormat.id}</strong></div>
-                  <span>{layout.panels.length} moments,<br />one story.</span>
+                  <div><span className="eyebrow">Your canvas</span><strong>{savedDraft && !newProjectRequested ? savedDraft.document.layout.name : blankLayout.name}<i> / </i>{pageFormat.id}</strong></div>
+                  <span>A blank page.<br />Your next story.</span>
                 </figcaption>
               </figure>
             <div className="start-panel">
@@ -2500,8 +2693,8 @@ function App() {
                     <LayoutPreview layout={savedDraft.document.layout} />
                     <div className="draft-recovery-copy">
                       <span>Saved comic</span>
-                      <strong>{savedDraft.document.layout.name}</strong>
-                      <em>{`${savedDraftPhotoCount} photo${savedDraftPhotoCount === 1 ? '' : 's'} · ${savedDraft.document.pageFormatId} · ${formatSavedTime(savedDraft.updatedAt)}`}</em>
+                      <strong>{savedDraft.document.projectName || savedDraft.document.layout.name}</strong>
+                      <em>{`${savedDraftPhotoCount} photo${savedDraftPhotoCount === 1 ? '' : 's'} · ${savedDraft.document.carousel?.slides.length ?? 1} slide${(savedDraft.document.carousel?.slides.length ?? 1) === 1 ? '' : 's'} · ${savedDraft.document.pageFormatId} · ${formatSavedTime(savedDraft.updatedAt)}`}</em>
                     </div>
                   </section>
                   {draftPhase === 'error' && <div className="draft-recovery-error" role="alert">{status}</div>}
@@ -2520,7 +2713,7 @@ function App() {
                     <div>
                       <span className="eyebrow">New comic</span>
                       <h2>Set the scene.</h2>
-                      <p>Choose a format and a starting layout.</p>
+                      <p>Start with a blank canvas. Add photos and choose a grid in the studio.</p>
                     </div>
                   </div>
                   <div className="format-picker" aria-label="Canvas ratio">
@@ -2548,30 +2741,7 @@ function App() {
                       ))}
                     </div>
                   </div>
-                  <div className="setup-grid-picker">
-                    <div className="setup-grid-heading">
-                      <span><b>02</b> Starting grid</span>
-                      <em>{`${layout.name} · ${layout.panels.length} panels`}</em>
-                    </div>
-                    <div className="setup-grid-options" role="group" aria-label="Starting grid">
-                      {layouts
-                        .filter((option) => ['story', 'four', 'shard', 'manga'].includes(option.id))
-                        .map((option) => (
-                          <button
-                            key={option.id}
-                            type="button"
-                            className={layout.id === option.id ? 'active' : ''}
-                            aria-label={`Use ${option.name} starting grid, ${option.panels.length} panels`}
-                            aria-pressed={layout.id === option.id}
-                            onClick={() => changeLayout(option, false)}
-                          >
-                            <LayoutPreview layout={option} />
-                            <span>{option.name}</span>
-                          </button>
-                        ))}
-                    </div>
-                  </div>
-                  {newProjectRequested && savedDraft && <p className="new-comic-warning">Starting a new comic replaces your saved draft. Export it first if you want to keep it.</p>}
+                  {newProjectRequested && savedDraft && <p className="new-comic-warning">Your current project stays in your library. Start a fresh blank canvas.</p>}
                   <div className="start-actions">
                     <button
                       className="start-button"
@@ -2589,6 +2759,21 @@ function App() {
                 </>
               )}
               <p className="setup-reassurance">Shoot with your camera or add photos. Everything stays on your device.</p>
+              {projectError && <p className="draft-recovery-error" role="alert">{projectError}</p>}
+              {savedProjects.length > 0 && <section className="project-library" aria-label="Saved projects">
+                <div className="start-section-heading"><h2>Your projects</h2><span>{savedProjects.length} saved on this device</span></div>
+                <div className="project-library-grid">{savedProjects.map(project => <article className="project-card" key={project.id}>
+                  <button type="button" disabled={projectBusy || draftPhase === 'checking'} aria-label={`Open project ${project.name}`} onClick={() => void openSavedProject(project)}>
+                    <ProjectCover document={project.document} />
+                    <strong>{project.name}</strong><span>{project.document.carousel?.slides.length ?? 1} slide{(project.document.carousel?.slides.length ?? 1) === 1 ? '' : 's'} · {formatSavedTime(project.updatedAt)}</span>
+                  </button>
+                  {projectDeleteId === project.id ? <div className="project-delete-confirm">
+                    <button type="button" onClick={() => setProjectDeleteId(null)}>Keep</button>
+                    <button type="button" disabled={projectBusy} onClick={() => void removeSavedProject(project.id)}>Delete project</button>
+                  </div> : <button className="project-delete" type="button" disabled={projectBusy || draftPhase === 'checking'} aria-label={`Delete project ${project.name}`} onClick={() => setProjectDeleteId(project.id)}>Delete</button>}
+                </article>)}</div>
+              </section>}
+
             </div>
             </div>
             <footer className="start-footer">
@@ -2654,8 +2839,8 @@ function App() {
 
       {started && (
         <div className="workspace-heading" aria-hidden={drawerOpen || creatorOpen} inert={drawerOpen || creatorOpen || undefined}>
-          <div><span className="eyebrow">The studio</span><h1>{settings.caption.trim() || 'Your story, in the making.'}</h1></div>
-          <span className="workspace-format">{pageFormat.label} <b>{pageFormat.id}</b></span>
+          <div><span className="eyebrow">The studio</span><h1>{projectName}</h1></div>
+          <button className="carousel-open" type="button" onClick={() => openDrawer('slides')}>Slides {activeSlideRef.current + 1} / {slidesRef.current.length || 1}<ActionIcon name="plus" /></button>
         </div>
       )}
 
@@ -2718,7 +2903,7 @@ function App() {
               aria-keyshortcuts={shots[panel.id] ? 'ArrowLeft ArrowRight ArrowUp ArrowDown + - [ ]' : undefined}
               aria-describedby={panel.id === activePanelId && shots[panel.id] ? 'photo-gesture-help' : undefined}
             >
-              {!shots[panel.id] && !(panel.id === activePanelId && stream) && (
+              {layout.id !== 'blank' && !shots[panel.id] && !(panel.id === activePanelId && stream) && (
                 <span className="panel-placeholder" aria-hidden="true">
                   <b>{index + 1}</b>
                   <em>{panel.id === activePanelId ? 'Ready for a photo' : 'Add photo'}</em>
@@ -2877,10 +3062,32 @@ function App() {
             onDeleteCustomLayout={deleteCustomLayout}
           />
         )}
+        {drawerTab === 'slides' && <div className="carousel-panel">
+          <div className="carousel-slide-list" role="group" aria-label="Carousel slides">
+            {captureProjectSnapshot().carousel!.slides.map((slide, index) => <button type="button" key={index} aria-label={`Edit slide ${index + 1}`} aria-current={index === activeSlideRef.current ? 'true' : undefined}
+              disabled={photoProcessing || carouselExporting} onClick={() => showSlide(index)}><SlidePreview slide={slide} /><span>{String(index + 1).padStart(2, '0')}</span></button>)}
+          </div>
+          <div className="carousel-actions">
+            <button type="button" disabled={photoProcessing || carouselExporting || slidesRef.current.length >= 20} onClick={() => changeSlides('add')}>Add slide</button>
+            <button type="button" disabled={photoProcessing || carouselExporting || slidesRef.current.length >= 20} onClick={() => changeSlides('duplicate')}>Duplicate slide</button>
+            <button type="button" disabled={photoProcessing || carouselExporting || activeSlideRef.current === 0} onClick={() => changeSlides('previous')}>Move earlier</button>
+            <button type="button" disabled={photoProcessing || carouselExporting || activeSlideRef.current >= slidesRef.current.length - 1} onClick={() => changeSlides('next')}>Move later</button>
+            <button type="button" disabled={photoProcessing || carouselExporting || slidesRef.current.length <= 1} onClick={() => changeSlides('remove')}>Remove slide</button>
+          </div>
+          <label className="field"><span>Project name</span><input aria-label="Project name" value={projectName} maxLength={60} onChange={event => updateProjectName(event.target.value)} /></label>
+          <SettingsSection title="Seamless panorama" description="Split a photo into consecutive slides. The original stays in your project.">
+            <RangeField label="Number of slides" unit="" value={panoramaCount} min={2} max={5} onChange={setPanoramaCount} />
+            <button className="export-secondary" type="button" disabled={photoProcessing || carouselExporting || Object.keys(shots).length === 0 || (slidesRef.current.length || 1) + panoramaCount > 20} onClick={() => void splitPanorama()}>Split photo across slides</button>
+          </SettingsSection>
+          <button className="export-primary" type="button" disabled={carouselExporting || photoProcessing} onClick={() => void exportCarousel()}>{carouselExporting ? 'Preparing carousel…' : 'Export carousel ZIP'}</button>
+        </div>}
         {drawerTab === 'style' && (
           <StylePanel settings={settings} onSettings={updateProjectSettings} onReset={resetAppearance} />
         )}
-        {drawerTab === 'export' && (
+        {drawerTab === 'export' && (<>
+          <section className="carousel-export-summary"><strong>{slidesRef.current.length || 1} slides in this project</strong>
+            <button className="export-primary" type="button" disabled={carouselExporting || photoProcessing} onClick={() => void exportCarousel()}>{carouselExporting ? 'Preparing carousel…' : 'Export carousel ZIP'}</button>
+            <span>Numbered PNGs, ready to upload in order.</span></section>
           <ExportPanel
             settings={settings}
             capturedCount={capturedCount}
@@ -2900,7 +3107,7 @@ function App() {
             onShareVideo={shareReadyVideo}
             onDismissVideo={clearReadyVideo}
           />
-        )}
+        </>)}
       </Drawer>
       <AnimatePresence>
         {creatorOpen && (
@@ -3100,12 +3307,13 @@ function Drawer({
   status: string
   customCanvas: boolean
 }) {
-  const tabTitle = tab === 'layout' ? 'Layout & canvas' : tab === 'style' ? 'Appearance' : 'Export comic'
+  const tabTitle = tab === 'layout' ? 'Grids' : tab === 'style' ? 'Appearance' : tab === 'slides' ? 'Carousel' : 'Export comic'
   const drawerRef = useRef<HTMLElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
   const drawerTabs: Array<{ id: DrawerTab; label: string }> = [
     { id: 'layout', label: 'Layout' },
     ...(!customCanvas ? [{ id: 'style' as const, label: 'Style' }] : []),
+    { id: 'slides', label: 'Slides' },
     { id: 'export', label: 'Export' },
   ]
 
@@ -3166,7 +3374,7 @@ function Drawer({
       <AnimatePresence>
         {open && (
           <motion.button
-            className="drawer-backdrop"
+            className={`drawer-backdrop ${(tab === 'layout' || tab === 'slides') ? 'is-grid-backdrop' : ''}`}
             type="button"
             tabIndex={-1}
             aria-label="Close controls"
@@ -3248,6 +3456,37 @@ function Drawer({
   )
 }
 
+function SlidePreview({ slide }: { slide: SlideSnapshot }) {
+  const format = getPageFormat(slide.pageFormatId)
+  return <span className="slide-preview" aria-hidden="true" style={{ aspectRatio: `${format.width} / ${format.height}`,
+    '--paper': slide.settings.background, '--ink': slide.settings.borderColor, '--gutter': `${slide.settings.gutters / 5}px`, '--radius': '0px', '--border': '0px' } as React.CSSProperties}>
+    <LayoutPreview layout={slide.layout} />
+    {slide.layout.panels.map((panel, index) => <span className="slide-mini-panel" key={panel.id} style={panelStyle(panel, !slide.layout.custom)}>
+      {slide.shotCache[index] && <img alt="" src={slide.shotCache[index]!.dataUrl} style={shotImageStyle(panel, slide.shotCache[index]!, slide.shotCache[index]!.fit ?? slide.settings.fit, format)} />}
+    </span>)}
+    {!!slide.settings.caption && <span className="slide-mini-caption" style={{ color: slide.settings.captionColor }}>{slide.settings.caption}</span>}
+  </span>
+}
+
+function ProjectCover({ document }: { document: StoredProjectDocument }) {
+  const first = document.carousel?.slides[0] ?? document
+  const [slide, setSlide] = useState<SlideSnapshot | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const urls: string[] = []
+    void loadDraftAssets(first.shotCache.flatMap(shot => shot ? [shot.assetId] : [])).then(assets => {
+      if (cancelled) return
+      setSlide({ ...first, shotCache: first.shotCache.map(shot => {
+        if (!shot || !assets.has(shot.assetId)) return null
+        const dataUrl = URL.createObjectURL(assets.get(shot.assetId)!.blob); urls.push(dataUrl)
+        return { ...shot, dataUrl }
+      }) })
+    }).catch(() => setSlide(null))
+    return () => { cancelled = true; urls.forEach(url => URL.revokeObjectURL(url)) }
+  }, [first])
+  return <SlidePreview slide={slide ?? { ...first, shotCache: first.shotCache.map(() => null) }} />
+}
+
 function LayoutPanel({
   layout,
   layouts,
@@ -3269,36 +3508,26 @@ function LayoutPanel({
   onEditCustomLayout: (layoutId: string) => void
   onDeleteCustomLayout: (layoutId: string) => void
 }) {
-  const builtInLayouts = layouts.filter((option) => !option.custom)
-  const savedLayouts = layouts.filter((option) => option.custom)
+  const firstGrids = ['blank', 'two-columns', 'two-rows', 'top-story', 'right-story', 'left-story', 'bottom-story', 'four']
+  const builtInLayouts = layouts.filter((option) => !option.custom).sort((a, b) =>
+    (firstGrids.includes(a.id) ? firstGrids.indexOf(a.id) : firstGrids.length) -
+    (firstGrids.includes(b.id) ? firstGrids.indexOf(b.id) : firstGrids.length))
+  const savedLayouts = layouts.filter((option) => option.custom).sort((a, b) => Number(b.id === layout.id) - Number(a.id === layout.id))
 
-  return (
-    <div className="layout-library">
-      <section className="canvas-format-section" aria-labelledby="canvas-format-heading">
-        <div className="canvas-format-heading">
-          <div>
-            <strong id="canvas-format-heading">Canvas format</strong>
-            <span>The shape of your finished comic</span>
-          </div>
-          <em>{`${pageFormat.id} · ${pageFormat.label}`}</em>
+  const templatePicker = (
+      <section className="layout-section" aria-labelledby="built-in-grid-heading">
+        <div className="layout-section-heading">
+          <strong id="built-in-grid-heading">Templates</strong>
+          <span>{builtInLayouts.length} included</span>
         </div>
-        <div className="drawer-format-grid" role="group" aria-label="Canvas format">
-          {formats.map((format) => (
-            <button
-              key={format.id}
-              type="button"
-              className={pageFormat.id === format.id ? 'active' : ''}
-              aria-pressed={pageFormat.id === format.id}
-              onClick={() => onFormat(format)}
-            >
-              <span style={{ aspectRatio: `${format.width} / ${format.height}` }} aria-hidden="true" />
-              <strong>{format.id}</strong>
-              <em>{format.label}</em>
-            </button>
+        <div className="layout-gallery">
+          {builtInLayouts.map((option) => (
+            <LayoutCard key={option.id} option={option} active={layout.id === option.id} onSelect={onLayout} />
           ))}
         </div>
       </section>
-
+  )
+  const savedPicker = (
       <section className="layout-section" aria-labelledby="saved-grid-heading">
         <div className="layout-section-heading">
           <strong id="saved-grid-heading">Your grids</strong>
@@ -3326,20 +3555,38 @@ function LayoutPanel({
           ))}
         </div>
       </section>
-
-      <section className="layout-section" aria-labelledby="built-in-grid-heading">
-        <div className="layout-section-heading">
-          <strong id="built-in-grid-heading">Templates</strong>
-          <span>{builtInLayouts.length} included</span>
+  )
+  const formatPicker = (
+      <section className="canvas-format-section" aria-labelledby="canvas-format-heading">
+        <div className="canvas-format-heading">
+          <div>
+            <strong id="canvas-format-heading">Canvas format</strong>
+            <span>The shape of your finished comic</span>
+          </div>
+          <em>{`${pageFormat.id} · ${pageFormat.label}`}</em>
         </div>
-        <div className="layout-gallery">
-          {builtInLayouts.map((option) => (
-            <LayoutCard key={option.id} option={option} active={layout.id === option.id} onSelect={onLayout} />
+        <div className="drawer-format-grid" role="group" aria-label="Canvas format">
+          {formats.map((format) => (
+            <button
+              key={format.id}
+              type="button"
+              className={pageFormat.id === format.id ? 'active' : ''}
+              aria-pressed={pageFormat.id === format.id}
+              onClick={() => onFormat(format)}
+            >
+              <span style={{ aspectRatio: `${format.width} / ${format.height}` }} aria-hidden="true" />
+              <strong>{format.id}</strong>
+              <em>{format.label}</em>
+            </button>
           ))}
         </div>
       </section>
-    </div>
   )
+  return <div className="layout-library">
+    {layout.custom ? savedPicker : templatePicker}
+    {layout.custom ? templatePicker : savedPicker}
+    {formatPicker}
+  </div>
 }
 
 function LayoutCard({

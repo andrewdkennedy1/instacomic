@@ -23,6 +23,7 @@ await page.addInitScript(() => {
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
 await page.getByRole('button', { name: /9:16/ }).tap()
 await page.getByRole('button', { name: 'Start creating' }).tap()
+await page.getByRole('button', { name: 'Done editing comic', exact: true }).click()
 await page.locator('.start-screen').waitFor({ state: 'detached' })
 const baselineUndoDisabled = await page.getByRole('button', { name: 'Undo' }).isDisabled()
 const baselineRedoDisabled = await page.getByRole('button', { name: 'Redo' }).isDisabled()
@@ -426,7 +427,7 @@ const failures = [
   result.savedAssetCount === 1 ? null : 'autosave did not prune replaced or removed photo assets',
   result.revisionStableWhenIdle ? null : 'autosave rewrote an unchanged draft',
   result.recoveryButtonVisible === 1 ? null : 'Continue editing was not offered after reload',
-  result.recoveryText.includes('Manga') && result.recoveryText.includes('1 photo') ? null : 'draft recovery summary is incomplete',
+  result.recoveryText.includes('Untitled project') && result.recoveryText.includes('1 photo') ? null : 'draft recovery summary is incomplete',
   transformMatches(result.restoredTransform, result.draftTransform) ? null : 'Continue did not restore the saved photo transform',
   result.restoredLayout === 'Manga' ? null : 'Continue did not restore the saved layout',
   result.restoredFormat === '9:16' ? null : 'Continue did not restore the saved canvas format',
@@ -455,7 +456,7 @@ const failures = [
   result.newComicUndoCount === 0 ? null : 'Start new retained editing history',
   result.newComicFormat === '4:3' ? null : 'Start new did not use the newly selected canvas format',
   result.draftAfterNew === null ? null : 'Start new did not clear the saved draft',
-  result.assetsAfterNew === 0 ? null : 'Start new did not clear saved photo assets',
+  result.assetsAfterNew >= 1 ? null : 'Start new deleted the previous project photo assets',
   result.errors.length === 0 ? null : `page errors: ${result.errors.join('; ')}`,
 ].filter(Boolean)
 
@@ -703,7 +704,7 @@ async function pinchRotateNearSnap(page, nx, ny, angleDegrees) {
 async function readDraft(page) {
   return page.evaluate(() =>
     new Promise((resolve, reject) => {
-      const request = indexedDB.open('instacomic', 1)
+      const request = indexedDB.open('instacomic')
       request.onerror = () => reject(request.error)
       request.onsuccess = () => {
         const database = request.result
@@ -720,7 +721,7 @@ async function readDraft(page) {
 async function readAssetCount(page) {
   return page.evaluate(() =>
     new Promise((resolve, reject) => {
-      const request = indexedDB.open('instacomic', 1)
+      const request = indexedDB.open('instacomic')
       request.onerror = () => reject(request.error)
       request.onsuccess = () => {
         const database = request.result

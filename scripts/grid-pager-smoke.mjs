@@ -16,6 +16,7 @@ for (const engine of [chromium, webkit]) {
     })
     await page.goto(baseUrl)
     await page.getByRole('button', { name: 'Start creating' }).click()
+    await page.getByRole('button', { name: 'Done editing comic', exact: true }).click()
     await page.getByRole('button', { name: 'Controls', exact: true }).click()
     await page.locator('.create-card').click()
     await page.getByRole('button', { name: 'Save layout', exact: true }).click()
@@ -47,6 +48,7 @@ for (const engine of [chromium, webkit]) {
     }
     for (const viewport of [{ width: 280, height: 568 }, { width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 1440, height: 900 }, { width: 844, height: 390 }]) {
       await page.setViewportSize(viewport)
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
       const stableCanvas = await page.locator('.creator-canvas').boundingBox()
       for (const name of ['Style', 'Border', 'Photos', 'Caption', 'Details', 'Dividers', 'Adjust']) {
         await page.getByRole('tab', { name, exact: true }).click()
@@ -63,7 +65,7 @@ for (const engine of [chromium, webkit]) {
         assert.ok(geometry.drawerHeight <= 225 && geometry.overflow <= 2 && geometry.visible && geometry.inViewport,
           `${engine.name()} ${viewport.width} ${name}: ${JSON.stringify(geometry)}`)
         const currentCanvas = await page.locator('.creator-canvas').boundingBox()
-        for (const key of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(currentCanvas[key] - stableCanvas[key]) < 1, `Paging shifted ${key}`)
+        for (const key of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(currentCanvas[key] - stableCanvas[key]) < 1, `Paging shifted ${key} at ${viewport.width} on ${name}: ${JSON.stringify({stableCanvas, currentCanvas})}`)
         assert.equal(await preview.getAttribute('src'), originalPhoto.src)
       }
       await page.getByRole('tab', { name: 'Style', exact: true }).click()

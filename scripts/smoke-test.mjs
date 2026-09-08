@@ -28,6 +28,9 @@ const formatPickerCentered = await page.locator('.format-options').evaluate((pic
 await page.getByRole('button', { name: /4:3/ }).tap()
 const landscapeSelectedFormat = await page.locator('.format-option.active strong').textContent()
 await page.getByRole('button', { name: 'Start creating' }).tap()
+await page.getByRole('button', { name: 'Use Shard layout, 5 panels', exact: true }).click()
+await page.getByRole('button', { name: 'Done editing comic', exact: true }).click()
+await page.waitForFunction(() => document.querySelector('.motion-drawer').getBoundingClientRect().top > innerHeight)
 await page.locator('.start-screen').waitFor({ state: 'detached' })
 const landscapeLiveFormat = await page.locator('.live-strip').getAttribute('data-page-format')
 const landscapeLiveAspect = await page.locator('.live-strip').boundingBox().then((box) => (box ? box.height / box.width : 0))
@@ -35,9 +38,13 @@ const landscapeDownload = await downloadPng(page)
 const landscapeDownloadPath = await landscapeDownload.path()
 const landscapeExportedSize = pngSize(landscapeDownloadPath)
 await page.reload({ waitUntil: 'networkidle' })
+await page.getByRole('button', { name: 'New comic', exact: true }).click()
 await page.getByRole('button', { name: /9:16/ }).tap()
 const selectedFormat = await page.locator('.format-option.active strong').textContent()
-await page.getByRole('button', { name: 'Start creating' }).tap()
+await page.getByRole('button', { name: 'Start new comic', exact: true }).click()
+await page.getByRole('button', { name: 'Use Shard layout, 5 panels', exact: true }).click()
+await page.getByRole('button', { name: 'Done editing comic', exact: true }).click()
+await page.waitForFunction(() => document.querySelector('.motion-drawer').getBoundingClientRect().top > innerHeight)
 await page.locator('.start-screen').waitFor({ state: 'detached' })
 await tapStrip(page, 0.75, 0.31)
 await page.waitForFunction(() => document.querySelector('.live-panel.is-live')?.getAttribute('data-panel-id') === '2')
@@ -235,9 +242,7 @@ const draftRevisionBeforeFinalStyle = await readDraftRevision(page)
 await page.getByRole('button', { name: 'Edit Final Layout grid' }).click()
 await page.getByRole('tab', { name: 'Style', exact: true }).click()
 await page
-  .locator('.style-stack label')
-  .filter({ hasText: 'Paper' })
-  .locator('input[type="color"]')
+  .getByLabel('Paper', { exact: true })
   .evaluate((input) => {
     const color = input
     const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
@@ -260,12 +265,13 @@ const customBezelPixel = pixelAt(customExportedImage, Math.round(customExportedS
 await waitForDraftRevision(page, draftRevisionBeforeFinalStyle + 1)
 await page.locator('.native-shell[data-autosave-state="saved"]').waitFor()
 await page.reload({ waitUntil: 'networkidle' })
-const restoredLayoutName = await page.locator('.live-strip').getAttribute('data-layout-name')
-const restoredLayoutAspect = await page.locator('.live-strip').boundingBox().then((box) => (box ? box.height / box.width : 0))
 const draftRecoveryVisible = await page.getByRole('button', { name: 'Continue editing' }).count()
 const draftRecoverySummary = await page.locator('.draft-recovery-card').innerText()
 await page.getByRole('button', { name: 'Continue editing' }).tap()
 await page.locator('.start-screen').waitFor({ state: 'detached' })
+const restoredLayoutName = await page.locator('.live-strip').getAttribute('data-layout-name')
+const restoredLayoutAspect = await page.locator('.live-strip').boundingBox().then((box) => (box ? box.height / box.width : 0))
+
 const continuedDraftPhotoCount = await page.locator('.live-panel img').count()
 await openDrawer(page)
 await page.getByRole('tab', { name: 'Layout', exact: true }).tap()
@@ -463,7 +469,7 @@ const failures = [
   result.restoredLayoutName === 'Final Layout' ? null : 'last custom layout was not restored on reload',
   Math.abs(result.restoredLayoutAspect - 16 / 9) < 0.08 ? null : 'restored custom layout did not use the persisted selected aspect ratio',
   result.draftRecoveryVisible === 1 ? null : 'saved comic recovery was not offered after reload',
-  result.draftRecoverySummary.includes('Final Layout') && result.draftRecoverySummary.includes('2 photos') ? null : 'saved comic recovery summary is incomplete',
+  result.draftRecoverySummary.includes('Untitled project') && result.draftRecoverySummary.includes('2 photos') ? null : 'saved comic recovery summary is incomplete',
   result.continuedDraftPhotoCount === 2 ? null : 'continuing a saved comic did not restore its photos',
   result.savedPreviewPanelCount === result.storedLayoutInfo.panels ? null : 'saved grid preview did not render its stored panels',
   result.savedPreviewDividerCount === result.storedLayoutInfo.dividers ? null : 'saved grid preview did not render its stored dividers',
@@ -472,7 +478,7 @@ const failures = [
   result.savedPreviewVisibleWithoutScroll ? null : 'saved grid preview is below the initial drawer fold',
   result.savedPreviewDividerRun.width >= 2 ? null : 'saved grid preview divider is not visibly rendered',
   result.layoutSectionHeadings.join('|') === 'Your grids|Templates' ? null : 'grid library sections are not ordered for saved-grid discovery',
-  result.builtInPreviewCount === 8 ? null : 'template previews are missing from the grid library',
+  result.builtInPreviewCount === 27 ? null : 'template previews are missing from the grid library',
   result.drawerHiddenAfterLayoutSave ? null : 'drawer did not close after saving a custom layout',
   result.storedLayoutInfo.panels === 4 ? null : 'two crossing edge-to-edge cuts did not create four panels',
   result.storedLayoutInfo.edgeContinuity ? null : 'custom layout did not persist edge-to-edge dividers',
@@ -754,7 +760,7 @@ async function waitForDrawerHidden(page) {
 async function readDraftRevision(page) {
   return page.evaluate(() =>
     new Promise((resolve, reject) => {
-      const request = indexedDB.open('instacomic', 1)
+      const request = indexedDB.open('instacomic')
       request.onerror = () => reject(request.error)
       request.onsuccess = () => {
         const database = request.result
@@ -772,7 +778,7 @@ async function waitForDraftRevision(page, minimumRevision) {
   await page.waitForFunction(
     (minimum) =>
       new Promise((resolve) => {
-        const request = indexedDB.open('instacomic', 1)
+        const request = indexedDB.open('instacomic')
         request.onerror = () => resolve(false)
         request.onsuccess = () => {
           const database = request.result

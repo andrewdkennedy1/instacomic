@@ -1,4 +1,4 @@
-const CACHE_NAME = 'instacomic-v17'
+const CACHE_NAME = 'instacomic-v18'
 const APP_SHELL = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png']
 
 self.addEventListener('install', (event) => {

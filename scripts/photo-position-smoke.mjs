@@ -31,6 +31,7 @@ await page.addInitScript(() => {
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
 await page.getByRole('button', { name: 'Start creating' }).tap()
+await page.getByRole('button', { name: 'Done editing comic', exact: true }).click()
 await page.locator('.start-screen').waitFor({ state: 'detached' })
 await setLayout(page, 'Manga')
 await setFitMode(page, 'cover')

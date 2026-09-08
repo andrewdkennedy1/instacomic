@@ -12,6 +12,7 @@ for (const engine of [chromium, webkit]) {
     })
     await page.goto(process.env.SMOKE_BASE_URL ?? 'http://127.0.0.1:4174')
     await page.getByRole('button', { name: 'Start creating', exact: true }).click()
+    await page.getByRole('button', { name: 'Done editing comic', exact: true }).click()
     const png = await page.evaluate(() => {
       const canvas = document.createElement('canvas')
       canvas.width = 300; canvas.height = 400

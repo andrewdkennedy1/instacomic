@@ -24,6 +24,9 @@ await page.addInitScript(() => {
 
 await page.goto(baseUrl, { waitUntil: 'networkidle' })
 await page.getByRole('button', { name: 'Start creating' }).tap()
+await page.getByRole('button', { name: 'Use Shard layout, 5 panels', exact: true }).click()
+await page.getByRole('button', { name: 'Done editing comic', exact: true }).click()
+await page.waitForFunction(() => document.querySelector('.motion-drawer').getBoundingClientRect().top > innerHeight)
 await tapStrip(page, 0.75, 0.31)
 await page.waitForFunction(() => document.querySelector('.live-frame'))
 await page.waitForFunction(() => document.querySelector('.live-camera')?.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA)
