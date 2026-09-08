@@ -13,6 +13,7 @@
     "smoke:editing": "node scripts/editing-smoke.mjs",
     "smoke:share": "node scripts/native-share-smoke.mjs",
     "smoke:save": "node scripts/save-photo-smoke.mjs",
+    "smoke:photo-center": "node scripts/photo-center-smoke.mjs",
     "smoke:photos": "node scripts/photo-position-smoke.mjs",
     "smoke:ux": "node scripts/ux-smoke.mjs",
     "smoke:studio": "node scripts/studio-smoke.mjs",

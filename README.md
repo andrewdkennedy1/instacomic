@@ -42,6 +42,7 @@ Instacomic starts with a blank canvas and a compact grid picker. Add photos, bui
 - Layout, Appearance, Slides, and Export share an accessible, keyboard-navigable sheet. Layout and Slides use compact bottom drawers with space reserved for the live canvas.
 - Custom canvas styling lives inside the grid editor: line color and width, paper, corners, captions, and image fit. Changes are staged until Save or Update; Cancel leaves the comic unchanged. The separate Style sheet remains available for built-in templates.
 - One Export flow prepares all slides in order, shows their previews, and opens native sharing with the complete batch. ZIP downloads, PNG file-download buttons, and animated story-video exports have been removed.
+- Photos gently snap to their panel center while dragging, with subtle axis guides and an easy release. Pinch, rotation, and Undo keep working.
 - Adjust grid opens a fullscreen photo preview with a small control dock. Drag shared dividers, reset changes, or save them with Undo support. Center snapping has a visible guide and uses vibration only on browsers that support it; iPhone Safari has no standard web haptics API.
 - The responsive canvas preserves its exact format on short phones, tablets, desktop, and landscape without rotating the app shell.
 - Installable PWA shell with manifest icons and offline app caching.
@@ -78,6 +79,7 @@ npm run smoke:installer
 npm run smoke:editing
 npm run smoke:save
 npm run smoke:photos
+npm run smoke:photo-center
 npm run smoke:camera
 npm run smoke:share
 npm run smoke:ux

@@ -87,6 +87,10 @@
 .rotation-snap-cue { position: absolute; z-index: 64; display: grid; justify-items: center; pointer-events: none; transform: translate(-50%, -50%); }
 .rotation-snap-cue span { min-width: 58px; padding: 7px 10px; border: 1px solid #fff8; border-radius: 4px; color: #fff; background: var(--ui-primary); font-size: 13px; text-align: center; }
 .rotation-snap-cue i { width: 1px; height: 44px; background: #fff; }
+.photo-center-guide { position: absolute; z-index: 3; pointer-events: none; }
+.photo-center-guide i { position: absolute; display: block; background: #f0c08bd9; box-shadow: 0 0 0 1px #00000020; pointer-events: none; }
+.photo-center-guide .is-x { left: 50%; top: 0; bottom: 0; width: 1px; transform: translateX(-50%); }
+.photo-center-guide .is-y { top: 50%; left: 0; right: 0; height: 1px; transform: translateY(-50%); }
 
 /* Template diagrams retain the same panel and divider mapping as the editor. */
 .layout-preview { display: block; width: 100%; aspect-ratio: 1; overflow: hidden; border: 1px solid var(--ui-separator); border-radius: 2px; background: #fff; }

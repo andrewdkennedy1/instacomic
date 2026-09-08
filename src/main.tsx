@@ -17,6 +17,7 @@ import {
   type DraftRecord,
 } from './draft-store'
 import { PhotoExportPanel } from './PhotoExportPanel'
+import { snapPhotoOffset } from './photo-snapping'
 import './studio.css'
 import { ActionIcon, ToolIcon, Brand, SettingsSection, RangeField, ColorField } from './ui'
 
@@ -171,6 +172,8 @@ type RotationSnap = {
   panelId: string
   angle: number
 }
+
+type PhotoCenterSnap = { panelId: string; x: boolean; y: boolean }
 
 type LineTouchState = {
   id: string
@@ -713,6 +716,7 @@ function App() {
   const [newProjectRequested, setNewProjectRequested] = useState(() => new URLSearchParams(window.location.search).has('new'))
   const [historyCounts, setHistoryCounts] = useState({ undo: 0, redo: 0 })
   const [rotationSnap, setRotationSnap] = useState<RotationSnap | null>(null)
+  const [photoCenterSnap, setPhotoCenterSnap] = useState<PhotoCenterSnap | null>(null)
   const [photoActionsDeferred, setPhotoActionsDeferred] = useState(false)
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
   const shellRef = useRef<HTMLElement>(null)
@@ -742,6 +746,7 @@ function App() {
   const editorVersionRef = useRef(0)
   const replacePanelIdRef = useRef<string | null>(null)
   const lastSnapAngleRef = useRef<number | null>(null)
+  const photoCenterLatchRef = useRef({ x: false, y: false })
   const startRequestedRef = useRef(false)
   const photoOperationCountRef = useRef(0)
   const exportAssetIdsRef = useRef<Map<string, number>>(new Map())
@@ -847,6 +852,8 @@ function App() {
   }
 
   function restoreProjectSnapshot(snapshot: ProjectSnapshot) {
+    setPhotoCenterSnap(null)
+    photoCenterLatchRef.current = { x: false, y: false }
     const nextSnapshot = cloneProjectSnapshot(snapshot)
     slidesRef.current = nextSnapshot.carousel?.slides ?? [cloneSlide(nextSnapshot)]
     activeSlideRef.current = nextSnapshot.carousel?.activeIndex ?? 0
@@ -2149,6 +2156,8 @@ function App() {
     }
     lastSnapAngleRef.current = null
     setRotationSnap(null)
+    photoCenterLatchRef.current = { x: shot.offsetX === 0, y: shot.offsetY === 0 }
+    setPhotoCenterSnap(null)
     setActivePanelId(panel.id)
     setPhotoDragState({
       panelId: panel.id,
@@ -2188,6 +2197,8 @@ function App() {
     }
     lastSnapAngleRef.current = null
     setRotationSnap(null)
+    photoCenterLatchRef.current = { x: false, y: false }
+    setPhotoCenterSnap(null)
     setActivePanelId(firstPanel.id)
     setPhotoDragState({
       panelId: firstPanel.id,
@@ -2211,9 +2222,21 @@ function App() {
 
     const dx = (clientX - photoDragState.startX) / photoDragState.frameWidth
     const dy = (clientY - photoDragState.startY) / photoDragState.frameHeight
+    const previous = photoCenterLatchRef.current
+    const x = snapPhotoOffset(photoDragState.offsetX + dx, photoDragState.frameWidth, previous.x)
+    const y = snapPhotoOffset(photoDragState.offsetY + dy, photoDragState.frameHeight, previous.y)
+    if ((x.snapped && !previous.x) || (y.snapped && !previous.y)) {
+      try { navigator.vibrate?.(8) } catch { /* Center guides also work without haptics. */ }
+    }
+    photoCenterLatchRef.current = { x: x.snapped, y: y.snapped }
+    setPhotoCenterSnap(current => {
+      if (!x.snapped && !y.snapped) return null
+      if (current?.panelId === photoDragState.panelId && current.x === x.snapped && current.y === y.snapped) return current
+      return { panelId: photoDragState.panelId, x: x.snapped, y: y.snapped }
+    })
     updateShotTransform(photoDragState.panelId, {
-      offsetX: photoDragState.offsetX + dx,
-      offsetY: photoDragState.offsetY + dy,
+      offsetX: x.offset,
+      offsetY: y.offset,
     })
   }
 
@@ -2422,10 +2445,14 @@ function App() {
 
     if (rotationSnap) {
       setStatus(`Rotation snapped to ${formatRotation(rotationSnap.angle)}.`)
+    } else if (photoCenterSnap?.x && photoCenterSnap.y) {
+      setStatus('Photo centered.')
     }
     gestureHistoryRef.current = null
     lastSnapAngleRef.current = null
     setRotationSnap(null)
+    photoCenterLatchRef.current = { x: false, y: false }
+    setPhotoCenterSnap(null)
     setPhotoDragState(null)
     if (finishedPhotoGesture) {
       setPhotoActionsDeferred(false)
@@ -2745,6 +2772,13 @@ function App() {
                 <LiveVideo stream={stream} panel={panel} fit={settings.fit} />
               )}
               {panel.id === activePanelId && stream && !shots[panel.id] && <span className="panel-chip">Camera</span>}
+              {photoCenterSnap?.panelId === panel.id && photoDragState?.mode === 'move' && (
+                <span className="photo-center-guide" style={photoCenterGuideStyle(panel)}
+                  data-snap-x={photoCenterSnap.x} data-snap-y={photoCenterSnap.y} aria-hidden="true">
+                  {photoCenterSnap.x && <i className="is-x" />}
+                  {photoCenterSnap.y && <i className="is-y" />}
+                </span>
+              )}
             </button>
           ))}
 
@@ -5103,6 +5137,11 @@ function panelPhotoFrameSize(panel: Panel, stripRect: DOMRect) {
     frameWidth: Math.max(1, bounds.w * stripRect.width),
     frameHeight: Math.max(1, bounds.h * stripRect.height),
   }
+}
+
+function photoCenterGuideStyle(panel: Panel) {
+  const bounds = panelPhotoFrameBounds(panel)
+  return { left: `${bounds.x * 100}%`, top: `${bounds.y * 100}%`, width: `${bounds.w * 100}%`, height: `${bounds.h * 100}%` }
 }
 
 function pointsToClipPath(points: Array<[number, number]>) {
